@@ -2,19 +2,25 @@
 name = "oauth2-demo-server"
 version = "0.1.1"
 edition = "2024"
+rust-version = "1.88"
+description = "OAuth2 and JWT session demo server for Rust Agent Stack"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-agent-stack"
+homepage = "https://github.com/JedimEmO/rust-agent-stack"
 publish = false
+readme = "README.md"
 
 [dependencies]
-oauth2-demo-api = { path = "../api"}
+oauth2-demo-api = { path = "../api", version = "0.1.0" }
 # JSON-RPC infrastructure
-ras-jsonrpc-macro = { path = "../../../crates/rpc/ras-jsonrpc-macro" }
-ras-jsonrpc-core = { path = "../../../crates/rpc/ras-jsonrpc-core" }
-ras-jsonrpc-types = { path = "../../../crates/rpc/ras-jsonrpc-types" }
+ras-jsonrpc-macro = { path = "../../../crates/rpc/ras-jsonrpc-macro", version = "0.2.0" }
+ras-jsonrpc-core = { path = "../../../crates/rpc/ras-jsonrpc-core", version = "0.1.2" }
+ras-jsonrpc-types = { path = "../../../crates/rpc/ras-jsonrpc-types", version = "0.1.1" }
 
 # Identity management
-ras-identity-core = { path = "../../../crates/core/ras-identity-core" }
-ras-identity-oauth2 = { path = "../../../crates/identity/ras-identity-oauth2" }
-ras-identity-session = { path = "../../../crates/identity/ras-identity-session" }
+ras-identity-core = { path = "../../../crates/core/ras-identity-core", version = "0.1.1" }
+ras-identity-oauth2 = { path = "../../../crates/identity/ras-identity-oauth2", version = "0.1.2" }
+ras-identity-session = { path = "../../../crates/identity/ras-identity-session", version = "0.1.1" }
 
 # Web framework and utilities
 axum = { workspace = true }
@@ -26,8 +32,7 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
-jsonwebtoken = { workspace = true }
-schemars.workspace = true
+schemars = { workspace = true }
 
 # Additional dependencies for this example
 tracing-subscriber = { workspace = true }
@@ -37,5 +42,5 @@ dotenvy = { workspace = true }
 mime_guess = { workspace = true }
 
 [build-dependencies]
-oauth2-demo-api = { path = "../api"}
-serde_json.workspace = true
+oauth2-demo-api = { path = "../api", version = "0.1.0" }
+serde_json = { workspace = true }

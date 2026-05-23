@@ -55,9 +55,9 @@ Sends messages over a WebSocket connection with convenience methods for:
 
 ```rust
 use ras_jsonrpc_bidirectional_types::{
-    ConnectionId, ConnectionInfo, BidirectionalMessage,
-    MessageSender, MessageSenderExt
+    ConnectionId, ConnectionInfo, MessageSender, MessageSenderExt, NoOpMessageSender,
 };
+use serde_json::json;
 
 // Create a connection
 let conn_id = ConnectionId::new();
@@ -67,8 +67,10 @@ let mut info = ConnectionInfo::new(conn_id);
 info.subscribe("updates".to_string());
 info.subscribe("notifications".to_string());
 
-// Send messages (with a MessageSender implementation)
-let sender: impl MessageSender = ...;
+// Send messages through any MessageSender implementation. NoOpMessageSender is
+// useful for tests or dry-run flows; production code usually uses a WebSocket sender.
+let sender = NoOpMessageSender::with_connection_id(conn_id);
+assert_eq!(sender.connection_id(), conn_id);
 sender.send_ping().await?;
 sender.send_notification("user.updated", json!({"id": 123})).await?;
 ```
@@ -81,3 +83,10 @@ sender.send_notification("user.updated", json!({"id": 123})).await?;
 - Topic-based publish/subscribe pattern
 - WebSocket integration with tokio-tungstenite
 - Extensible traits for custom implementations
+
+## Checks
+
+```bash
+cargo test -p ras-jsonrpc-bidirectional-types --locked
+cargo clippy -p ras-jsonrpc-bidirectional-types --all-targets --all-features --locked -- -D warnings
+```

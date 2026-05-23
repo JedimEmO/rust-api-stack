@@ -2,6 +2,12 @@
 name = "ras-jsonrpc-bidirectional-macro"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
+description = "Procedural macro for bidirectional JSON-RPC services"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-agent-stack"
+homepage = "https://github.com/JedimEmO/rust-agent-stack"
+readme = "README.md"
 
 [lib]
 proc-macro = true
@@ -19,12 +25,11 @@ server = []
 client = []
 
 [dev-dependencies]
-ras-jsonrpc-bidirectional-types = { path = "../ras-jsonrpc-bidirectional-types" }
-ras-jsonrpc-bidirectional-server = { path = "../ras-jsonrpc-bidirectional-server" }
-ras-jsonrpc-bidirectional-client = { path = "../ras-jsonrpc-bidirectional-client" }
-ras-auth-core = { path = "../../../core/ras-auth-core" }
-ras-jsonrpc-types = { path = "../../ras-jsonrpc-types" }
-ras-test-helpers = { path = "../../../test-utils/ras-test-helpers" }
+ras-jsonrpc-bidirectional-types = { path = "../ras-jsonrpc-bidirectional-types", version = "0.1.0" }
+ras-jsonrpc-bidirectional-server = { path = "../ras-jsonrpc-bidirectional-server", version = "0.1.0" }
+ras-jsonrpc-bidirectional-client = { path = "../ras-jsonrpc-bidirectional-client", version = "0.1.0" }
+ras-auth-core = { path = "../../../core/ras-auth-core", version = "0.1.0" }
+ras-jsonrpc-types = { path = "../../ras-jsonrpc-types", version = "0.1.1" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

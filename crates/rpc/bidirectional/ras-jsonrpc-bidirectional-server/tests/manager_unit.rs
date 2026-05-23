@@ -1,11 +1,10 @@
 //! Direct unit tests for `DefaultConnectionManager`.
 //!
-//! The end-to-end suite in `examples/bidirectional-chat` and
-//! `ras-jsonrpc-bidirectional-macro/tests/bidirectional_integration.rs`
+//! The socketless generated-handler suite in `ras-jsonrpc-bidirectional-macro`
 //! covers the manager's happy path indirectly. This file pins down the
-//! manager's contract on its own — subscriptions, broadcast counts,
-//! permission filtering, and pending-request lifecycle — without spinning
-//! up a real WebSocket.
+//! manager's contract on its own: subscriptions, broadcast counts, permission
+//! filtering, and pending-request lifecycle, without spinning up a real
+//! WebSocket.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -80,11 +79,11 @@ async fn add_connection_with_sender_box_downcasts() {
 }
 
 #[tokio::test]
-async fn add_connection_with_unknown_sender_falls_back_to_dummy() {
+async fn add_connection_with_unknown_sender_uses_fallback_channel() {
     let mgr = DefaultConnectionManager::new();
     let id = ConnectionId::new();
-    let bogus: Box<dyn std::any::Any + Send + Sync> = Box::new(123u32);
-    mgr.add_connection_with_sender(ConnectionInfo::new(id), bogus)
+    let unexpected_sender: Box<dyn std::any::Any + Send + Sync> = Box::new(123u32);
+    mgr.add_connection_with_sender(ConnectionInfo::new(id), unexpected_sender)
         .await
         .unwrap();
     assert!(mgr.connection_exists(id).await.unwrap());

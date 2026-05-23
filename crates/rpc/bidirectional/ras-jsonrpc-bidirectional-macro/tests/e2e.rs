@@ -1,23 +1,26 @@
-//! End-to-end test for `jsonrpc_bidirectional_service!`:
-//!   generated client → real WebSocket → server handler → response/notification.
+//! Socketless end-to-end tests for `jsonrpc_bidirectional_service!`.
 //!
-//! Existing `bidirectional_integration.rs` exercises this thoroughly. This file
-//! is a slim companion test that uses the shared `MockAuthProvider` and proves
-//! the helper integration works.
+//! These tests avoid binding sockets by exercising the generated service handler
+//! through the server message loop using an in-memory WebSocket adapter.
 
+use std::collections::{HashSet, VecDeque};
+use std::future;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 use async_trait::async_trait;
-use axum::{Router, routing::get};
 use ras_auth_core::AuthenticatedUser;
 use ras_jsonrpc_bidirectional_macro::jsonrpc_bidirectional_service;
 use ras_jsonrpc_bidirectional_server::DefaultConnectionManager;
-use ras_jsonrpc_bidirectional_server::service::{BuiltWebSocketService, websocket_handler};
-use ras_jsonrpc_bidirectional_types::ConnectionId;
-use ras_test_helpers::{MockAuthProvider, spawn_tcp};
+use ras_jsonrpc_bidirectional_server::connection::{ChannelMessageSender, ConnectionContext};
+use ras_jsonrpc_bidirectional_server::handler::{
+    WebSocketHandler, WebSocketIo, WebSocketIoMessage,
+};
+use ras_jsonrpc_bidirectional_types::{
+    BidirectionalMessage, ConnectionId, ConnectionInfo, ConnectionManager,
+};
+use ras_jsonrpc_types::{JsonRpcRequest, JsonRpcResponse};
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EchoIn {
@@ -100,103 +103,207 @@ impl DemoService for DemoImpl {
     }
 }
 
-async fn start_server() -> String {
+struct InMemorySocket {
+    incoming: VecDeque<WebSocketIoMessage>,
+    outgoing: Vec<WebSocketIoMessage>,
+    close_when_empty: bool,
+    close_after_outgoing: Option<usize>,
+}
+
+impl InMemorySocket {
+    fn closing(incoming: impl IntoIterator<Item = WebSocketIoMessage>) -> Self {
+        Self {
+            incoming: incoming.into_iter().collect(),
+            outgoing: Vec::new(),
+            close_when_empty: true,
+            close_after_outgoing: None,
+        }
+    }
+
+    fn closing_after_outgoing(
+        incoming: impl IntoIterator<Item = WebSocketIoMessage>,
+        outgoing_count: usize,
+    ) -> Self {
+        Self {
+            incoming: incoming.into_iter().collect(),
+            outgoing: Vec::new(),
+            close_when_empty: false,
+            close_after_outgoing: Some(outgoing_count),
+        }
+    }
+}
+
+#[async_trait]
+impl WebSocketIo for InMemorySocket {
+    async fn send(
+        &mut self,
+        message: WebSocketIoMessage,
+    ) -> ras_jsonrpc_bidirectional_server::ServerResult<()> {
+        self.outgoing.push(message);
+        if self
+            .close_after_outgoing
+            .is_some_and(|count| self.outgoing.len() >= count)
+        {
+            self.close_when_empty = true;
+        }
+        Ok(())
+    }
+
+    async fn recv(
+        &mut self,
+    ) -> Option<ras_jsonrpc_bidirectional_server::ServerResult<WebSocketIoMessage>> {
+        if let Some(message) = self.incoming.pop_front() {
+            Some(Ok(message))
+        } else if self.close_when_empty {
+            None
+        } else {
+            future::pending().await
+        }
+    }
+}
+
+async fn run_generated_handler(
+    request: JsonRpcRequest,
+    user: Option<AuthenticatedUser>,
+    close_after_outgoing: Option<usize>,
+) -> Vec<BidirectionalMessage> {
     let connection_manager = Arc::new(DefaultConnectionManager::new());
     let handler = Arc::new(DemoHandler::new(
         Arc::new(DemoImpl),
         connection_manager.clone(),
     ));
 
-    let ws_service = ras_jsonrpc_bidirectional_server::WebSocketServiceBuilder::builder()
-        .handler(handler)
-        .auth_provider(Arc::new(MockAuthProvider::default()))
-        .require_auth(false)
-        .build()
-        .build_with_manager(connection_manager);
+    let connection_id = ConnectionId::new();
+    let (message_tx, message_rx) = mpsc::channel(8);
+    let sender = ChannelMessageSender::new(connection_id, message_tx);
 
-    type SvcType = BuiltWebSocketService<
-        DemoHandler<DemoImpl, DefaultConnectionManager>,
-        MockAuthProvider,
-        DefaultConnectionManager,
-    >;
-    let app: Router = Router::new()
-        .route("/ws", get(websocket_handler::<SvcType>))
-        .with_state(ws_service);
-
-    let (addr, _handle) = spawn_tcp(app).await;
-    // Give axum a tick to start serving.
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    format!("ws://{addr}/ws")
-}
-
-#[tokio::test]
-async fn unauthorized_method_round_trips() {
-    let url = start_server().await;
-    let client = DemoClientBuilder::new(url)
-        .build()
-        .await
-        .expect("client build");
-    client.connect().await.expect("connect");
-
-    let resp = client.hello("alice".to_string()).await.expect("hello ok");
-    assert_eq!(resp, "hello, alice");
-
-    client.disconnect().await.expect("disconnect");
-}
-
-#[tokio::test]
-async fn auth_method_succeeds_and_pushes_notification() {
-    let url = start_server().await;
-    let mut client = DemoClientBuilder::new(url)
-        .with_jwt_token("user-token".to_string())
-        .build()
-        .await
-        .expect("client build");
-    client.connect().await.expect("connect");
-
-    let pushed = Arc::new(AtomicBool::new(false));
-    let pushed_flag = pushed.clone();
-    client.on_ping(move |_n: PushNote| {
-        pushed_flag.store(true, Ordering::SeqCst);
-    });
-
-    let resp = client
-        .echo(EchoIn {
-            msg: "hi".to_string(),
-        })
-        .await
-        .expect("echo ok");
-    assert_eq!(resp.msg, "hi");
-    assert_eq!(resp.user, "user-1");
-
-    // Wait briefly for the push to land.
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
-    while !pushed.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(20)).await;
+    let mut info = ConnectionInfo::new(connection_id);
+    let context = Arc::new(ConnectionContext::new(connection_id, sender.clone()));
+    if let Some(user) = user {
+        info.set_user(user.clone());
+        context.set_user(user).await;
     }
-    assert!(
-        pushed.load(Ordering::SeqCst),
-        "expected ping notification to arrive"
-    );
 
-    client.disconnect().await.expect("disconnect");
+    connection_manager
+        .add_connection_with_sender(info, Box::new(sender))
+        .await
+        .expect("connection should register");
+
+    let request_text = serde_json::to_string(&BidirectionalMessage::Request(request)).unwrap();
+    let incoming = [WebSocketIoMessage::Text(request_text)];
+    let mut socket = if let Some(count) = close_after_outgoing {
+        InMemorySocket::closing_after_outgoing(incoming, count)
+    } else {
+        InMemorySocket::closing(incoming)
+    };
+
+    WebSocketHandler::new(handler, context, message_rx, 4096)
+        .run_with_io(&mut socket)
+        .await
+        .unwrap();
+
+    socket
+        .outgoing
+        .into_iter()
+        .filter_map(|message| match message {
+            WebSocketIoMessage::Text(text) => serde_json::from_str(&text).ok(),
+            _ => None,
+        })
+        .collect()
+}
+
+fn test_user(user_id: &str, permissions: &[&str]) -> AuthenticatedUser {
+    AuthenticatedUser {
+        user_id: user_id.to_string(),
+        permissions: permissions
+            .iter()
+            .map(|permission| (*permission).to_string())
+            .collect::<HashSet<_>>(),
+        metadata: None,
+    }
+}
+
+fn response_from(messages: &[BidirectionalMessage]) -> &JsonRpcResponse {
+    messages
+        .iter()
+        .find_map(|message| match message {
+            BidirectionalMessage::Response(response) => Some(response),
+            _ => None,
+        })
+        .expect("response should be sent")
 }
 
 #[tokio::test]
-async fn auth_method_rejected_for_readonly_user() {
-    let url = start_server().await;
-    let client = DemoClientBuilder::new(url)
-        .with_jwt_token("readonly-token".to_string())
-        .build()
-        .await
-        .expect("client build");
-    client.connect().await.expect("connect");
+async fn generated_handler_round_trips_without_socket() {
+    let messages = run_generated_handler(
+        JsonRpcRequest::new(
+            "hello".into(),
+            Some(serde_json::json!("alice")),
+            Some(1.into()),
+        ),
+        None,
+        None,
+    )
+    .await;
 
-    let result = client.echo(EchoIn { msg: "nope".into() }).await;
-    assert!(
-        result.is_err(),
-        "readonly token must not be able to call echo"
-    );
+    assert!(matches!(
+        messages[0],
+        BidirectionalMessage::ConnectionEstablished { .. }
+    ));
 
-    client.disconnect().await.expect("disconnect");
+    let response = response_from(&messages);
+    assert!(response.error.is_none());
+    assert_eq!(response.result, Some(serde_json::json!("hello, alice")));
+
+    assert!(matches!(
+        messages.last().unwrap(),
+        BidirectionalMessage::ConnectionClosed { .. }
+    ));
+}
+
+#[tokio::test]
+async fn generated_handler_enforces_permissions_without_socket() {
+    let messages = run_generated_handler(
+        JsonRpcRequest::new(
+            "echo".into(),
+            Some(serde_json::json!(EchoIn { msg: "hi".into() })),
+            Some(2.into()),
+        ),
+        Some(test_user("readonly", &["read"])),
+        None,
+    )
+    .await;
+
+    let response = response_from(&messages);
+    let error = response.error.as_ref().expect("permission error expected");
+    assert_eq!(error.code, -32002);
+}
+
+#[tokio::test]
+async fn generated_handler_sends_response_and_notification_without_socket() {
+    let messages = run_generated_handler(
+        JsonRpcRequest::new(
+            "echo".into(),
+            Some(serde_json::json!(EchoIn { msg: "hi".into() })),
+            Some(3.into()),
+        ),
+        Some(test_user("user-1", &["user"])),
+        Some(3),
+    )
+    .await;
+
+    let response = response_from(&messages);
+    let result: EchoOut = serde_json::from_value(response.result.clone().unwrap()).unwrap();
+    assert_eq!(result.msg, "hi");
+    assert_eq!(result.user, "user-1");
+
+    let notification = messages
+        .iter()
+        .find_map(|message| match message {
+            BidirectionalMessage::ServerNotification(notification) => Some(notification),
+            _ => None,
+        })
+        .expect("server notification should be sent");
+    assert_eq!(notification.method, "ping");
+    assert_eq!(notification.params["kind"], "after-echo");
 }

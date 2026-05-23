@@ -126,7 +126,9 @@ impl ContentDescriptor {
         key: impl Into<String>,
         value: impl Into<serde_json::Value>,
     ) -> Self {
-        self.extensions.insert(key, value);
+        self.extensions
+            .insert(key, value)
+            .expect("extension keys must start with 'x-'");
         self
     }
 
@@ -271,7 +273,7 @@ mod tests {
         // Check that required fields are present
         assert_eq!(json["name"], "username");
         assert_eq!(json["description"], "Username field");
-        assert_eq!(json["required"], true);
+        assert_eq!(json["required"].as_bool(), Some(true));
         assert!(json["schema"].is_object());
 
         let deserialized: ContentDescriptor = serde_json::from_value(json).unwrap();

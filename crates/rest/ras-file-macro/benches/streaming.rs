@@ -1,7 +1,6 @@
 //! Criterion bench measuring 1 MiB upload + download through the file_service!
-//! generated client and router.
+//! in-memory axum-test router path.
 
-use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 use axum::{
@@ -9,12 +8,16 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use axum_test::multipart::{MultipartForm, Part};
 use criterion::{Criterion, criterion_group, criterion_main};
 use ras_auth_core::AuthenticatedUser;
 use ras_file_macro::file_service;
-use ras_test_helpers::{MockAuthProvider, spawn_http};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Runtime;
+
+#[path = "../tests/support/mod.rs"]
+mod support;
+use support::{MockAuthProvider, mock_http_server};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct UploadResponse {
@@ -91,36 +94,32 @@ fn build_router() -> (axum::Router, Storage) {
 fn bench_streaming(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
 
-    // Prepare 1 MiB payload on disk and a live server.
-    let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
     let payload: Vec<u8> = (0u8..=255).cycle().take(1024 * 1024).collect();
-    tmp.write_all(&payload).unwrap();
-    tmp.flush().unwrap();
-    let path = tmp.path().to_path_buf();
-
-    let (client, _server) = rt.block_on(async {
-        let (router, _storage) = build_router();
-        let server = spawn_http(router);
-        let base = server.server_address().unwrap();
-        let base_str = base.as_str().trim_end_matches('/').to_string();
-        let client = BenchSvcClient::builder(base_str)
-            .build()
-            .expect("client build");
-        client.set_bearer_token(Some("user-token".to_string()));
-        (client, server)
-    });
+    let (router, _storage) = build_router();
+    let server = Arc::new(mock_http_server(router));
 
     c.bench_function("file_upload_download_1mib", |b| {
         b.to_async(&rt).iter(|| {
-            let client = &client;
-            let path = path.clone();
+            let server = Arc::clone(&server);
+            let payload = payload.clone();
             async move {
-                let r = client
-                    .upload(&path, Some("blob.bin"), Some("application/octet-stream"))
-                    .await
-                    .expect("upload");
-                let resp = client.download(r.file_id).await.expect("download");
-                let bytes = resp.bytes().await.expect("body");
+                let form = MultipartForm::new().add_part(
+                    "file",
+                    Part::bytes(payload)
+                        .file_name("blob.bin")
+                        .mime_type("application/octet-stream"),
+                );
+                let response = server
+                    .post("/files/upload")
+                    .authorization_bearer("user-token")
+                    .multipart(form)
+                    .await;
+                response.assert_status_ok();
+                let r: UploadResponse = response.json();
+
+                let response = server.get(&format!("/files/download/{}", r.file_id)).await;
+                response.assert_status_ok();
+                let bytes = response.into_bytes();
                 std::hint::black_box(bytes);
             }
         });

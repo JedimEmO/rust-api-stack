@@ -78,7 +78,7 @@ rest_service!({
         /// {"status":"ok"}
         /// ```
         ///
-        /// See [REST docs](https://example.com/rest).
+        /// See [REST docs](https://github.com/JedimEmO/rust-agent-stack/blob/main/documentation/ras-rest-macro.md).
         GET UNAUTHORIZED health() -> HealthResponse,
         GET UNAUTHORIZED widgets/{id: String}() -> Widget,
         GET UNAUTHORIZED search/widgets ? q: String & limit: Option<u32> () -> WidgetsResponse,
@@ -235,4 +235,198 @@ async fn main() -> Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+    use axum_test::TestServer;
+    use serde_json::{Value, json};
+
+    fn test_server() -> TestServer {
+        let app = ExplorerRestFixtureBuilder::new(FixtureService)
+            .auth_provider(FixtureAuthProvider)
+            .build();
+
+        TestServer::builder()
+            .mock_transport()
+            .build(app)
+            .expect("in-memory axum-test server")
+    }
+
+    fn parameter<'a>(operation: &'a Value, name: &str) -> &'a Value {
+        operation["parameters"]
+            .as_array()
+            .expect("parameters array")
+            .iter()
+            .find(|parameter| parameter["name"] == name)
+            .unwrap_or_else(|| panic!("missing parameter {name}"))
+    }
+
+    #[test]
+    fn generated_openapi_documents_explorer_fixture_routes() {
+        let doc = generate_explorerrestfixture_openapi();
+
+        assert_eq!(doc["openapi"], "3.0.3");
+        assert_eq!(doc["info"]["title"], "ExplorerRestFixture REST API");
+
+        let health = &doc["paths"]["/health"]["get"];
+        assert_eq!(health["summary"], json!("Check fixture `health`."));
+        assert!(
+            health["description"]
+                .as_str()
+                .expect("health description")
+                .contains("Preserves line breaks")
+        );
+
+        assert!(doc["paths"]["/widgets/{id}"]["get"].is_object());
+        assert!(doc["paths"]["/search/widgets"]["get"].is_object());
+        assert!(doc["paths"]["/v1/widgets/{id}/rename"]["post"].is_object());
+        assert!(doc["paths"]["/v2/widgets/{id}/rename"]["post"].is_object());
+    }
+
+    #[test]
+    fn generated_openapi_keeps_auth_query_and_version_metadata() {
+        let doc = generate_explorerrestfixture_openapi();
+
+        let search_widgets = &doc["paths"]["/search/widgets"]["get"];
+        assert_eq!(parameter(search_widgets, "q")["required"], json!(true));
+        assert_eq!(parameter(search_widgets, "limit")["required"], json!(false));
+
+        let create_widget = &doc["paths"]["/widgets"]["post"];
+        assert_eq!(create_widget["security"][0]["bearerAuth"], json!([]));
+        assert_eq!(create_widget["x-permissions"], json!(["admin"]));
+
+        let rename_v1 = &doc["paths"]["/v1/widgets/{id}/rename"]["post"];
+        assert_eq!(rename_v1["x-ras-version"], json!("v1"));
+        assert_eq!(rename_v1["x-ras-canonical-version"], json!("v2"));
+        assert_eq!(
+            rename_v1["x-ras-canonical-path"],
+            json!("/v2/widgets/{id}/rename")
+        );
+
+        let rename_v2 = &doc["paths"]["/v2/widgets/{id}/rename"]["post"];
+        assert_eq!(rename_v2["x-ras-version"], json!("v2"));
+        assert_eq!(parameter(rename_v2, "id")["required"], json!(true));
+    }
+
+    #[test]
+    fn rename_widget_compat_upgrades_request_and_downgrades_response() {
+        let upgraded = <RenameWidgetCompat as ras_rest_core::VersionMigration<
+            ExplorerRestFixturePostV2WidgetsByIdRenameV1Request,
+            ExplorerRestFixturePostV2WidgetsByIdRenameV2Request,
+        >>::migrate(ExplorerRestFixturePostV2WidgetsByIdRenameV1Request {
+            path: ExplorerRestFixturePostV2WidgetsByIdRenameV1Path {
+                id: "widget-1".to_string(),
+            },
+            query: ExplorerRestFixturePostV2WidgetsByIdRenameV1Query {},
+            body: RenameWidgetV1 {
+                name: "legacy name".to_string(),
+            },
+        })
+        .expect("legacy request migrates");
+
+        assert_eq!(upgraded.path.id, "widget-1");
+        assert_eq!(upgraded.body.display_name, "legacy name");
+        assert!(!upgraded.body.notify);
+
+        let downgraded = <RenameWidgetCompat as ras_rest_core::VersionMigration<
+            Widget,
+            RenameWidgetResponseV1,
+        >>::migrate(Widget {
+            id: "widget-1".to_string(),
+            name: "canonical name".to_string(),
+            owner: "fixture".to_string(),
+        })
+        .expect("canonical response migrates");
+
+        assert_eq!(downgraded.name, "canonical name");
+    }
+
+    #[tokio::test]
+    async fn fixture_auth_provider_maps_tokens_to_permission_sets() {
+        let user = FixtureAuthProvider
+            .authenticate("user-token".to_string())
+            .await
+            .expect("user token authenticates");
+        assert_eq!(user.user_id, "user-1");
+        assert!(user.permissions.contains("user"));
+        assert!(!user.permissions.contains("admin"));
+
+        let admin = FixtureAuthProvider
+            .authenticate("admin-token".to_string())
+            .await
+            .expect("admin token authenticates");
+        assert_eq!(admin.user_id, "admin-1");
+        assert!(admin.permissions.contains("user"));
+        assert!(admin.permissions.contains("admin"));
+
+        assert!(
+            FixtureAuthProvider
+                .authenticate("invalid-token".to_string())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn generated_rest_routes_round_trip_without_socket() {
+        let server = test_server();
+
+        let health = server.get("/api/v1/health").await;
+        health.assert_status_ok();
+        let health: HealthResponse = health.json();
+        assert_eq!(health.status, "ok");
+
+        let search = server.get("/api/v1/search/widgets?q=docs&limit=3").await;
+        search.assert_status_ok();
+        let search: WidgetsResponse = search.json();
+        assert_eq!(search.total, 3);
+        assert_eq!(search.widgets[0].name, "docs-0");
+        assert_eq!(search.widgets[2].id, "widget-2");
+    }
+
+    #[tokio::test]
+    async fn generated_rest_routes_enforce_permissions_without_socket() {
+        let server = test_server();
+
+        let user_response = server
+            .post("/api/v1/widgets")
+            .authorization_bearer("user-token")
+            .json(&json!({
+                "name": "Fixture Widget",
+                "owner": "docs",
+            }))
+            .await;
+        user_response.assert_status(StatusCode::FORBIDDEN);
+
+        let admin_response = server
+            .post("/api/v1/widgets")
+            .authorization_bearer("admin-token")
+            .json(&json!({
+                "name": "Fixture Widget",
+                "owner": "docs",
+            }))
+            .await;
+        admin_response.assert_status(StatusCode::CREATED);
+        let widget: Widget = admin_response.json();
+        assert_eq!(widget.id, "created-widget");
+        assert_eq!(widget.owner, "docs");
+    }
+
+    #[tokio::test]
+    async fn generated_docs_routes_serve_explorer_and_openapi_without_socket() {
+        let server = test_server();
+
+        let docs = server.get("/api/v1/docs").await;
+        docs.assert_status_ok();
+        assert!(docs.text().contains("ExplorerRestFixture"));
+
+        let spec = server.get("/api/v1/docs/openapi.json").await;
+        spec.assert_status_ok();
+        let doc: Value = spec.json();
+        assert_eq!(doc["openapi"], "3.0.3");
+        assert_eq!(doc["info"]["title"], "ExplorerRestFixture REST API");
+    }
 }

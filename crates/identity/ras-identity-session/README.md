@@ -1,190 +1,95 @@
 # ras-identity-session
 
-JWT-based session management for the Rust Agent Stack authentication system.
+JWT session management and `AuthProvider` integration for Rust Agent Stack.
 
 ## Overview
 
-This crate provides session management capabilities using JSON Web Tokens (JWT):
-- JWT creation and validation
-- Session tracking and revocation
-- Integration with RAS authentication system
-- Configurable token TTL and algorithms
+This crate turns a verified identity from a registered `IdentityProvider` into a signed JWT. It can also keep an in-memory active-session registry so tokens can be revoked by JWT ID (`jti`) before they expire.
 
 ## Features
 
-- **JWT Sessions**: Create and validate JWT tokens with custom claims
-- **Session Registry**: Track active sessions for revocation support
-- **AuthProvider Implementation**: `JwtAuthProvider` for seamless integration
-- **Flexible Configuration**: Configurable secrets, TTL, and algorithms
-- **Permission Embedding**: User permissions stored in JWT claims
+- JWT creation and validation with configurable TTL and signing algorithm
+- Optional active-session enforcement for revocation
+- Permission embedding through a `UserPermissions` provider
+- `JwtAuthProvider` adapter for RAS JSON-RPC, REST, and WebSocket services
 
 ## Usage
 
-### Basic Session Service Setup
-
 ```rust
-use ras_identity_session::{SessionService, SessionConfig};
-use ras_identity_core::{VerifiedIdentity, StaticPermissions};
+use chrono::Duration;
+use ras_identity_local::LocalUserProvider;
+use ras_identity_session::{JwtAlgorithm, JwtAuthProvider, SessionConfig, SessionService};
+use std::sync::Arc;
 
-// Create session service with default config
-let session_service = SessionService::new(
-    "your-secret-key".to_string(),
-    3600, // 1 hour TTL
-    StaticPermissions::new(vec!["read".to_string()]),
-);
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
+let provider = LocalUserProvider::new();
+provider
+    .add_user(
+        "alice".to_string(),
+        "correct-horse-battery-staple".to_string(),
+        Some("alice@example.com".to_string()),
+        Some("Alice".to_string()),
+    )
+    .await?;
 
-// Or with custom config
-let config = SessionConfig {
-    secret: "your-secret-key".to_string(),
-    ttl_seconds: 7200, // 2 hours
-    algorithm: "HS256".to_string(),
+let session_service = Arc::new(SessionService::new(SessionConfig {
+    jwt_secret: "use-at-least-32-bytes-of-random-secret".to_string(),
+    jwt_ttl: Duration::hours(1),
     refresh_enabled: false,
-    refresh_ttl_seconds: None,
-};
-let session_service = SessionService::with_config(config, permissions);
-```
+    enforce_active_sessions: true,
+    algorithm: JwtAlgorithm::HS256,
+})?);
 
-### Creating Sessions
+session_service.register_provider(Box::new(provider)).await;
 
-```rust
-// After verifying identity with an IdentityProvider
-let verified_identity = VerifiedIdentity {
-    provider: "local".to_string(),
-    user_id: "user-123".to_string(),
-    username: "alice".to_string(),
-    email: Some("alice@example.com".to_string()),
-    metadata: None,
-};
+let token = session_service
+    .begin_session(
+        "local",
+        serde_json::json!({
+            "username": "alice",
+            "password": "correct-horse-battery-staple"
+        }),
+    )
+    .await?;
 
-// Create JWT session
-let jwt_token = session_service.create_session(verified_identity).await?;
-```
-
-### Using JwtAuthProvider
-
-```rust
-use ras_identity_session::JwtAuthProvider;
-use ras_auth_core::AuthProvider;
-
-// Create auth provider from session service
-let auth_provider = JwtAuthProvider::from_session_service(session_service);
-
-// Authenticate tokens
-let user = auth_provider.authenticate(&jwt_token).await?;
-println!("Authenticated user: {} with permissions: {:?}", 
-    user.username, user.permissions);
-```
-
-### Session Management
-
-```rust
-// Get session info
-if let Some(info) = session_service.get_session(&jti).await {
-    println!("Session for user: {}", info.user_id);
-}
-
-// End a session (revoke)
-session_service.end_session(&jti).await?;
-
-// Check active sessions
-let active_count = session_service.active_session_count().await;
-```
-
-## JWT Structure
-
-The generated JWTs include:
-- **Standard Claims**: `iss`, `sub`, `exp`, `iat`, `jti`
-- **Custom Claims**: 
-  - `username`: User's display name
-  - `permissions`: Array of permission strings
-  - `provider`: Identity provider name
-
-Example JWT payload:
-```json
-{
-  "iss": "ras",
-  "sub": "user-123",
-  "exp": 1700000000,
-  "iat": 1699996400,
-  "jti": "550e8400-e29b-41d4-a716-446655440000",
-  "username": "alice",
-  "permissions": ["read", "write"],
-  "provider": "local"
-}
-```
-
-## Integration Examples
-
-### With JSON-RPC Services
-
-```rust
-use ras_jsonrpc_macro::jsonrpc_service;
-use ras_identity_session::JwtAuthProvider;
-
-jsonrpc_service!({
-    service_name: MyService,
-    methods: [
-        WITH_PERMISSIONS(["read"]) get_data(GetRequest) -> GetResponse,
-        WITH_PERMISSIONS(["write"]) update_data(UpdateRequest) -> UpdateResponse,
-    ]
-});
-
-struct MyServiceImpl;
-
-impl MyServiceTrait for MyServiceImpl {
-    async fn get_data(
-        &self,
-        user: &ras_jsonrpc_core::AuthenticatedUser,
-        request: GetRequest,
-    ) -> Result<GetResponse, Box<dyn std::error::Error + Send + Sync>> {
-        // Load data for `user`.
-    }
-
-    async fn update_data(
-        &self,
-        user: &ras_jsonrpc_core::AuthenticatedUser,
-        request: UpdateRequest,
-    ) -> Result<UpdateResponse, Box<dyn std::error::Error + Send + Sync>> {
-        // Update data for `user`.
-    }
-}
+let claims = session_service.verify_session(&token).await?;
+assert_eq!(claims.sub, "alice");
 
 let auth_provider = JwtAuthProvider::new(session_service.clone());
-let router = MyServiceBuilder::new(MyServiceImpl)
-    .base_url("/rpc")
-    .auth_provider(auth_provider)
-    .build()?;
+# let _ = auth_provider;
+# Ok(())
+# }
 ```
 
-### With WebSocket Authentication
+## Session Revocation
 
-The session service integrates with bidirectional JSON-RPC WebSocket services, supporting multiple authentication header formats:
-- `Authorization: Bearer <token>`
-- `X-Auth-Token: <token>`
-- `Sec-WebSocket-Protocol: token.<token>`
+When `enforce_active_sessions` is `true`, `verify_session` checks that the token's `jti` is still present in the active-session registry.
 
-## Security Considerations
+```rust
+let claims = session_service.verify_session(&token).await?;
+session_service.end_session(&claims.jti).await;
+```
 
-1. **Secret Management**
-   - Use strong, randomly generated secrets
-   - Store secrets securely (environment variables, secret management systems)
-   - Rotate secrets periodically
+## JWT Claims
 
-2. **Token Expiration**
-   - Set appropriate TTL based on security requirements
-   - Consider implementing refresh tokens for long-lived sessions
+Generated tokens include:
 
-3. **Session Revocation**
-   - Track active sessions for immediate revocation capability
-   - Clean up expired sessions periodically
+- `sub`: identity subject
+- `exp` and `iat`: expiration and issue timestamps
+- `jti`: session identifier used for revocation
+- `provider_id`: identity provider that verified the user
+- `email`, `display_name`, `permissions`, and provider metadata when available
 
-4. **HTTPS Only**
-   - Always transmit JWTs over HTTPS in production
-   - Set secure cookie flags when using cookies
+## Security Notes
 
-## Configuration Options
+- Use a high-entropy `jwt_secret` of at least 32 bytes.
+- Keep `enforce_active_sessions` enabled when immediate revocation matters.
+- Refresh tokens are not issued by `SessionService`; implement refresh-token storage and rotation at the application layer if needed.
+- Transmit JWTs only over HTTPS in production.
 
-- **Secret**: JWT signing secret (required)
-- **TTL**: Token time-to-live in seconds
-- **Algorithm**: JWT signing algorithm (default: HS256)
-- **Refresh**: Enable/disable refresh token support (experimental)
+## Checks
+
+```bash
+cargo test -p ras-identity-session --locked
+cargo clippy -p ras-identity-session --all-targets --all-features --locked -- -D warnings
+```

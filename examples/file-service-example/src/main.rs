@@ -92,7 +92,7 @@ impl DocumentServiceTrait for DocumentServiceImpl {
                 format!("attachment; filename=\"{}.txt\"", file_id),
             )
             .body(body)
-            .unwrap())
+            .map_err(|e| DocumentServiceFileError::DownloadFailed(e.to_string()))?)
     }
 
     async fn upload(
@@ -158,7 +158,7 @@ impl DocumentServiceTrait for DocumentServiceImpl {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Initialize tracing
     tracing_subscriber::fmt::init();
 
@@ -189,7 +189,173 @@ async fn main() {
     );
 
     // Start server
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
 
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{body::to_bytes, response::IntoResponse};
+    use axum_test::{
+        TestServer,
+        multipart::{MultipartForm, Part},
+    };
+
+    fn test_user(user_id: &str, permissions: &[&str]) -> AuthenticatedUser {
+        AuthenticatedUser {
+            user_id: user_id.to_string(),
+            permissions: permissions
+                .iter()
+                .map(|permission| (*permission).to_string())
+                .collect(),
+            metadata: None,
+        }
+    }
+
+    fn test_server() -> TestServer {
+        let app = DocumentServiceBuilder::new(DocumentServiceImpl)
+            .auth_provider(DemoAuthProvider)
+            .build();
+
+        TestServer::builder()
+            .mock_transport()
+            .build(app)
+            .expect("in-memory axum-test server")
+    }
+
+    #[tokio::test]
+    async fn demo_auth_provider_maps_user_and_admin_permissions() {
+        let auth = DemoAuthProvider;
+
+        let user = auth.authenticate("user-token".to_string()).await.unwrap();
+        assert_eq!(user.user_id, "user-123");
+        assert!(user.permissions.contains("upload"));
+        assert!(!user.permissions.contains("admin"));
+
+        let admin = auth.authenticate("admin-token".to_string()).await.unwrap();
+        assert_eq!(admin.user_id, "admin-456");
+        assert!(admin.permissions.contains("upload"));
+        assert!(admin.permissions.contains("admin"));
+    }
+
+    #[tokio::test]
+    async fn demo_auth_provider_rejects_unknown_tokens() {
+        let auth = DemoAuthProvider;
+
+        let error = auth
+            .authenticate("not-a-token".to_string())
+            .await
+            .expect_err("unknown token should be rejected");
+
+        assert!(matches!(error, AuthError::InvalidToken));
+    }
+
+    #[tokio::test]
+    async fn download_returns_text_attachment() {
+        let service = DocumentServiceImpl;
+
+        let response = service
+            .download("test123".to_string())
+            .await
+            .expect("download response")
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["content-type"], "text/plain");
+        assert_eq!(
+            response.headers()["content-disposition"],
+            "attachment; filename=\"test123.txt\""
+        );
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        assert_eq!(&body[..], b"File content for test123");
+    }
+
+    #[tokio::test]
+    async fn info_returns_demo_metadata_for_admin_user() {
+        let service = DocumentServiceImpl;
+        let admin = test_user("admin-456", &["admin", "upload"]);
+
+        let response = service
+            .info(&admin, "report".to_string())
+            .await
+            .expect("info response")
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let info: FileInfo = serde_json::from_slice(&body).expect("file info json");
+
+        assert_eq!(info.id, "report");
+        assert_eq!(info.name, "report.pdf");
+        assert_eq!(info.size, 1024 * 1024);
+        assert_eq!(info.content_type, "application/pdf");
+    }
+
+    #[tokio::test]
+    async fn generated_public_download_route_works_without_token() {
+        let server = test_server();
+
+        let response = server.get("/api/files/download/test123").await;
+
+        response.assert_status_ok();
+        assert_eq!(response.headers()["content-type"], "text/plain");
+        assert_eq!(
+            response.headers()["content-disposition"],
+            "attachment; filename=\"test123.txt\""
+        );
+        assert_eq!(response.text(), "File content for test123");
+    }
+
+    #[tokio::test]
+    async fn generated_upload_route_accepts_user_token_and_multipart_file() {
+        let server = test_server();
+        let form = MultipartForm::new().add_part(
+            "file",
+            Part::bytes("example bytes")
+                .file_name("example.txt")
+                .mime_type("text/plain"),
+        );
+
+        let response = server
+            .post("/api/files/upload")
+            .authorization_bearer("user-token")
+            .multipart(form)
+            .await;
+
+        response.assert_status_ok();
+        let upload: UploadResponse = response.json();
+        assert!(upload.file_id.starts_with("file_"));
+        assert_eq!(upload.size, "example bytes".len() as u64);
+        assert_eq!(upload.filename, "example.txt");
+    }
+
+    #[tokio::test]
+    async fn generated_admin_info_route_enforces_admin_permission() {
+        let server = test_server();
+
+        let user_response = server
+            .get("/api/files/info/report")
+            .authorization_bearer("user-token")
+            .await;
+        user_response.assert_status(StatusCode::FORBIDDEN);
+
+        let admin_response = server
+            .get("/api/files/info/report")
+            .authorization_bearer("admin-token")
+            .await;
+        admin_response.assert_status_ok();
+
+        let info: FileInfo = admin_response.json();
+        assert_eq!(info.id, "report");
+        assert_eq!(info.name, "report.pdf");
+    }
 }

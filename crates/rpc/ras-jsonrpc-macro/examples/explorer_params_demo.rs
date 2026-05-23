@@ -236,5 +236,7 @@ async fn main() {
 #[cfg(not(all(feature = "server", feature = "client")))]
 fn main() {
     println!("This example requires both 'server' and 'client' features to be enabled.");
-    println!("Run with: cargo run --example explorer_params_demo --features server,client");
+    println!(
+        "Run with: cargo run --locked --example explorer_params_demo --features server,client"
+    );
 }

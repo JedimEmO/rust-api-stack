@@ -197,7 +197,9 @@ impl Components {
         key: impl Into<String>,
         value: impl Into<serde_json::Value>,
     ) -> Self {
-        self.extensions.insert(key, value);
+        self.extensions
+            .insert(key, value)
+            .expect("extension keys must start with 'x-'");
         self
     }
 
@@ -493,5 +495,108 @@ mod tests {
         // Test missing items
         assert!(components.get_schema("Missing").is_none());
         assert!(components.get_content_descriptor("Missing").is_none());
+    }
+
+    #[test]
+    fn map_setters_replace_each_component_collection() {
+        let components = Components::new()
+            .with_content_descriptors(HashMap::from([(
+                "UserParam".to_string(),
+                ContentDescriptor::new("user", Schema::string()),
+            )]))
+            .with_schemas(HashMap::from([("User".to_string(), Schema::object())]))
+            .with_examples(HashMap::from([(
+                "UserExample".to_string(),
+                Example::with_value(json!({"id": "user-1"})),
+            )]))
+            .with_links(HashMap::from([(
+                "ProfileLink".to_string(),
+                Link::new("profile").with_method("getProfile"),
+            )]))
+            .with_errors(HashMap::from([(
+                "UserNotFound".to_string(),
+                ErrorObject::new(1000, "User not found"),
+            )]))
+            .with_example_pairings(HashMap::from([(
+                "UserPairing".to_string(),
+                ExamplePairing::new("userPairing", vec![]),
+            )]))
+            .with_tags(HashMap::from([("Users".to_string(), Tag::new("users"))]));
+
+        assert!(components.validate().is_ok());
+        assert!(components.get_content_descriptor("UserParam").is_some());
+        assert!(components.get_schema("User").is_some());
+        assert!(components.get_example("UserExample").is_some());
+        assert!(components.get_link("ProfileLink").is_some());
+        assert!(components.get_error("UserNotFound").is_some());
+        assert!(components.get_example_pairing("UserPairing").is_some());
+        assert!(components.get_tag("Users").is_some());
+    }
+
+    #[test]
+    fn validation_errors_include_component_collection_paths() {
+        let cases = [
+            (
+                Components::new().with_content_descriptor(
+                    "BadParam",
+                    ContentDescriptor::new("bad name", Schema::string()),
+                ),
+                "Validation error at contentDescriptors.BadParam",
+            ),
+            (
+                Components::new().with_schema(
+                    "BadSchema",
+                    Schema::string().with_min_length(10).with_max_length(1),
+                ),
+                "Validation error at schemas.BadSchema",
+            ),
+            (
+                Components::new().with_example("BadExample", {
+                    let mut example = Example::with_value("inline");
+                    example.external_value = Some("https://example.test/value.json".to_string());
+                    example
+                }),
+                "Validation error at examples.BadExample",
+            ),
+            (
+                Components::new()
+                    .with_link("BadLink", Link::new("badLink").with_method("rpc.private")),
+                "Validation error at links.BadLink",
+            ),
+            (
+                Components::new().with_error("BadError", ErrorObject::new(1000, "")),
+                "Validation error at errors.BadError",
+            ),
+            (
+                Components::new()
+                    .with_example_pairing("BadPairing", ExamplePairing::new("", vec![])),
+                "Validation error at examplePairingObjects.BadPairing",
+            ),
+            (
+                Components::new().with_tag("BadTag", Tag::new("")),
+                "Validation error at tags.BadTag",
+            ),
+        ];
+
+        for (components, path) in cases {
+            let error = components.validate().unwrap_err().to_string();
+            assert!(
+                error.starts_with(path),
+                "expected `{error}` to start with `{path}`"
+            );
+        }
+    }
+
+    #[test]
+    fn component_key_validation_runs_before_nested_value_validation() {
+        let components = Components::new().with_schema(
+            "invalid key",
+            Schema::string().with_min_length(10).with_max_length(1),
+        );
+
+        assert_eq!(
+            components.validate().unwrap_err().to_string(),
+            "Validation error: Invalid component key character ' ' in key 'invalid key'"
+        );
     }
 }

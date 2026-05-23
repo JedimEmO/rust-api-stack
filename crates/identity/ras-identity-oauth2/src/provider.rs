@@ -44,8 +44,6 @@ pub enum OAuth2Response {
 /// OAuth2 provider that implements IdentityProvider
 #[derive(Clone)]
 pub struct OAuth2Provider {
-    #[allow(dead_code)]
-    config: OAuth2Config,
     client: OAuth2Client,
     provider_configs: HashMap<String, OAuth2ProviderConfig>,
 }
@@ -60,7 +58,34 @@ impl OAuth2Provider {
         );
 
         Self {
-            config,
+            client,
+            provider_configs,
+        }
+    }
+
+    pub fn try_new(
+        config: OAuth2Config,
+        state_store: Arc<dyn OAuth2StateStore>,
+    ) -> OAuth2Result<Self> {
+        let provider_configs = config.providers.clone();
+        let client = OAuth2Client::try_new(
+            state_store,
+            config.state_ttl_seconds,
+            config.http_timeout_seconds,
+        )?;
+
+        Ok(Self {
+            client,
+            provider_configs,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_client(
+        provider_configs: HashMap<String, OAuth2ProviderConfig>,
+        client: OAuth2Client,
+    ) -> Self {
+        Self {
             client,
             provider_configs,
         }
@@ -273,12 +298,11 @@ impl IdentityProvider for OAuth2Provider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::UserInfoMapping;
     use crate::state::InMemoryStateStore;
 
-    fn create_test_provider() -> OAuth2Provider {
-        let mut config = OAuth2Config::default();
-
-        let google_config = OAuth2ProviderConfig {
+    fn google_config() -> OAuth2ProviderConfig {
+        OAuth2ProviderConfig {
             provider_id: "google".to_string(),
             client_id: "test_client_id".to_string(),
             client_secret: "test_secret".to_string(),
@@ -294,8 +318,12 @@ mod tests {
             auth_params: HashMap::new(),
             use_pkce: true,
             user_info_mapping: None,
-        };
+        }
+    }
 
+    fn create_test_provider() -> OAuth2Provider {
+        let mut config = OAuth2Config::default();
+        let google_config = google_config();
         config.providers.insert("google".to_string(), google_config);
 
         let state_store = Arc::new(InMemoryStateStore::new());
@@ -333,6 +361,64 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn verify_rejects_invalid_payload() {
+        let provider = create_test_provider();
+
+        let result = provider
+            .verify(serde_json::json!({
+                "type": "StartFlow",
+                "additional_params": null
+            }))
+            .await;
+
+        assert!(matches!(result, Err(IdentityError::InvalidPayload)));
+    }
+
+    #[tokio::test]
+    async fn verify_reports_unknown_provider() {
+        let provider = create_test_provider();
+
+        let result = provider
+            .verify(serde_json::json!({
+                "type": "StartFlow",
+                "provider_id": "missing"
+            }))
+            .await;
+
+        let Err(IdentityError::ProviderError(message)) = result else {
+            panic!("expected provider error for missing provider");
+        };
+        assert!(message.contains("Provider 'missing' not configured"));
+    }
+
+    #[tokio::test]
+    async fn add_provider_makes_start_flow_available() {
+        let state_store = Arc::new(InMemoryStateStore::new());
+        let mut provider = OAuth2Provider::new(OAuth2Config::default(), state_store);
+        provider.add_provider(google_config());
+
+        let result = provider
+            .verify(serde_json::json!({
+                "type": "StartFlow",
+                "provider_id": "google",
+                "additional_params": {
+                    "prompt": "consent"
+                }
+            }))
+            .await;
+
+        let Err(IdentityError::ProviderError(response_json)) = result else {
+            panic!("expected authorization URL response encoded as provider error");
+        };
+        let response: OAuth2Response = serde_json::from_str(&response_json).unwrap();
+        let OAuth2Response::AuthorizationUrl { url, state } = response else {
+            panic!("expected authorization URL response");
+        };
+        assert!(url.contains("prompt=consent"));
+        assert!(!state.is_empty());
+    }
+
     #[test]
     fn test_user_info_mapping() {
         let provider = create_test_provider();
@@ -361,6 +447,96 @@ mod tests {
 
         let metadata = identity.metadata.unwrap();
         assert_eq!(metadata["picture"], "https://example.com/picture.jpg");
-        assert_eq!(metadata["email_verified"], true);
+        assert_eq!(metadata["email_verified"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn custom_user_info_mapping_prefers_additional_claims_and_preserves_metadata() {
+        let provider = create_test_provider();
+        let mut provider_config = google_config();
+        provider_config.user_info_mapping = Some(UserInfoMapping {
+            subject_field: Some("external_id".to_string()),
+            email_field: Some("mail".to_string()),
+            name_field: Some("display".to_string()),
+            picture_field: Some("avatar".to_string()),
+        });
+
+        let mut additional_claims = HashMap::new();
+        additional_claims.insert(
+            "external_id".to_string(),
+            serde_json::Value::String("mapped-subject".to_string()),
+        );
+        additional_claims.insert(
+            "mail".to_string(),
+            serde_json::Value::String("mapped@example.com".to_string()),
+        );
+        additional_claims.insert(
+            "display".to_string(),
+            serde_json::Value::String("Mapped User".to_string()),
+        );
+        additional_claims.insert(
+            "avatar".to_string(),
+            serde_json::Value::String("https://example.com/avatar.png".to_string()),
+        );
+        additional_claims.insert(
+            "tenant".to_string(),
+            serde_json::Value::String("engineering".to_string()),
+        );
+
+        let identity = provider
+            .map_user_info_to_identity(
+                "google",
+                crate::types::UserInfoResponse {
+                    sub: "fallback-subject".to_string(),
+                    email: Some("fallback@example.com".to_string()),
+                    email_verified: Some(false),
+                    name: Some("Fallback User".to_string()),
+                    given_name: None,
+                    family_name: None,
+                    picture: None,
+                    locale: None,
+                    additional_claims,
+                },
+                &provider_config,
+            )
+            .unwrap();
+
+        assert_eq!(identity.subject, "mapped-subject");
+        assert_eq!(identity.email.as_deref(), Some("mapped@example.com"));
+        assert_eq!(identity.display_name.as_deref(), Some("Mapped User"));
+
+        let metadata = identity.metadata.unwrap();
+        assert_eq!(metadata["picture"], "https://example.com/avatar.png");
+        assert_eq!(metadata["email_verified"].as_bool(), Some(false));
+        assert_eq!(metadata["tenant"], "engineering");
+    }
+
+    #[test]
+    fn user_info_mapping_omits_empty_metadata() {
+        let provider = create_test_provider();
+        let provider_config = provider.get_provider_config("google").unwrap();
+
+        let identity = provider
+            .map_user_info_to_identity(
+                "google",
+                crate::types::UserInfoResponse {
+                    sub: "subject-only".to_string(),
+                    email: None,
+                    email_verified: None,
+                    name: None,
+                    given_name: None,
+                    family_name: None,
+                    picture: None,
+                    locale: None,
+                    additional_claims: HashMap::new(),
+                },
+                provider_config,
+            )
+            .unwrap();
+
+        assert_eq!(identity.subject, "subject-only");
+        assert!(identity.email.is_none());
+        assert!(identity.display_name.is_none());
+        assert!(identity.metadata.is_none());
     }
 }

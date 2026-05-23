@@ -41,8 +41,7 @@ impl AuthProvider for DummyAuth {
 }
 
 #[test]
-fn test_compilation() {
-    // If it compiles, the test passes
+fn generated_builder_accepts_service_and_auth_provider() {
     let service = MyService;
     let auth = DummyAuth;
     let _builder = MinimalServiceBuilder::new(service).auth_provider(auth);

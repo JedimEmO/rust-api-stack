@@ -8,11 +8,11 @@ This crate provides type-safe representations of JSON-RPC 2.0 protocol structure
 
 ## Features
 
-- ✅ **JSON-RPC 2.0 Compliant**: Full support for the JSON-RPC 2.0 specification
-- ✅ **Type Safe**: Strong typing with serde serialization/deserialization
-- ✅ **Minimal Dependencies**: Only depends on `serde` and `serde_json`
-- ✅ **Standard Error Codes**: Predefined error codes following the JSON-RPC 2.0 spec
-- ✅ **Convenience Methods**: Helper methods for creating requests, responses, and errors
+- **JSON-RPC 2.0 compliant**: Full support for the JSON-RPC 2.0 specification
+- **Type safe**: Strong typing with serde serialization/deserialization
+- **Minimal dependencies**: Only depends on `serde` and `serde_json`
+- **Standard error codes**: Predefined error codes following the JSON-RPC 2.0 spec
+- **Convenience methods**: Helper methods for creating requests, responses, and errors
 
 ## Usage
 
@@ -20,7 +20,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-ras-jsonrpc-types = "0.1.0"
+ras-jsonrpc-types = "0.1.1"
 ```
 
 ### Basic Types
@@ -71,7 +71,7 @@ let token_expired = JsonRpcError::token_expired();
 
 ## JSON-RPC 2.0 Specification
 
-This crate implements the complete [JSON-RPC 2.0 specification](https://www.jsonrpc.org/specification):
+This crate provides the core [JSON-RPC 2.0 specification](https://www.jsonrpc.org/specification) request, response, and error types used by RAS services:
 
 ### Request Structure
 ```json
@@ -121,12 +121,19 @@ The crate provides all standard JSON-RPC 2.0 error codes plus extension codes fo
 
 ## Integration
 
-This crate is designed to work seamlessly with:
+This crate is designed to work with:
 
 - [`ras-jsonrpc-core`](../ras-jsonrpc-core) - Authentication and authorization traits
 - [`ras-jsonrpc-macro`](../ras-jsonrpc-macro) - Procedural macros for service generation
 - Any JSON-RPC client or server implementation
 
+## Checks
+
+```bash
+cargo test -p ras-jsonrpc-types --locked
+cargo clippy -p ras-jsonrpc-types --all-targets --all-features --locked -- -D warnings
+```
+
 ## License
 
-This project is licensed under the MIT License.
+This project is licensed under either MIT or Apache-2.0.

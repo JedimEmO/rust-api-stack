@@ -1,13 +1,19 @@
 //! Criterion bench measuring per-call latency of an authenticated JSON-RPC
-//! method through the full stack: generated client → axum router → handler.
+//! method through the in-memory axum-test stack: request -> axum router ->
+//! handler.
 //!
 //! Run with `cargo bench -p ras-jsonrpc-macro`.
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use ras_jsonrpc_macro::jsonrpc_service;
-use ras_test_helpers::{MockAuthProvider, spawn_http};
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::sync::Arc;
 use tokio::runtime::Runtime;
+
+#[path = "../tests/support/mod.rs"]
+mod support;
+use support::{MockAuthProvider, mock_http_server};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AddRequest {
@@ -50,24 +56,26 @@ fn build_router() -> axum::Router {
 
 fn bench_dispatch(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
-
-    // Spin the server up once and reuse across every iteration.
-    let (client, _server) = rt.block_on(async {
-        let server = spawn_http(build_router());
-        let url = server.server_url("/rpc").unwrap().to_string();
-        let mut client = BenchSvcClientBuilder::new()
-            .server_url(url)
-            .build()
-            .expect("client build");
-        client.set_bearer_token(Some("user-token".to_string()));
-        (client, server)
-    });
+    let server = Arc::new(mock_http_server(build_router()));
 
     c.bench_function("jsonrpc_add_dispatch", |b| {
         b.to_async(&rt).iter(|| {
-            let client = client.clone();
+            let server = Arc::clone(&server);
             async move {
-                let r = client.add(AddRequest { a: 1, b: 2 }).await.expect("add ok");
+                let response = server
+                    .post("/rpc")
+                    .authorization_bearer("user-token")
+                    .json(&json!({
+                        "jsonrpc": "2.0",
+                        "method": "add",
+                        "params": AddRequest { a: 1, b: 2 },
+                        "id": 1,
+                    }))
+                    .await;
+                response.assert_status_ok();
+                let payload: Value = response.json();
+                let r: AddResponse =
+                    serde_json::from_value(payload["result"].clone()).expect("result json");
                 std::hint::black_box(r);
             }
         });

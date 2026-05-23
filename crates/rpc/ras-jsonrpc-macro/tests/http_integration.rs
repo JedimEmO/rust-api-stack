@@ -4,7 +4,6 @@ use ras_jsonrpc_macro::jsonrpc_service;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashSet;
-use tokio::net::TcpListener as TokioTcpListener;
 
 // Test data structures for various scenarios
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -101,7 +100,7 @@ impl AuthProvider for TestAuthProvider {
     }
 }
 
-// Generate comprehensive test service
+// Generate a broad test service
 jsonrpc_service!({
     service_name: TestService,
     openrpc: true,
@@ -252,39 +251,24 @@ impl TestServiceTrait for TestServiceImpl {
     }
 }
 
-async fn create_test_server() -> (String, tokio::task::JoinHandle<()>) {
-    let tokio_listener = TokioTcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("Failed to bind to port");
-    let addr = tokio_listener
-        .local_addr()
-        .expect("Failed to get local addr");
-    let base_url = format!("http://127.0.0.1:{}", addr.port());
-
+fn create_test_server() -> axum_test::TestServer {
     let builder = TestServiceBuilder::new(TestServiceImpl)
         .base_url("/rpc")
         .auth_provider(TestAuthProvider::new());
 
     let app = builder.build().expect("Failed to build app");
-
-    let handle = tokio::spawn(async move {
-        axum::serve(tokio_listener, app)
-            .await
-            .expect("Server failed");
-    });
-
-    // Give the server a moment to start
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-    (base_url, handle)
+    axum_test::TestServer::builder()
+        .mock_transport()
+        .build(app)
+        .unwrap()
 }
 
 async fn make_jsonrpc_request(
-    base_url: &str,
+    server: &axum_test::TestServer,
     method: &str,
     params: Value,
     token: Option<&str>,
-) -> Result<Value, reqwest::Error> {
+) -> Value {
     let request_body = json!({
         "jsonrpc": "2.0",
         "method": method,
@@ -292,27 +276,22 @@ async fn make_jsonrpc_request(
         "id": 1
     });
 
-    let mut request_builder = reqwest::Client::new()
-        .post(format!("{}/rpc", base_url))
-        .header("Content-Type", "application/json")
-        .json(&request_body);
+    let mut request = server.post("/rpc").json(&request_body);
 
     if let Some(token) = token {
-        request_builder = request_builder.header("Authorization", format!("Bearer {}", token));
+        request = request.authorization_bearer(token);
     }
 
-    let response = request_builder.send().await?;
-    let json_response: Value = response.json().await?;
-    Ok(json_response)
+    request.await.json()
 }
 
 #[tokio::test]
 async fn test_unauthorized_methods() {
-    let (base_url, _handle) = create_test_server().await;
+    let server = create_test_server();
 
     // Test sign_in with valid credentials
     let response = make_jsonrpc_request(
-        &base_url,
+        &server,
         "sign_in",
         json!({
             "email": "admin@test.com",
@@ -320,8 +299,7 @@ async fn test_unauthorized_methods() {
         }),
         None,
     )
-    .await
-    .unwrap();
+    .await;
 
     assert_eq!(response["jsonrpc"], "2.0");
     assert_eq!(response["id"], 1);
@@ -333,7 +311,7 @@ async fn test_unauthorized_methods() {
 
     // Test sign_in with invalid credentials
     let response = make_jsonrpc_request(
-        &base_url,
+        &server,
         "sign_in",
         json!({
             "email": "wrong@test.com",
@@ -341,15 +319,12 @@ async fn test_unauthorized_methods() {
         }),
         None,
     )
-    .await
-    .unwrap();
+    .await;
 
     assert!(response.get("error").is_some());
 
     // Test get_public_info
-    let response = make_jsonrpc_request(&base_url, "get_public_info", json!(()), None)
-        .await
-        .unwrap();
+    let response = make_jsonrpc_request(&server, "get_public_info", json!(()), None).await;
 
     assert_eq!(response["result"], "This is public information");
 
@@ -365,21 +340,17 @@ async fn test_unauthorized_methods() {
         }
     });
 
-    let response = make_jsonrpc_request(&base_url, "echo_complex", complex_data.clone(), None)
-        .await
-        .unwrap();
+    let response = make_jsonrpc_request(&server, "echo_complex", complex_data.clone(), None).await;
 
     assert_eq!(response["result"], complex_data);
 }
 
 #[tokio::test]
 async fn test_authentication_required_methods() {
-    let (base_url, _handle) = create_test_server().await;
+    let server = create_test_server();
 
     // Test without token - should fail
-    let response = make_jsonrpc_request(&base_url, "sign_out", json!(()), None)
-        .await
-        .unwrap();
+    let response = make_jsonrpc_request(&server, "sign_out", json!(()), None).await;
 
     assert!(response.get("error").is_some());
     let error = &response["error"];
@@ -387,22 +358,19 @@ async fn test_authentication_required_methods() {
 
     // Test with valid token - should succeed
     let response =
-        make_jsonrpc_request(&base_url, "sign_out", json!(()), Some("valid-admin-token"))
-            .await
-            .unwrap();
+        make_jsonrpc_request(&server, "sign_out", json!(()), Some("valid-admin-token")).await;
 
     assert!(response.get("error").is_none());
     assert_eq!(response["result"], json!(()));
 
     // Test get_user_info with valid token
     let response = make_jsonrpc_request(
-        &base_url,
+        &server,
         "get_user_info",
         json!(()),
         Some("valid-user-token"),
     )
-    .await
-    .unwrap();
+    .await;
 
     assert!(response.get("error").is_none());
     let result = &response["result"];
@@ -411,33 +379,31 @@ async fn test_authentication_required_methods() {
 
     // Test process_data
     let response = make_jsonrpc_request(
-        &base_url,
+        &server,
         "process_data",
         json!(["item1", "item2", "item3"]),
         Some("valid-empty-perms-token"),
     )
-    .await
-    .unwrap();
+    .await;
 
     assert!(response.get("error").is_none());
     let result = &response["result"];
     assert_eq!(result["processed_count"], 3);
-    assert_eq!(result["success"], true);
+    assert_eq!(result["success"].as_bool(), Some(true));
 }
 
 #[tokio::test]
 async fn test_admin_permission_methods() {
-    let (base_url, _handle) = create_test_server().await;
+    let server = create_test_server();
 
     // Test with user token (insufficient permissions) - should fail
     let response = make_jsonrpc_request(
-        &base_url,
+        &server,
         "delete_everything",
         json!(()),
         Some("valid-user-token"),
     )
-    .await
-    .unwrap();
+    .await;
 
     assert!(response.get("error").is_some());
     let error = &response["error"];
@@ -445,19 +411,18 @@ async fn test_admin_permission_methods() {
 
     // Test with admin token - should succeed
     let response = make_jsonrpc_request(
-        &base_url,
+        &server,
         "delete_everything",
         json!(()),
         Some("valid-admin-token"),
     )
-    .await
-    .unwrap();
+    .await;
 
     assert!(response.get("error").is_none());
 
     // Test create_user with admin token
     let response = make_jsonrpc_request(
-        &base_url,
+        &server,
         "create_user",
         json!({
             "name": "New User",
@@ -466,8 +431,7 @@ async fn test_admin_permission_methods() {
         }),
         Some("valid-admin-token"),
     )
-    .await
-    .unwrap();
+    .await;
 
     assert!(response.get("error").is_none());
     let result = &response["result"];
@@ -478,11 +442,11 @@ async fn test_admin_permission_methods() {
 
 #[tokio::test]
 async fn test_user_permission_methods() {
-    let (base_url, _handle) = create_test_server().await;
+    let server = create_test_server();
 
     // Test with empty permissions token - should fail
     let response = make_jsonrpc_request(
-        &base_url,
+        &server,
         "update_profile",
         json!({
             "name": "Updated User",
@@ -491,14 +455,13 @@ async fn test_user_permission_methods() {
         }),
         Some("valid-empty-perms-token"),
     )
-    .await
-    .unwrap();
+    .await;
 
     assert!(response.get("error").is_some());
 
     // Test with user token - should succeed
     let response = make_jsonrpc_request(
-        &base_url,
+        &server,
         "update_profile",
         json!({
             "name": "Updated User",
@@ -507,8 +470,7 @@ async fn test_user_permission_methods() {
         }),
         Some("valid-user-token"),
     )
-    .await
-    .unwrap();
+    .await;
 
     assert!(response.get("error").is_none());
     let result = &response["result"];
@@ -517,13 +479,12 @@ async fn test_user_permission_methods() {
 
     // Test get_user_data with existing user
     let response = make_jsonrpc_request(
-        &base_url,
+        &server,
         "get_user_data",
         json!(123),
         Some("valid-user-token"),
     )
-    .await
-    .unwrap();
+    .await;
 
     assert!(response.get("error").is_none());
     let result = &response["result"];
@@ -531,13 +492,12 @@ async fn test_user_permission_methods() {
 
     // Test get_user_data with non-existing user
     let response = make_jsonrpc_request(
-        &base_url,
+        &server,
         "get_user_data",
         json!(999),
         Some("valid-user-token"),
     )
-    .await
-    .unwrap();
+    .await;
 
     assert!(response.get("error").is_none());
     assert_eq!(response["result"], json!(null));
@@ -545,12 +505,10 @@ async fn test_user_permission_methods() {
 
 #[tokio::test]
 async fn test_invalid_requests() {
-    let (base_url, _handle) = create_test_server().await;
+    let server = create_test_server();
 
     // Test method not found
-    let response = make_jsonrpc_request(&base_url, "non_existent_method", json!(()), None)
-        .await
-        .unwrap();
+    let response = make_jsonrpc_request(&server, "non_existent_method", json!(()), None).await;
 
     assert!(response.get("error").is_some());
     let error = &response["error"];
@@ -563,36 +521,26 @@ async fn test_invalid_requests() {
         "id": 1
     });
 
-    let response = reqwest::Client::new()
-        .post(format!("{}/rpc", base_url))
-        .header("Content-Type", "application/json")
-        .json(&invalid_request)
-        .send()
-        .await
-        .unwrap();
-
-    let json_response: Value = response.json().await.unwrap();
+    let json_response: Value = server.post("/rpc").json(&invalid_request).await.json();
     assert!(json_response.get("error").is_some());
 
     // Test invalid parameters for a method
-    let response = make_jsonrpc_request(&base_url, "sign_in", json!("invalid_params"), None)
-        .await
-        .unwrap();
+    let response = make_jsonrpc_request(&server, "sign_in", json!("invalid_params"), None).await;
 
     assert!(response.get("error").is_some());
 }
 
 #[tokio::test]
 async fn test_concurrent_requests() {
-    let (base_url, _handle) = create_test_server().await;
+    let server = std::sync::Arc::new(create_test_server());
 
     // Test multiple concurrent requests
     let mut handles = vec![];
 
     for _ in 0..10 {
-        let base_url = base_url.clone();
+        let server = std::sync::Arc::clone(&server);
         let handle = tokio::spawn(async move {
-            make_jsonrpc_request(&base_url, "get_public_info", json!(()), None).await
+            make_jsonrpc_request(&server, "get_public_info", json!(()), None).await
         });
         handles.push(handle);
     }
@@ -602,7 +550,7 @@ async fn test_concurrent_requests() {
 
     // All requests should succeed
     for result in results {
-        let response = result.unwrap().unwrap();
+        let response = result.unwrap();
         assert_eq!(response["result"], "This is public information");
     }
 }
@@ -627,7 +575,10 @@ async fn test_openrpc_generation() {
         .iter()
         .find(|m| m["name"] == "delete_everything")
         .unwrap();
-    assert_eq!(delete_method["x-authentication"]["required"], true);
+    assert_eq!(
+        delete_method["x-authentication"]["required"].as_bool(),
+        Some(true)
+    );
     assert_eq!(delete_method["x-permissions"][0], "admin");
 
     // Check that methods with multiple permissions are correct
@@ -642,11 +593,11 @@ async fn test_openrpc_generation() {
 }
 
 #[cfg(feature = "client")]
-#[tokio::test]
-async fn test_client_generation() {
+#[test]
+fn test_client_generation() {
     // Test that client generation compiles and produces valid API
     let client_result = TestServiceClientBuilder::new()
-        .server_url("http://localhost:9999/rpc")
+        .server_url("http://example.invalid/rpc")
         .with_timeout(std::time::Duration::from_millis(1000))
         .build();
 
@@ -655,20 +606,4 @@ async fn test_client_generation() {
     let mut client = client_result.unwrap();
     client.set_bearer_token(Some("test-token"));
     assert_eq!(client.bearer_token(), Some("test-token"));
-
-    // Try to call a method - this should fail with connection error but proves the API works
-    let request = SignInRequest {
-        email: "test@example.com".to_string(),
-        password: "password".to_string(),
-    };
-
-    let result = client.sign_in(request.clone()).await;
-    // Should get a connection error since server doesn't exist
-    assert!(result.is_err());
-
-    // Test timeout version
-    let result = client
-        .sign_in_with_timeout(request, std::time::Duration::from_millis(100))
-        .await;
-    assert!(result.is_err());
 }

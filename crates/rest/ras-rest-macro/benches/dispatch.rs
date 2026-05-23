@@ -1,5 +1,5 @@
 //! Criterion bench measuring per-call latency of an authenticated REST GET
-//! through the full stack: generated client → axum router → handler.
+//! through the in-memory axum-test stack: request -> axum router -> handler.
 //!
 //! Run with `cargo bench -p ras-rest-macro`.
 
@@ -7,9 +7,13 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use ras_auth_core::AuthenticatedUser;
 use ras_rest_core::{RestResponse, RestResult};
 use ras_rest_macro::rest_service;
-use ras_test_helpers::{MockAuthProvider, spawn_http};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tokio::runtime::Runtime;
+
+#[path = "../tests/support/mod.rs"]
+mod support;
+use support::{MockAuthProvider, mock_http_server};
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 struct Item {
@@ -47,21 +51,18 @@ fn build_router() -> axum::Router {
 
 fn bench_dispatch(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
-    let (client, _server) = rt.block_on(async {
-        let server = spawn_http(build_router());
-        let base = server.server_address().unwrap().to_string();
-        let mut client = BenchSvcClient::builder(&base)
-            .build()
-            .expect("client build");
-        client.set_bearer_token(Some("user-token".to_string()));
-        (client, server)
-    });
+    let server = Arc::new(mock_http_server(build_router()));
 
     c.bench_function("rest_get_dispatch", |b| {
         b.to_async(&rt).iter(|| {
-            let client = client.clone();
+            let server = Arc::clone(&server);
             async move {
-                let r = client.get_items_by_id(1).await.expect("get ok");
+                let response = server
+                    .get("/api/items/1")
+                    .authorization_bearer("user-token")
+                    .await;
+                response.assert_status_ok();
+                let r: Item = response.json();
                 std::hint::black_box(r);
             }
         });

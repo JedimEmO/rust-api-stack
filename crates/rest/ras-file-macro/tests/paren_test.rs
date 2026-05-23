@@ -2,7 +2,6 @@ use axum::body::Body;
 use axum::response::{IntoResponse, Response};
 use ras_file_macro::file_service;
 
-// Try with parentheses instead of braces
 file_service!({
     service_name: TestParen,
     base_path: "/api",
@@ -25,7 +24,19 @@ impl TestParenTrait for TestService {
     }
 }
 
-#[test]
-fn test() {
-    let _service = TestService;
+#[tokio::test]
+async fn generated_trait_handles_download_endpoint_with_path_parameter() {
+    let response = TestService
+        .download("report.txt".to_string())
+        .await
+        .expect("download succeeds")
+        .into_response();
+
+    let (parts, body) = response.into_parts();
+    let body = axum::body::to_bytes(body, usize::MAX)
+        .await
+        .expect("body bytes");
+
+    assert_eq!(parts.status, axum::http::StatusCode::OK);
+    assert_eq!(&body[..], b"Download report.txt");
 }

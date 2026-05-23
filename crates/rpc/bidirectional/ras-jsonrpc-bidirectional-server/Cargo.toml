@@ -2,7 +2,12 @@
 name = "ras-jsonrpc-bidirectional-server"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
 description = "WebSocket server implementation for bidirectional JSON-RPC communication"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-agent-stack"
+homepage = "https://github.com/JedimEmO/rust-agent-stack"
+readme = "README.md"
 keywords = ["jsonrpc", "websocket", "axum", "bidirectional", "server"]
 categories = ["web-programming", "network-programming"]
 
@@ -19,9 +24,9 @@ bon = { workspace = true }
 chrono = { workspace = true }
 
 # Internal dependencies
-ras-auth-core = { path = "../../../core/ras-auth-core" }
-ras-jsonrpc-types = { path = "../../ras-jsonrpc-types" }
-ras-jsonrpc-bidirectional-types = { path = "../ras-jsonrpc-bidirectional-types" }
+ras-auth-core = { path = "../../../core/ras-auth-core", version = "0.1.0" }
+ras-jsonrpc-types = { path = "../../ras-jsonrpc-types", version = "0.1.1" }
+ras-jsonrpc-bidirectional-types = { path = "../ras-jsonrpc-bidirectional-types", version = "0.1.0" }
 
 # WebSocket specific dependencies
 futures = { workspace = true }
@@ -30,5 +35,4 @@ futures = { workspace = true }
 dashmap = { workspace = true }
 
 [dev-dependencies]
-tokio-test = { workspace = true }
-ras-jsonrpc-types = { path = "../../ras-jsonrpc-types" }
+ras-jsonrpc-types = { path = "../../ras-jsonrpc-types", version = "0.1.1" }

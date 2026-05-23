@@ -2,7 +2,13 @@
 name = "basic-jsonrpc-service"
 version = "0.1.1"
 edition = "2024"
+rust-version = "1.88"
+description = "Runnable JSON-RPC task service example for Rust Agent Stack"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-agent-stack"
+homepage = "https://github.com/JedimEmO/rust-agent-stack"
 publish = false
+readme = "README.md"
 
 [features]
 default = ["server"]
@@ -10,9 +16,9 @@ server = []
 client = []
 
 [dependencies]
-basic-jsonrpc-api = { path = "../api" }
-ras-jsonrpc-core = { path = "../../../crates/rpc/ras-jsonrpc-core" }
-ras-jsonrpc-types = { path = "../../../crates/rpc/ras-jsonrpc-types" }
+basic-jsonrpc-api = { path = "../api", version = "0.1.0" }
+ras-jsonrpc-core = { path = "../../../crates/rpc/ras-jsonrpc-core", version = "0.1.2" }
+ras-jsonrpc-types = { path = "../../../crates/rpc/ras-jsonrpc-types", version = "0.1.1" }
 axum = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -24,5 +30,5 @@ uuid = { workspace = true, features = ["v4"] }
 anyhow = { workspace = true }
 
 # Observability
-ras-observability-core = { path = "../../../crates/core/ras-observability-core" }
-ras-observability-otel = { path = "../../../crates/observability/ras-observability-otel" }
+ras-observability-core = { path = "../../../crates/core/ras-observability-core", version = "0.1.0" }
+ras-observability-otel = { path = "../../../crates/observability/ras-observability-otel", version = "0.1.0" }

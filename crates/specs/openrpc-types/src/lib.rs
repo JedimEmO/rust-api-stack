@@ -1,13 +1,13 @@
 //! OpenRPC Types
 //!
-//! Complete Rust types for the OpenRPC 1.3.2 specification with serde support,
-//! bon builders, and comprehensive validation.
+//! Rust types for the OpenRPC 1.3.2 specification with serde support,
+//! bon builders, and runtime validation helpers.
 //!
 //! This crate provides:
-//! - Complete OpenRPC 1.3.2 specification types
+//! - OpenRPC 1.3.2 specification types
 //! - Serde serialization/deserialization support
 //! - Bon builder patterns for ergonomic API construction
-//! - Comprehensive validation against OpenRPC constraints
+//! - Validation helpers for OpenRPC constraints
 //! - JSON Schema Draft 7 compatibility for Schema objects
 //! - Reference resolution support for $ref within components
 //! - Specification extensions support for x-* extension fields

@@ -2,23 +2,27 @@
 name = "ras-identity-session"
 version = "0.1.1"
 edition = "2024"
+rust-version = "1.88"
 description = "JWT session management and authentication provider implementation"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/example/rust-agent-stack"
-homepage = "https://github.com/example/rust-agent-stack"
+repository = "https://github.com/JedimEmO/rust-agent-stack"
+homepage = "https://github.com/JedimEmO/rust-agent-stack"
+readme = "README.md"
 
 [dependencies]
-ras-identity-core = { path = "../../core/ras-identity-core" }
-ras-auth-core = { path = "../../core/ras-auth-core" }
+ras-identity-core = { path = "../../core/ras-identity-core", version = "0.1.1" }
+ras-auth-core = { path = "../../core/ras-auth-core", version = "0.1.0" }
 
 async-trait = { workspace = true }
+base64 = { workspace = true }
 chrono = { workspace = true }
-jsonwebtoken = { workspace = true }
+hmac = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
-ras-identity-local = { path = "../ras-identity-local" }
+ras-identity-local = { path = "../ras-identity-local", version = "0.2.0" }

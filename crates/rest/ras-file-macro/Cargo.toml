@@ -2,6 +2,12 @@
 name = "ras-file-macro"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
+description = "Procedural macro for type-safe file upload and download APIs"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-agent-stack"
+homepage = "https://github.com/JedimEmO/rust-agent-stack"
+readme = "README.md"
 
 [lib]
 proc-macro = true
@@ -20,10 +26,9 @@ axum = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-ras-auth-core = { path = "../../core/ras-auth-core" }
+ras-auth-core = { path = "../../core/ras-auth-core", version = "0.1.0" }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
-ras-test-helpers = { path = "../../test-utils/ras-test-helpers" }
 axum-test = { workspace = true }
 tempfile = { workspace = true }
 criterion = { workspace = true, features = ["async_tokio"] }

@@ -1,6 +1,6 @@
 //! Configuration module for the bidirectional chat server
 //!
-//! This module provides a comprehensive configuration system that supports:
+//! This module provides the configuration loading paths used by the example:
 //! - Environment variables (with CHAT_ prefix)
 //! - Configuration file (config.toml)
 //! - Default values
@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use tracing::{debug, info, warn};
 
 /// Main configuration struct for the chat server
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     /// Server configuration
@@ -211,15 +211,15 @@ pub struct RateLimitConfig {
     #[serde(default)]
     pub enabled: bool,
 
-    /// Messages per minute per user
+    /// Messages per minute per authenticated chat user.
     #[serde(default = "default_messages_per_minute")]
     pub messages_per_minute: u32,
 
-    /// Connections per IP
+    /// Reserved for deployment-level connection limiting; validated but not enforced by the chat service.
     #[serde(default = "default_connections_per_ip")]
     pub connections_per_ip: u32,
 
-    /// Login attempts per hour per IP
+    /// Reserved for deployment-level login throttling; validated but not enforced by the chat service.
     #[serde(default = "default_login_attempts_per_hour")]
     pub login_attempts_per_hour: u32,
 }
@@ -296,19 +296,6 @@ fn default_connections_per_ip() -> u32 {
 
 fn default_login_attempts_per_hour() -> u32 {
     20
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            server: ServerConfig::default(),
-            auth: AuthConfig::default(),
-            chat: ChatConfig::default(),
-            logging: LoggingConfig::default(),
-            admin: AdminConfig::default(),
-            rate_limit: RateLimitConfig::default(),
-        }
-    }
 }
 
 impl Default for ServerConfig {

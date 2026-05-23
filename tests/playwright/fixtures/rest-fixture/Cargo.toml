@@ -2,7 +2,13 @@
 name = "playwright-rest-fixture"
 version = "0.0.0"
 edition = "2024"
+rust-version = "1.88"
+description = "REST API explorer fixture server for Playwright tests"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-agent-stack"
+homepage = "https://github.com/JedimEmO/rust-agent-stack"
 publish = false
+readme = "README.md"
 
 [features]
 default = ["server"]
@@ -14,12 +20,15 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 axum-extra = { workspace = true }
-ras-auth-core = { path = "../../../../crates/core/ras-auth-core" }
-ras-rest-core = { path = "../../../../crates/rest/ras-rest-core" }
-ras-rest-macro = { path = "../../../../crates/rest/ras-rest-macro" }
+ras-auth-core = { path = "../../../../crates/core/ras-auth-core", version = "0.1.0" }
+ras-rest-core = { path = "../../../../crates/rest/ras-rest-core", version = "0.1.1" }
+ras-rest-macro = { path = "../../../../crates/rest/ras-rest-macro", version = "0.2.1" }
 reqwest = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+axum-test = { workspace = true }

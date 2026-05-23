@@ -84,33 +84,6 @@ impl AvatarManager {
             .collect()
     }
 
-    pub fn _get_compact_avatar_for_user(&mut self, username: &str) -> String {
-        // For inline display, just show the face part
-        let avatar_index = self.user_avatars.get(username).copied().unwrap_or_else(|| {
-            let mut hasher = DefaultHasher::new();
-            username.hash(&mut hasher);
-            let hash = hasher.finish();
-            let index = (hash % CAT_VARIATIONS.len() as u64) as usize;
-            self.user_avatars.insert(username.to_string(), index);
-            index
-        });
-
-        // Return just the face line for compact display
-        let face = if self.frame_counter < 30 {
-            CAT_VARIATIONS[avatar_index][1]
-        } else if self.frame_counter < 35 {
-            if avatar_index % 2 == 0 {
-                CAT_FRAMES[1][1] // Blink
-            } else {
-                CAT_FRAMES[2][1] // Wink
-            }
-        } else {
-            CAT_FRAMES[3][1] // Happy
-        };
-
-        face.to_string()
-    }
-
     pub fn get_typing_avatar_for_user(&mut self, username: &str) -> Vec<String> {
         // Get the base avatar for the user
         let avatar_index = self.user_avatars.get(username).copied().unwrap_or_else(|| {

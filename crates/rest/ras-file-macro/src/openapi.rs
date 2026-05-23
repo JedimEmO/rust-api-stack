@@ -87,7 +87,7 @@ pub fn generate_openapi_code(
                             })
                         });
 
-                        // Post-process schema to make it more Swagger UI friendly
+                        // Post-process schemas for broad OpenAPI explorer compatibility.
                         normalize_nullable_properties(&mut schema_value);
                         schema_value
                     }
@@ -514,8 +514,7 @@ pub fn generate_openapi_code(
                         "bearerAuth": {
                             "type": "http",
                             "scheme": "bearer",
-                            "bearerFormat": "JWT",
-                            "description": "JWT token for authentication"
+                            "description": "Bearer token for authentication"
                         }
                     }
                 },

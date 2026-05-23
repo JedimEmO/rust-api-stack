@@ -35,3 +35,48 @@ impl AuthProvider for SimpleAuthProvider {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn validtoken_authenticates_with_user_permission() {
+        let provider = SimpleAuthProvider;
+
+        let user = provider
+            .authenticate("validtoken".to_string())
+            .await
+            .expect("valid user token");
+
+        assert_eq!(user.user_id, "testuser");
+        assert!(user.permissions.contains("user"));
+        assert!(!user.permissions.contains("admin"));
+    }
+
+    #[tokio::test]
+    async fn admintoken_authenticates_with_admin_and_user_permissions() {
+        let provider = SimpleAuthProvider;
+
+        let user = provider
+            .authenticate("admintoken".to_string())
+            .await
+            .expect("valid admin token");
+
+        assert_eq!(user.user_id, "admin");
+        assert!(user.permissions.contains("user"));
+        assert!(user.permissions.contains("admin"));
+    }
+
+    #[tokio::test]
+    async fn unknown_token_is_rejected() {
+        let provider = SimpleAuthProvider;
+
+        let error = provider
+            .authenticate("unknown".to_string())
+            .await
+            .expect_err("unknown token should be rejected");
+
+        assert!(matches!(error, AuthError::InvalidToken));
+    }
+}

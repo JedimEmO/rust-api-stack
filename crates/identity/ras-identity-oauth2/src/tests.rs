@@ -2,24 +2,89 @@
 
 #[cfg(test)]
 mod integration_tests {
+    use crate::client::{OAuth2Client, OAuth2HttpTransport};
+    use crate::error::{OAuth2Error, OAuth2Result};
     use crate::provider::OAuth2Response;
-    use crate::{InMemoryStateStore, OAuth2Config, OAuth2Provider, OAuth2ProviderConfig};
+    use crate::{
+        InMemoryStateStore, OAuth2Config, OAuth2Provider, OAuth2ProviderConfig, TokenResponse,
+        UserInfoResponse,
+    };
+    use async_trait::async_trait;
+    use axum::http::{HeaderMap, StatusCode, header};
+    use axum::response::{IntoResponse, Response};
+    use axum::routing::{get, post};
+    use axum::{Form, Json, Router};
+    use axum_test::TestServer;
     use ras_identity_core::IdentityProvider;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use wiremock::matchers::{body_string_contains, header, method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    async fn setup_mock_oauth_server() -> (MockServer, OAuth2ProviderConfig) {
-        let mock_server = MockServer::start().await;
+    struct AxumOAuth2Transport {
+        server: Arc<TestServer>,
+    }
+
+    #[async_trait]
+    impl OAuth2HttpTransport for AxumOAuth2Transport {
+        async fn exchange_code(
+            &self,
+            token_endpoint: &str,
+            params: &HashMap<String, String>,
+        ) -> OAuth2Result<TokenResponse> {
+            let path = endpoint_path(token_endpoint)?;
+            let response = self.server.post(&path).form(params).await;
+
+            if !response.status_code().is_success() {
+                return Err(OAuth2Error::TokenExchangeFailed(response.text()));
+            }
+
+            serde_json::from_slice(response.as_bytes())
+                .map_err(|e| OAuth2Error::InvalidTokenResponse(e.to_string()))
+        }
+
+        async fn get_user_info(
+            &self,
+            userinfo_endpoint: &str,
+            access_token: &str,
+        ) -> OAuth2Result<UserInfoResponse> {
+            let path = endpoint_path(userinfo_endpoint)?;
+            let response = self
+                .server
+                .get(&path)
+                .authorization_bearer(access_token)
+                .await;
+
+            if !response.status_code().is_success() {
+                return Err(OAuth2Error::UserInfoFailed(response.text()));
+            }
+
+            serde_json::from_slice(response.as_bytes())
+                .map_err(|e| OAuth2Error::InvalidUserInfoResponse(e.to_string()))
+        }
+    }
+
+    fn endpoint_path(endpoint: &str) -> OAuth2Result<String> {
+        let url = url::Url::parse(endpoint)?;
+        let mut path = url.path().to_string();
+        if let Some(query) = url.query() {
+            path.push('?');
+            path.push_str(query);
+        }
+        Ok(path)
+    }
+
+    fn setup_mock_oauth_server(router: Router) -> (Arc<TestServer>, OAuth2ProviderConfig) {
+        let server = TestServer::builder()
+            .mock_transport()
+            .build(router)
+            .expect("mock transport OAuth2 server should build");
 
         let provider_config = OAuth2ProviderConfig {
             provider_id: "mock_provider".to_string(),
             client_id: "mock_client_id".to_string(),
             client_secret: "mock_secret".to_string(),
-            authorization_endpoint: format!("{}/authorize", mock_server.uri()),
-            token_endpoint: format!("{}/token", mock_server.uri()),
-            userinfo_endpoint: Some(format!("{}/userinfo", mock_server.uri())),
+            authorization_endpoint: "http://oauth.test/authorize".to_string(),
+            token_endpoint: "http://oauth.test/token".to_string(),
+            userinfo_endpoint: Some("http://oauth.test/userinfo".to_string()),
             redirect_uri: "http://localhost:3000/callback".to_string(),
             scopes: vec!["openid".to_string(), "email".to_string()],
             auth_params: HashMap::new(),
@@ -27,49 +92,133 @@ mod integration_tests {
             user_info_mapping: None,
         };
 
-        (mock_server, provider_config)
+        (Arc::new(server), provider_config)
+    }
+
+    fn client_with_server(
+        state_store: Arc<InMemoryStateStore>,
+        server: Arc<TestServer>,
+    ) -> OAuth2Client {
+        OAuth2Client::with_http_transport(
+            state_store,
+            600,
+            Arc::new(AxumOAuth2Transport { server }),
+        )
+    }
+
+    fn provider_with_server(
+        provider_config: OAuth2ProviderConfig,
+        state_store: Arc<InMemoryStateStore>,
+        server: Arc<TestServer>,
+    ) -> OAuth2Provider {
+        let client = client_with_server(state_store, server);
+        let mut provider_configs = HashMap::new();
+        provider_configs.insert("mock_provider".to_string(), provider_config);
+        OAuth2Provider::with_client(provider_configs, client)
+    }
+
+    fn success_oauth_router() -> Router {
+        Router::new()
+            .route("/token", post(token_success))
+            .route("/userinfo", get(userinfo_success))
+    }
+
+    async fn token_success(Form(form): Form<HashMap<String, String>>) -> Response {
+        let required = [
+            ("grant_type", "authorization_code"),
+            ("code", "mock_auth_code"),
+            ("client_id", "mock_client_id"),
+            ("client_secret", "mock_secret"),
+            ("redirect_uri", "http://localhost:3000/callback"),
+        ];
+
+        for (key, expected) in required {
+            if form.get(key).map(String::as_str) != Some(expected) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": "invalid_request",
+                        "error_description": format!("missing or invalid {key}")
+                    })),
+                )
+                    .into_response();
+            }
+        }
+
+        if !form.contains_key("code_verifier") {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "invalid_request",
+                    "error_description": "missing PKCE verifier"
+                })),
+            )
+                .into_response();
+        }
+
+        Json(serde_json::json!({
+            "access_token": "mock_access_token",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "refresh_token": "mock_refresh_token",
+            "scope": "openid email"
+        }))
+        .into_response()
+    }
+
+    async fn userinfo_success(headers: HeaderMap) -> Response {
+        let auth = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok());
+
+        if auth != Some("Bearer mock_access_token") {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "invalid_token"
+                })),
+            )
+                .into_response();
+        }
+
+        Json(serde_json::json!({
+            "sub": "12345",
+            "email": "test@example.com",
+            "email_verified": true,
+            "name": "Test User",
+            "picture": "https://example.com/photo.jpg"
+        }))
+        .into_response()
+    }
+
+    fn token_error_router() -> Router {
+        Router::new().route("/token", post(token_error))
+    }
+
+    async fn token_error() -> Response {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "invalid_grant",
+                "error_description": "The provided authorization code is invalid"
+            })),
+        )
+            .into_response()
+    }
+
+    fn malformed_token_router() -> Router {
+        Router::new().route("/token", post(malformed_token_response))
+    }
+
+    async fn malformed_token_response() -> Response {
+        (StatusCode::OK, "not json").into_response()
     }
 
     #[tokio::test]
     async fn test_full_oauth2_flow() {
-        let (mock_server, provider_config) = setup_mock_oauth_server().await;
-
-        // Mock token endpoint
-        Mock::given(method("POST"))
-            .and(path("/token"))
-            .and(body_string_contains("grant_type=authorization_code"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "access_token": "mock_access_token",
-                "token_type": "Bearer",
-                "expires_in": 3600,
-                "refresh_token": "mock_refresh_token",
-                "scope": "openid email"
-            })))
-            .mount(&mock_server)
-            .await;
-
-        // Mock userinfo endpoint
-        Mock::given(method("GET"))
-            .and(path("/userinfo"))
-            .and(header("Authorization", "Bearer mock_access_token"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "sub": "12345",
-                "email": "test@example.com",
-                "email_verified": true,
-                "name": "Test User",
-                "picture": "https://example.com/photo.jpg"
-            })))
-            .mount(&mock_server)
-            .await;
-
-        // Setup provider
-        let mut config = OAuth2Config::default();
-        config
-            .providers
-            .insert("mock_provider".to_string(), provider_config);
-
+        let (server, provider_config) = setup_mock_oauth_server(success_oauth_router());
         let state_store = Arc::new(InMemoryStateStore::new());
-        let provider = OAuth2Provider::new(config, state_store);
+        let provider = provider_with_server(provider_config, state_store, server);
 
         // Start OAuth2 flow
         let start_payload = serde_json::json!({
@@ -265,20 +414,10 @@ mod integration_tests {
 
     #[tokio::test]
     async fn test_token_exchange_error_cases() {
-        let (mock_server, mut provider_config) = setup_mock_oauth_server().await;
-
-        // Test 1: Server returns error
-        Mock::given(method("POST"))
-            .and(path("/token"))
-            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
-                "error": "invalid_grant",
-                "error_description": "The provided authorization code is invalid"
-            })))
-            .mount(&mock_server)
-            .await;
+        let (server, provider_config) = setup_mock_oauth_server(token_error_router());
 
         let state_store = Arc::new(InMemoryStateStore::new());
-        let client = crate::OAuth2Client::new(state_store, 600, 30);
+        let client = client_with_server(state_store, server);
 
         // Store a valid state first
         let state = crate::state::OAuth2State::new(
@@ -297,17 +436,16 @@ mod integration_tests {
         };
 
         let result = client.handle_callback(&provider_config, callback).await;
-        assert!(result.is_err());
+        assert!(matches!(
+            result,
+            Err(OAuth2Error::TokenExchangeFailed(message))
+                if message.contains("invalid_grant")
+        ));
 
         // Test 2: Malformed token response
-        Mock::given(method("POST"))
-            .and(path("/token"))
-            .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
-            .named("malformed_response")
-            .mount(&mock_server)
-            .await;
-
-        provider_config.token_endpoint = format!("{}/token", mock_server.uri());
+        let (server, provider_config) = setup_mock_oauth_server(malformed_token_router());
+        let state_store = Arc::new(InMemoryStateStore::new());
+        let client = client_with_server(state_store, server);
 
         let state2 = crate::state::OAuth2State::new(
             "mock_provider".to_string(),
@@ -325,6 +463,6 @@ mod integration_tests {
         };
 
         let result = client.handle_callback(&provider_config, callback2).await;
-        assert!(result.is_err());
+        assert!(matches!(result, Err(OAuth2Error::InvalidTokenResponse(_))));
     }
 }

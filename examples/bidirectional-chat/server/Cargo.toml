@@ -2,20 +2,27 @@
 name = "bidirectional-chat-server"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
+description = "Authenticated WebSocket chat server example for Rust Agent Stack"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-agent-stack"
+homepage = "https://github.com/JedimEmO/rust-agent-stack"
+publish = false
+readme = "README.md"
 
 [dependencies]
 # Local dependencies
-bidirectional-chat-api = { path = "../api" }
-ras-auth-core = { path = "../../../crates/core/ras-auth-core" }
-ras-jsonrpc-types = { path = "../../../crates/rpc/ras-jsonrpc-types" }
-ras-jsonrpc-bidirectional-macro = { path = "../../../crates/rpc/bidirectional/ras-jsonrpc-bidirectional-macro" }
-ras-jsonrpc-bidirectional-server = { path = "../../../crates/rpc/bidirectional/ras-jsonrpc-bidirectional-server" }
-ras-jsonrpc-bidirectional-types = { path = "../../../crates/rpc/bidirectional/ras-jsonrpc-bidirectional-types" }
-ras-rest-macro = { path = "../../../crates/rest/ras-rest-macro", features = ["server"] }
-ras-rest-core = { path = "../../../crates/rest/ras-rest-core" }
-ras-identity-core = { path = "../../../crates/core/ras-identity-core" }
-ras-identity-local = { path = "../../../crates/identity/ras-identity-local" }
-ras-identity-session = { path = "../../../crates/identity/ras-identity-session" }
+bidirectional-chat-api = { path = "../api", version = "0.1.0" }
+ras-auth-core = { path = "../../../crates/core/ras-auth-core", version = "0.1.0" }
+ras-jsonrpc-types = { path = "../../../crates/rpc/ras-jsonrpc-types", version = "0.1.1" }
+ras-jsonrpc-bidirectional-macro = { path = "../../../crates/rpc/bidirectional/ras-jsonrpc-bidirectional-macro", version = "0.1.0" }
+ras-jsonrpc-bidirectional-server = { path = "../../../crates/rpc/bidirectional/ras-jsonrpc-bidirectional-server", version = "0.1.0" }
+ras-jsonrpc-bidirectional-types = { path = "../../../crates/rpc/bidirectional/ras-jsonrpc-bidirectional-types", version = "0.1.0" }
+ras-rest-macro = { path = "../../../crates/rest/ras-rest-macro", version = "0.2.1", features = ["server"] }
+ras-rest-core = { path = "../../../crates/rest/ras-rest-core", version = "0.1.1" }
+ras-identity-core = { path = "../../../crates/core/ras-identity-core", version = "0.1.1" }
+ras-identity-local = { path = "../../../crates/identity/ras-identity-local", version = "0.2.0" }
+ras-identity-session = { path = "../../../crates/identity/ras-identity-session", version = "0.1.1" }
 
 # Workspace dependencies
 axum = { workspace = true }
@@ -32,16 +39,11 @@ dashmap = { workspace = true }
 anyhow = { workspace = true }
 tower-http = { workspace = true, features = ["cors"] }
 dotenvy = { workspace = true }
-jsonwebtoken = { workspace = true }
 config = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-reqwest = { workspace = true, features = ["json"] }
-
-[[bin]]
-name = "test-config"
-path = "src/bin/test_config.rs"
+axum-test = { workspace = true }
 
 [features]
 default = ["server"]

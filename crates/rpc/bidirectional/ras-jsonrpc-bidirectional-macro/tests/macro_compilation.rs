@@ -71,6 +71,21 @@ jsonrpc_bidirectional_service!({
     ]
 });
 
+// Test documented server-to-client calls syntax without auth prefixes
+jsonrpc_bidirectional_service!({
+    service_name: CallbackService,
+
+    client_to_server: [
+    ],
+
+    server_to_client: [
+    ],
+
+    server_to_client_calls: [
+        request_status(String) -> bool,
+    ]
+});
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,7 +93,12 @@ mod tests {
     #[test]
     fn test_macro_generates_valid_code() {
         // The fact that this compiles proves the macro works
-        assert!(true, "Macro compilation successful");
+        let request = ChatMessage {
+            text: "hello".to_string(),
+            username: "alice".to_string(),
+        };
+
+        assert_eq!(request.text, "hello");
     }
 
     #[cfg(feature = "server")]
@@ -89,8 +109,7 @@ mod tests {
 
         fn _check_chat_service<T: ChatServiceService>(_: PhantomData<T>) {}
         fn _check_echo_service<T: EchoServiceService>(_: PhantomData<T>) {}
-
-        assert!(true, "Server traits exist");
+        fn _check_callback_service<T: CallbackServiceService>(_: PhantomData<T>) {}
     }
 
     #[cfg(feature = "server")]
@@ -113,7 +132,12 @@ mod tests {
         {
         }
 
-        assert!(true, "Builders exist");
+        fn _check_callback_builder<T, A>(_: PhantomData<CallbackServiceBuilder<T, A>>)
+        where
+            T: CallbackServiceService,
+            A: ras_auth_core::AuthProvider,
+        {
+        }
     }
 
     #[test]

@@ -30,11 +30,92 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      # Catch hard errors and lint regressions. We don't enforce -D warnings
-      # workspace-wide yet (legacy code has standing warnings); the CI gate is
-      # "compiles cleanly + no clippy ERRORS". Tighten later by promoting
-      # selected lints to deny.
-      - run: cargo clippy --workspace --all-targets --all-features
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build rustdoc
+        run: cargo doc --workspace --all-features --no-deps --locked
+
+  docs-hygiene:
+    name: Documentation hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check package README targets
+        shell: bash
+        run: |
+          missing=0
+          while IFS= read -r manifest; do
+            dir=${manifest%/Cargo.toml}
+            package_name=$(sed -n 's/^name = "\([^"]*\)"/\1/p' "$manifest" | head -1)
+            [ -z "$package_name" ] && continue
+
+            readme=$(sed -n 's/^readme = "\([^"]*\)"/\1/p' "$manifest" | head -1)
+            if [ -z "$readme" ]; then
+              if [ ! -f "$dir/README.md" ]; then
+                printf '%s: package has no README.md and no readme target\n' "$manifest"
+                missing=1
+              fi
+              continue
+            fi
+
+            if [ ! -e "$dir/$readme" ]; then
+              printf '%s: readme target does not exist: %s\n' "$manifest" "$readme"
+              missing=1
+            fi
+          done < <(find . \( -path './.git' -o -path './target' -o -path './node_modules' -o -path '*/node_modules' \) -prune -o -name Cargo.toml -print | sort)
+
+          exit "$missing"
+
+      - name: Check local Markdown links
+        shell: bash
+        run: |
+          broken=0
+          while IFS=$'\t' read -r file raw; do
+            dir=${file%/*}
+            [ "$dir" = "$file" ] && dir=.
+
+            link=${raw%%[[:space:]]*}
+            link=${link#<}
+            link=${link%>}
+            link=${link%%#*}
+
+            case "$link" in
+              ''|'#'*|http://*|https://*|mailto:*|file:*|javascript:*)
+                continue
+                ;;
+            esac
+
+            target="$dir/$link"
+            if [ ! -e "$target" ]; then
+              printf '%s: broken local Markdown link: %s\n' "$file" "$raw"
+              broken=1
+            fi
+          done < <(
+            find . \( -path './.git' -o -path './target' -o -path './node_modules' -o -path '*/node_modules' \) -prune -o -name '*.md' -type f -print0 |
+              xargs -0 perl -ne 'while (/\[[^\]]+\]\(([^)]+)\)/g) { print "$ARGV\t$1\n" }'
+          )
+
+          exit "$broken"
+
+  supply-chain:
+    name: Supply chain policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-deny
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo deny check
 
   test:
     name: Test (workspace)
@@ -44,9 +125,50 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build tests
-        run: cargo test --workspace --all-features --no-run --locked
+        run: cargo test --workspace --all-targets --all-features --no-run --locked
       - name: Run tests
-        run: cargo test --workspace --all-features -- --nocapture --test-threads=4
+        run: cargo test --workspace --all-targets --all-features --locked
+      - name: Run doctests
+        run: cargo test --doc --workspace --all-features --locked
+
+  feature-matrix:
+    name: Feature matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check macro crates without defaults
+        run: cargo check -p ras-rest-macro -p ras-jsonrpc-macro -p ras-jsonrpc-bidirectional-macro --no-default-features --locked
+
+      - name: Check REST macro server-only
+        run: cargo check -p ras-rest-macro --no-default-features --features server --locked
+
+      - name: Check REST macro client-only
+        run: cargo check -p ras-rest-macro --no-default-features --features client --locked
+
+      - name: Check JSON-RPC macro server-only
+        run: cargo check -p ras-jsonrpc-macro --no-default-features --features server --locked
+
+      - name: Check JSON-RPC macro client-only
+        run: cargo check -p ras-jsonrpc-macro --no-default-features --features client --locked
+
+      - name: Check bidirectional macro server-only
+        run: cargo check -p ras-jsonrpc-bidirectional-macro --no-default-features --features server --locked
+
+      - name: Check bidirectional macro client-only
+        run: cargo check -p ras-jsonrpc-bidirectional-macro --no-default-features --features client --locked
+
+      - name: Check bidirectional native client
+        run: cargo check -p ras-jsonrpc-bidirectional-client --no-default-features --features native --locked
+
+      - name: Check bidirectional WASM client
+        run: cargo check -p ras-jsonrpc-bidirectional-client --no-default-features --features wasm --target wasm32-unknown-unknown --locked
 
   playwright:
     name: Playwright E2E
@@ -64,7 +186,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.13
           cache: npm
           cache-dependency-path: tests/playwright/package-lock.json
 
@@ -98,6 +220,60 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  generated-client-specs:
+    name: Generated client specs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Generate OpenAPI specs
+        run: cargo check -p file-service-backend -p rest-backend --locked
+
+      - name: Verify generated OpenAPI specs
+        run: |
+          test -s examples/file-service-wasm/file-service-backend/target/openapi/documentservice.json
+          test -s examples/rest-wasm-example/rest-backend/target/openapi/userservice.json
+
+  wasm-ui-example:
+    name: WASM UI example
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check browser API clients
+        run: >
+          cargo check
+          -p basic-jsonrpc-api
+          -p rest-api
+          -p file-service-api
+          --target wasm32-unknown-unknown
+          --no-default-features
+          --features basic-jsonrpc-api/client,rest-api/client,file-service-api/wasm-client
+          --locked
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.13
+          cache: npm
+          cache-dependency-path: examples/wasm-ui-demo/package-lock.json
+
+      - name: Build WASM UI example
+        working-directory: examples/wasm-ui-demo
+        run: |
+          npm ci
+          npm run build
+
   coverage:
     name: Coverage report
     runs-on: ubuntu-latest
@@ -110,7 +286,7 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: Swatinem/rust-cache@v2
       - name: Generate coverage (lcov)
-        run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+        run: cargo llvm-cov --workspace --all-targets --all-features --locked --lcov --output-path lcov.info
       - name: Print summary
         run: cargo llvm-cov report --summary-only
       - name: Upload coverage artifact

@@ -58,6 +58,12 @@ impl FileServiceImpl {
                         DocumentServiceFileError::Internal(e.to_string())
                     })?;
 
+                debug!(
+                    file_id = %metadata.id,
+                    stored_path = %metadata.stored_path.display(),
+                    "Saved uploaded file"
+                );
+
                 return Ok(UploadResponse {
                     file_id: metadata.id,
                     file_name: metadata.original_name,
@@ -137,5 +143,89 @@ impl DocumentServiceTrait for FileServiceImpl {
 
         // In a real app, you might check if the user has access to this file
         self.download(file_id).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+    use std::collections::HashSet;
+    use tempfile::TempDir;
+
+    fn test_user() -> AuthenticatedUser {
+        AuthenticatedUser {
+            user_id: "testuser".to_string(),
+            permissions: HashSet::from(["user".to_string()]),
+            metadata: None,
+        }
+    }
+
+    fn test_service(temp_dir: &TempDir) -> FileServiceImpl {
+        FileServiceImpl::new(Arc::new(FileStorage::new(temp_dir.path())))
+    }
+
+    #[tokio::test]
+    async fn download_returns_saved_file_with_headers() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let storage = Arc::new(FileStorage::new(temp_dir.path()));
+        let saved = storage
+            .save_file(
+                b"download body".to_vec(),
+                "report.txt",
+                Some("text/plain".to_string()),
+            )
+            .await
+            .expect("save file");
+        let service = FileServiceImpl::new(storage);
+
+        let response = service.download(saved.id).await.expect("download response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CONTENT_LENGTH], "13");
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "text/plain");
+        assert_eq!(
+            response.headers()[header::CONTENT_DISPOSITION],
+            "attachment; filename=\"file.txt\""
+        );
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        assert_eq!(&body[..], b"download body");
+    }
+
+    #[tokio::test]
+    async fn download_missing_file_maps_to_not_found() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let service = test_service(&temp_dir);
+
+        let error = service
+            .download("missing".to_string())
+            .await
+            .expect_err("missing file should be not found");
+
+        assert!(matches!(error, DocumentServiceFileError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn secure_download_uses_same_download_path() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let storage = Arc::new(FileStorage::new(temp_dir.path()));
+        let saved = storage
+            .save_file(b"secure body".to_vec(), "secure.bin", None)
+            .await
+            .expect("save file");
+        let service = FileServiceImpl::new(storage);
+
+        let response = service
+            .download_secure(&test_user(), saved.id)
+            .await
+            .expect("secure download response");
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+
+        assert_eq!(&body[..], b"secure body");
     }
 }

@@ -2,6 +2,12 @@
 name = "ras-auth-core"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
+description = "Core authentication and authorization traits for Rust Agent Stack services"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-agent-stack"
+homepage = "https://github.com/JedimEmO/rust-agent-stack"
+readme = "README.md"
 
 [dependencies]
 serde = { workspace = true }

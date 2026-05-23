@@ -1,8 +1,7 @@
-//! End-to-end test for the file_service! macro: generated reqwest client →
-//! axum router → handler. Exercises upload + download with byte-equality and
-//! a missing-token rejection.
+//! End-to-end test for the file_service! macro: in-memory axum-test request
+//! -> axum router -> handler. Exercises upload + download with byte-equality
+//! and a missing-token rejection.
 
-use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 use axum::{
@@ -10,10 +9,13 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use axum_test::multipart::{MultipartForm, Part};
 use ras_auth_core::AuthenticatedUser;
 use ras_file_macro::file_service;
-use ras_test_helpers::{MockAuthProvider, spawn_http};
 use serde::{Deserialize, Serialize};
+
+mod support;
+use support::{MockAuthProvider, mock_http_server};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct UploadResponse {
@@ -83,81 +85,57 @@ fn router(storage: Storage) -> axum::Router {
         .build()
 }
 
-fn write_tempfile(bytes: &[u8]) -> tempfile::NamedTempFile {
-    let mut f = tempfile::NamedTempFile::new().expect("tempfile");
-    f.write_all(bytes).expect("write tempfile");
-    f.flush().expect("flush tempfile");
-    f
-}
-
 #[tokio::test]
 async fn upload_and_download_round_trips_bytes() {
     let storage: Storage = Arc::new(Mutex::new(Vec::new()));
-    let server = spawn_http(router(storage.clone()));
-    let base = server.server_address().unwrap();
-    let base_str = base.as_str().trim_end_matches('/').to_string();
+    let server = mock_http_server(router(storage.clone()));
 
     let payload: Vec<u8> = (0u8..=255).cycle().take(64 * 1024).collect();
-    let tmp = write_tempfile(&payload);
+    let form = MultipartForm::new().add_part(
+        "file",
+        Part::bytes(payload.clone())
+            .file_name("blob.bin")
+            .mime_type("application/octet-stream"),
+    );
 
-    let client = DemoClient::builder(base_str.clone())
-        .build()
-        .expect("client build");
-    client.set_bearer_token(Some("user-token".to_string()));
-
-    let upload = client
-        .upload(
-            tmp.path(),
-            Some("blob.bin"),
-            Some("application/octet-stream"),
-        )
-        .await
-        .expect("upload ok");
+    let response = server
+        .post("/files/upload")
+        .authorization_bearer("user-token")
+        .multipart(form)
+        .await;
+    response.assert_status_ok();
+    let upload: UploadResponse = response.json();
     assert_eq!(upload.size, payload.len() as u64);
 
-    let resp = client.download(upload.file_id).await.expect("download ok");
-    let bytes = resp.bytes().await.expect("read body");
+    let response = server
+        .get(&format!("/files/download/{}", upload.file_id))
+        .await;
+    response.assert_status_ok();
+    let bytes = response.into_bytes();
     assert_eq!(bytes.as_ref(), payload.as_slice());
 }
 
 #[tokio::test]
 async fn upload_rejected_without_token() {
     let storage: Storage = Arc::new(Mutex::new(Vec::new()));
-    let server = spawn_http(router(storage));
-    let base = server.server_address().unwrap();
-    let base_str = base.as_str().trim_end_matches('/').to_string();
+    let server = mock_http_server(router(storage));
 
-    let payload = b"hello world";
-    let tmp = write_tempfile(payload);
-
-    let client = DemoClient::builder(base_str).build().expect("client build");
-    // No bearer token.
-
-    let result = client
-        .upload(tmp.path(), Some("hi.txt"), Some("text/plain"))
-        .await;
-    // The server short-circuits with 401 before consuming the multipart body,
-    // so reqwest may surface that either as the parsed status or as a generic
-    // connection error depending on how the upload stream was cut. Either is a
-    // valid signal of rejection — the only outcome we want to rule out is
-    // success.
-    assert!(
-        result.is_err(),
-        "upload must be rejected without a bearer token, got: {result:?}"
+    let form = MultipartForm::new().add_part(
+        "file",
+        Part::bytes("hello world")
+            .file_name("hi.txt")
+            .mime_type("text/plain"),
     );
+
+    let response = server.post("/files/upload").multipart(form).await;
+    response.assert_status(StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
 async fn download_unknown_file_returns_404() {
     let storage: Storage = Arc::new(Mutex::new(Vec::new()));
-    let server = spawn_http(router(storage));
-    let base = server.server_address().unwrap();
-    let base_str = base.as_str().trim_end_matches('/').to_string();
+    let server = mock_http_server(router(storage));
 
-    let client = DemoClient::builder(base_str).build().expect("client build");
-    let err = client
-        .download("does-not-exist".to_string())
-        .await
-        .expect_err("missing file must error");
-    assert!(err.to_string().contains("404"), "got: {err}");
+    let response = server.get("/files/download/does-not-exist").await;
+    response.assert_status(StatusCode::NOT_FOUND);
 }

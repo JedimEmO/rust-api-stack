@@ -13,19 +13,25 @@ secrets/
 **/secrets/
 **/.env
 
-# Generated test output and OpenRPC documents
+# Generated API documents and local test output
 **/custom/
-**/*.json
-!package*.json
+**/openrpc/
+**/openapi/
+**/pkg/
+tests/playwright/test-results/
 
 # Local config and test files
 examples/bidirectional-chat/server/config.toml
 test_login.sh
 
+# Local agent, IDE, and scratch artifacts
+.agents/
+.codex/
+.claude/
+.references/
+agent-research/
+docs_and_help/
+sketchpad/
+
 # Chat data
 **/chat_data/
-
-# Build outputs
-**/openrpc/
-**/openapi/
-.references/

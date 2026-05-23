@@ -2,7 +2,13 @@
 name = "playwright-jsonrpc-fixture"
 version = "0.0.0"
 edition = "2024"
+rust-version = "1.88"
+description = "JSON-RPC API explorer fixture server for Playwright tests"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-agent-stack"
+homepage = "https://github.com/JedimEmO/rust-agent-stack"
 publish = false
+readme = "README.md"
 
 [features]
 default = ["server"]
@@ -12,12 +18,15 @@ client = ["ras-jsonrpc-macro/client"]
 [dependencies]
 anyhow = { workspace = true }
 axum = { workspace = true }
-ras-auth-core = { path = "../../../../crates/core/ras-auth-core" }
-ras-jsonrpc-core = { path = "../../../../crates/rpc/ras-jsonrpc-core" }
-ras-jsonrpc-macro = { path = "../../../../crates/rpc/ras-jsonrpc-macro" }
-ras-jsonrpc-types = { path = "../../../../crates/rpc/ras-jsonrpc-types" }
+ras-auth-core = { path = "../../../../crates/core/ras-auth-core", version = "0.1.0" }
+ras-jsonrpc-core = { path = "../../../../crates/rpc/ras-jsonrpc-core", version = "0.1.2" }
+ras-jsonrpc-macro = { path = "../../../../crates/rpc/ras-jsonrpc-macro", version = "0.2.0" }
+ras-jsonrpc-types = { path = "../../../../crates/rpc/ras-jsonrpc-types", version = "0.1.1" }
 reqwest = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
+
+[dev-dependencies]
+axum-test = { workspace = true }

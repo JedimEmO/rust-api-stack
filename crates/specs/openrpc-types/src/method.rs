@@ -293,7 +293,9 @@ impl Method {
         key: impl Into<String>,
         value: impl Into<serde_json::Value>,
     ) -> Self {
-        self.extensions.insert(key, value);
+        self.extensions
+            .insert(key, value)
+            .expect("extension keys must start with 'x-'");
         self
     }
 
@@ -402,8 +404,8 @@ impl Validate for Method {
             // Error codes must be unique
             errors.validate_unique(
                 |error| match error {
-                    ErrorOrReference::Error(e) => e.code,
-                    ErrorOrReference::Reference(r) => r.reference.clone().parse().unwrap_or(0),
+                    ErrorOrReference::Error(e) => e.code.to_string(),
+                    ErrorOrReference::Reference(r) => r.reference.clone(),
                 },
                 "method errors",
             )?;
@@ -760,5 +762,68 @@ mod tests {
         assert!(method.tags.is_some());
         assert!(method.errors.is_some());
         assert!(method.links.is_some());
+    }
+
+    #[test]
+    fn helper_methods_set_and_append_optional_collections() {
+        let method = Method::new("complexMethod", vec![])
+            .with_tags(vec![Tag::new("users").into()])
+            .with_tag(Reference::tag("AdminMethods").into())
+            .with_external_docs(ExternalDocumentation::new(
+                "https://docs.example.com/methods",
+            ))
+            .with_deprecated(false)
+            .with_servers(vec![Server::new("primary", "https://api.example.com")])
+            .with_server(Server::new("backup", "https://backup.example.com"))
+            .with_errors(vec![ErrorObject::new(1000, "Quota exceeded").into()])
+            .with_error(Reference::error("UserNotFound").into())
+            .with_links(vec![Link::new("getUser").into()])
+            .with_link(Reference::link("AuditLog").into())
+            .with_param_structure(ParameterStructure::ByPosition)
+            .with_examples(vec![ExamplePairing::new("created", vec![]).into()])
+            .with_example(Reference::example_pairing("failed").into());
+
+        assert!(method.validate().is_ok());
+        assert!(!method.is_deprecated());
+        assert_eq!(method.get_param_structure(), ParameterStructure::ByPosition);
+        assert_eq!(method.tags.as_ref().unwrap().len(), 2);
+        assert_eq!(method.servers.as_ref().unwrap().len(), 2);
+        assert_eq!(method.errors.as_ref().unwrap().len(), 2);
+        assert_eq!(method.links.as_ref().unwrap().len(), 2);
+        assert_eq!(method.examples.as_ref().unwrap().len(), 2);
+        assert!(method.external_docs.is_some());
+    }
+
+    #[test]
+    fn distinct_error_references_do_not_collide_during_validation() {
+        let method = Method::new("methodWithReferencedErrors", vec![]).with_errors(vec![
+            Reference::error("UserNotFound").into(),
+            Reference::error("RateLimited").into(),
+        ]);
+
+        assert!(method.validate().is_ok());
+
+        let duplicate = Method::new("methodWithDuplicateErrorReference", vec![]).with_errors(vec![
+            Reference::error("UserNotFound").into(),
+            Reference::error("UserNotFound").into(),
+        ]);
+
+        assert!(duplicate.validate().is_err());
+    }
+
+    #[test]
+    fn nested_validation_errors_keep_their_field_path() {
+        let method = Method::new("methodWithInvalidResult", vec![]).with_result(
+            Reference {
+                reference: String::new(),
+            }
+            .into(),
+        );
+
+        let error = method.validate().unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Validation error at result: Validation error: Reference string cannot be empty"
+        );
     }
 }

@@ -50,19 +50,18 @@ impl GoogleOAuth2Permissions {
         // Check metadata for additional context
         if let Some(metadata) = &identity.metadata {
             // If user has verified email, grant additional permissions
-            if let Some(email_verified) = metadata.get("email_verified") {
-                if email_verified.as_bool().unwrap_or(false) {
-                    permissions.push("email:verified".to_string());
-                }
+            if let Some(email_verified) = metadata.get("email_verified")
+                && email_verified.as_bool().unwrap_or(false)
+            {
+                permissions.push("email:verified".to_string());
             }
 
             // Example: Grant permissions based on other OAuth2 claims
-            if let Some(locale) = metadata.get("locale") {
-                if let Some(locale_str) = locale.as_str() {
-                    if locale_str.starts_with("en") {
-                        permissions.push("content:english".to_string());
-                    }
-                }
+            if let Some(locale) = metadata.get("locale")
+                && let Some(locale_str) = locale.as_str()
+                && locale_str.starts_with("en")
+            {
+                permissions.push("content:english".to_string());
             }
         }
 

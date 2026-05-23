@@ -1,14 +1,16 @@
 [package]
 name = "ras-identity-oauth2"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
+rust-version = "1.88"
 description = "OAuth2 authentication provider with Google support, PKCE, and state management"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/example/rust-agent-stack"
-homepage = "https://github.com/example/rust-agent-stack"
+repository = "https://github.com/JedimEmO/rust-agent-stack"
+homepage = "https://github.com/JedimEmO/rust-agent-stack"
+readme = "README.md"
 
 [dependencies]
-ras-identity-core = { path = "../../core/ras-identity-core" }
+ras-identity-core = { path = "../../core/ras-identity-core", version = "0.1.1" }
 
 async-trait = { workspace = true }
 serde = { workspace = true }
@@ -28,9 +30,8 @@ rand = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
-tokio-test = { workspace = true }
-wiremock = { workspace = true }
+axum-test = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 # For the example
-ras-identity-session = { path = "../ras-identity-session" }
+ras-identity-session = { path = "../ras-identity-session", version = "0.1.1" }

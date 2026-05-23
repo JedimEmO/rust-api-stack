@@ -2,11 +2,16 @@
 name = "ras-observability-otel"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
 description = "OpenTelemetry implementation for Rust Agent Stack observability"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-agent-stack"
+homepage = "https://github.com/JedimEmO/rust-agent-stack"
+readme = "README.md"
 
 [dependencies]
-ras-observability-core = { path = "../../core/ras-observability-core" }
-ras-auth-core = { path = "../../core/ras-auth-core" }
+ras-observability-core = { path = "../../core/ras-observability-core", version = "0.1.0" }
+ras-auth-core = { path = "../../core/ras-auth-core", version = "0.1.0" }
 
 # OpenTelemetry dependencies
 opentelemetry = { workspace = true }

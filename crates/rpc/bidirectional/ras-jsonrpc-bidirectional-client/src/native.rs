@@ -54,37 +54,29 @@ impl NativeWebSocketTransport {
 
         headers
     }
-}
 
-#[async_trait]
-impl WebSocketTransport for NativeWebSocketTransport {
-    async fn connect(&mut self) -> ClientResult<()> {
-        info!("Connecting to WebSocket server: {}", self.url);
-
-        // Create connection request with headers using IntoClientRequest
-
-        // Extract host from URL for Host header
+    fn host_header(&self) -> String {
         let host = self.url.host_str().unwrap_or("localhost");
-        let host_header = if let Some(port) = self.url.port() {
+        if let Some(port) = self.url.port() {
             format!("{}:{}", host, port)
         } else {
             host.to_string()
-        };
+        }
+    }
 
+    fn build_connection_request(&self) -> Result<Request<()>, String> {
         let mut request = Request::builder()
             .method("GET")
             .uri(self.url.as_str())
-            .header("Host", host_header)
+            .header("Host", self.host_header())
             .header("Connection", "Upgrade")
             .header("Upgrade", "websocket")
             .header("Sec-WebSocket-Version", "13")
             .header("Sec-WebSocket-Key", generate_key());
 
-        // Add custom headers from build_request_headers()
         let headers = self.build_request_headers();
         for (name, value) in headers.iter() {
             let header_name = name.as_str().to_lowercase();
-            // Skip WebSocket-specific headers that are already set
             if !header_name.starts_with("sec-websocket")
                 && header_name != "connection"
                 && header_name != "upgrade"
@@ -94,15 +86,29 @@ impl WebSocketTransport for NativeWebSocketTransport {
             }
         }
 
-        let request = request
+        request
             .body(())
-            .map_err(|e| ClientError::connection(format!("Failed to build request: {}", e)))?;
+            .map_err(|e| format!("Failed to build request: {}", e))
+    }
 
-        // Configure connection
+    fn websocket_config() -> tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
         let mut config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default();
         config.max_message_size = Some(16 * 1024 * 1024); // 16MB
         config.max_frame_size = Some(16 * 1024 * 1024); // 16MB
         config.accept_unmasked_frames = false;
+        config
+    }
+}
+
+#[async_trait]
+impl WebSocketTransport for NativeWebSocketTransport {
+    async fn connect(&mut self) -> ClientResult<()> {
+        info!("Connecting to WebSocket server: {}", self.url);
+
+        let request = self
+            .build_connection_request()
+            .map_err(ClientError::connection)?;
+        let config = Self::websocket_config();
 
         // Connect with timeout
         let connect_future = connect_async_with_config(request, Some(config), false);
@@ -222,8 +228,7 @@ impl WebSocketTransport for NativeWebSocketTransport {
     }
 
     fn is_connected(&self) -> bool {
-        // We can't easily check this without potentially blocking,
-        // so we'll check if we have a connection stored
+        // The transport owns the stream while connected; absence means disconnect completed.
         futures::executor::block_on(async { self.connection.read().await.is_some() })
     }
 
@@ -244,7 +249,7 @@ impl std::fmt::Debug for NativeWebSocketTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::ClientConfig;
+    use crate::config::{AuthConfig, ClientConfig};
 
     #[test]
     fn test_native_transport_creation() {
@@ -268,6 +273,84 @@ mod tests {
         assert!(headers.contains_key("X-Custom"));
     }
 
+    #[test]
+    fn build_request_headers_ignores_invalid_header_names_and_values() {
+        let mut config = ClientConfig::new("ws://localhost:8080/ws");
+        config
+            .custom_headers
+            .insert("bad header".to_string(), "ignored".to_string());
+        config
+            .custom_headers
+            .insert("X-Bad-Value".to_string(), "line\r\nbreak".to_string());
+        config
+            .custom_headers
+            .insert("X-Good".to_string(), "kept".to_string());
+
+        let transport = NativeWebSocketTransport::new(config);
+        let headers = transport.build_request_headers();
+
+        assert!(!headers.contains_key("bad header"));
+        assert!(!headers.contains_key("X-Bad-Value"));
+        assert_eq!(headers.get("X-Good").unwrap(), "kept");
+    }
+
+    #[test]
+    fn build_connection_request_sets_required_headers_and_preserves_auth_headers() {
+        let mut config = ClientConfig::new("ws://example.test:9000/ws");
+        config.auth = AuthConfig::JwtHeader {
+            token: "secret".to_string(),
+        };
+        config
+            .custom_headers
+            .insert("X-Custom".to_string(), "value".to_string());
+        config
+            .custom_headers
+            .insert("Host".to_string(), "malicious.example".to_string());
+        config
+            .custom_headers
+            .insert("Connection".to_string(), "close".to_string());
+        config.custom_headers.insert(
+            "Sec-WebSocket-Key".to_string(),
+            "not-the-generated-key".to_string(),
+        );
+
+        let transport = NativeWebSocketTransport::new(config);
+        let request = transport.build_connection_request().unwrap();
+        let headers = request.headers();
+
+        assert_eq!(request.method(), "GET");
+        assert_eq!(request.uri(), "ws://example.test:9000/ws");
+        assert_eq!(headers.get("host").unwrap(), "example.test:9000");
+        assert_eq!(headers.get("connection").unwrap(), "Upgrade");
+        assert_eq!(headers.get("upgrade").unwrap(), "websocket");
+        assert_eq!(headers.get("sec-websocket-version").unwrap(), "13");
+        assert_ne!(
+            headers.get("sec-websocket-key").unwrap(),
+            "not-the-generated-key"
+        );
+        assert_eq!(headers.get("authorization").unwrap(), "Bearer secret");
+        assert_eq!(headers.get("x-custom").unwrap(), "value");
+    }
+
+    #[test]
+    fn build_connection_request_omits_port_from_host_header_when_url_has_no_port() {
+        let config = ClientConfig::new("wss://example.test/ws");
+        let transport = NativeWebSocketTransport::new(config);
+
+        let request = transport.build_connection_request().unwrap();
+
+        assert_eq!(request.headers().get("host").unwrap(), "example.test");
+    }
+
+    #[test]
+    fn websocket_config_sets_expected_native_limits() {
+        let config = NativeWebSocketTransport::websocket_config();
+
+        assert_eq!(config.max_message_size, Some(16 * 1024 * 1024));
+        assert_eq!(config.max_frame_size, Some(16 * 1024 * 1024));
+        assert!(!config.accept_unmasked_frames);
+    }
+
     #[tokio::test]
     async fn test_disconnect_without_connection() {
         let config = ClientConfig::new("ws://localhost:8080/ws");
@@ -276,5 +359,31 @@ mod tests {
         // Should not error when disconnecting without being connected
         let result = transport.disconnect().await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn send_without_connection_returns_not_connected() {
+        let config = ClientConfig::new("ws://localhost:8080/ws");
+        let mut transport = NativeWebSocketTransport::new(config);
+
+        let error = transport
+            .send(&BidirectionalMessage::Ping)
+            .await
+            .expect_err("send should require a connection");
+
+        assert!(matches!(error, ClientError::NotConnected));
+    }
+
+    #[tokio::test]
+    async fn receive_without_connection_returns_not_connected() {
+        let config = ClientConfig::new("ws://localhost:8080/ws");
+        let mut transport = NativeWebSocketTransport::new(config);
+
+        let error = transport
+            .receive()
+            .await
+            .expect_err("receive should require a connection");
+
+        assert!(matches!(error, ClientError::NotConnected));
     }
 }

@@ -11,7 +11,6 @@ use tokio::sync::mpsc;
 
 #[derive(Debug, Clone)]
 pub struct Message {
-    pub id: u64,
     pub username: String,
     pub text: String,
     pub timestamp: DateTime<Local>,
@@ -26,8 +25,6 @@ pub enum AppEvent {
     UserStartedTyping { username: String, room_id: String },
     UserStoppedTyping { username: String, room_id: String },
     SystemAnnouncement { message: String },
-    RoomListUpdated(Vec<RoomInfo>),
-    Error(String),
     Connected,
     Disconnected,
 }
@@ -88,6 +85,100 @@ impl Default for AppState {
     }
 }
 
+impl AppState {
+    pub fn enter_room(&mut self, room_id: String, room_name: String, existing_users: Vec<String>) {
+        self.current_room = Some((room_id.clone(), room_name.clone()));
+        self.screen = AppScreen::Chat { room_id, room_name };
+        self.messages.clear();
+
+        let Some((room_id, _)) = &self.current_room else {
+            return;
+        };
+
+        let mut users = Vec::new();
+        for user in existing_users {
+            if !users.contains(&user) {
+                users.push(user);
+            }
+        }
+
+        if let Some(username) = &self.username
+            && !users.contains(username)
+        {
+            users.push(username.clone());
+        }
+
+        self.room_users.insert(room_id.clone(), users);
+    }
+
+    pub fn leave_room(&mut self, room_id: &str) {
+        self.screen = AppScreen::RoomList;
+        self.current_room = None;
+        self.input_buffer.clear();
+        self.room_users.remove(room_id);
+        self.typing_users.remove(room_id);
+    }
+
+    pub fn apply_event(&mut self, event: AppEvent) {
+        match event {
+            AppEvent::MessageReceived(message) => {
+                self.messages.push(message);
+            }
+            AppEvent::UserJoined { username, room_id } => {
+                let users = self.room_users.entry(room_id.clone()).or_default();
+                if !users.contains(&username) {
+                    users.push(username.clone());
+                }
+
+                self.push_system_message(format!("{} joined the room", username), room_id);
+            }
+            AppEvent::UserLeft { username, room_id } => {
+                if let Some(users) = self.room_users.get_mut(&room_id) {
+                    users.retain(|user| user != &username);
+                }
+
+                self.push_system_message(format!("{} left the room", username), room_id);
+            }
+            AppEvent::SystemAnnouncement { message } => {
+                if let Some((room_id, _)) = &self.current_room {
+                    self.push_system_message(message, room_id.clone());
+                }
+            }
+            AppEvent::Connected => {
+                self.connected = true;
+            }
+            AppEvent::Disconnected => {
+                self.connected = false;
+                self.screen = AppScreen::Login;
+                self.error_message = Some("Disconnected from server".to_string());
+            }
+            AppEvent::UserStartedTyping { username, room_id } => {
+                self.typing_users
+                    .entry(room_id)
+                    .or_default()
+                    .insert(username);
+            }
+            AppEvent::UserStoppedTyping { username, room_id } => {
+                if let Some(typing_users) = self.typing_users.get_mut(&room_id) {
+                    typing_users.remove(&username);
+                    if typing_users.is_empty() {
+                        self.typing_users.remove(&room_id);
+                    }
+                }
+            }
+        }
+    }
+
+    fn push_system_message(&mut self, text: String, room_id: String) {
+        self.messages.push(Message {
+            username: "System".to_string(),
+            text,
+            timestamp: Local::now(),
+            room_id,
+        });
+    }
+}
+
 pub struct ChatClient {
     client: Option<ChatServiceClient>,
     event_tx: mpsc::UnboundedSender<AppEvent>,
@@ -128,7 +219,6 @@ impl ChatClient {
         let tx = self.event_tx.clone();
         client.on_message_received(move |notification: MessageReceivedNotification| {
             let message = Message {
-                id: notification.message_id,
                 username: notification.username,
                 text: notification.text,
                 timestamp: DateTime::parse_from_rfc3339(&notification.timestamp)
@@ -249,5 +339,180 @@ impl ChatClient {
             self.event_tx.send(AppEvent::Disconnected)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn message(room_id: &str, text: &str) -> Message {
+        Message {
+            username: "alice".to_string(),
+            text: text.to_string(),
+            timestamp: Local::now(),
+            room_id: room_id.to_string(),
+        }
+    }
+
+    #[test]
+    fn default_state_starts_on_login_screen() {
+        let app = AppState::default();
+
+        assert_eq!(app.screen, AppScreen::Login);
+        assert!(!app.connected);
+        assert!(app.messages.is_empty());
+        assert_eq!(app.auth_field_focus, AuthField::Username);
+    }
+
+    #[test]
+    fn enter_room_tracks_current_room_and_deduplicates_users() {
+        let mut app = AppState {
+            username: Some("alice".to_string()),
+            messages: vec![message("lobby", "stale")],
+            ..AppState::default()
+        };
+
+        app.enter_room(
+            "room-1".to_string(),
+            "General".to_string(),
+            vec!["bob".to_string(), "bob".to_string(), "alice".to_string()],
+        );
+
+        assert_eq!(
+            app.screen,
+            AppScreen::Chat {
+                room_id: "room-1".to_string(),
+                room_name: "General".to_string(),
+            }
+        );
+        assert_eq!(
+            app.current_room,
+            Some(("room-1".to_string(), "General".to_string()))
+        );
+        assert!(app.messages.is_empty());
+        assert_eq!(
+            app.room_users.get("room-1").expect("room users"),
+            &vec!["bob".to_string(), "alice".to_string()]
+        );
+    }
+
+    #[test]
+    fn leave_room_clears_chat_state_for_that_room() {
+        let mut app = AppState {
+            current_room: Some(("room-1".to_string(), "General".to_string())),
+            screen: AppScreen::Chat {
+                room_id: "room-1".to_string(),
+                room_name: "General".to_string(),
+            },
+            input_buffer: "draft".to_string(),
+            ..AppState::default()
+        };
+        app.room_users
+            .insert("room-1".to_string(), vec!["alice".to_string()]);
+
+        app.leave_room("room-1");
+
+        assert_eq!(app.screen, AppScreen::RoomList);
+        assert_eq!(app.current_room, None);
+        assert!(app.input_buffer.is_empty());
+        assert!(!app.room_users.contains_key("room-1"));
+    }
+
+    #[test]
+    fn apply_message_and_system_announcement_append_room_messages() {
+        let mut app = AppState {
+            current_room: Some(("room-1".to_string(), "General".to_string())),
+            ..AppState::default()
+        };
+
+        app.apply_event(AppEvent::MessageReceived(message("room-1", "hello")));
+        app.apply_event(AppEvent::SystemAnnouncement {
+            message: "maintenance soon".to_string(),
+        });
+
+        assert_eq!(app.messages.len(), 2);
+        assert_eq!(app.messages[0].text, "hello");
+        assert_eq!(app.messages[1].username, "System");
+        assert_eq!(app.messages[1].text, "maintenance soon");
+        assert_eq!(app.messages[1].room_id, "room-1");
+    }
+
+    #[test]
+    fn apply_user_joined_deduplicates_user_and_records_notice() {
+        let mut app = AppState::default();
+        app.room_users
+            .insert("room-1".to_string(), vec!["alice".to_string()]);
+
+        app.apply_event(AppEvent::UserJoined {
+            username: "alice".to_string(),
+            room_id: "room-1".to_string(),
+        });
+
+        assert_eq!(
+            app.room_users.get("room-1").expect("room users"),
+            &vec!["alice".to_string()]
+        );
+        assert_eq!(app.messages[0].text, "alice joined the room");
+    }
+
+    #[test]
+    fn apply_user_left_removes_user_and_records_notice() {
+        let mut app = AppState::default();
+        app.room_users.insert(
+            "room-1".to_string(),
+            vec!["alice".to_string(), "bob".to_string()],
+        );
+
+        app.apply_event(AppEvent::UserLeft {
+            username: "alice".to_string(),
+            room_id: "room-1".to_string(),
+        });
+
+        assert_eq!(
+            app.room_users.get("room-1").expect("room users"),
+            &vec!["bob".to_string()]
+        );
+        assert_eq!(app.messages[0].text, "alice left the room");
+    }
+
+    #[test]
+    fn typing_events_remove_empty_room_sets() {
+        let mut app = AppState::default();
+
+        app.apply_event(AppEvent::UserStartedTyping {
+            username: "alice".to_string(),
+            room_id: "room-1".to_string(),
+        });
+        assert!(
+            app.typing_users
+                .get("room-1")
+                .expect("typing users")
+                .contains("alice")
+        );
+
+        app.apply_event(AppEvent::UserStoppedTyping {
+            username: "alice".to_string(),
+            room_id: "room-1".to_string(),
+        });
+        assert!(!app.typing_users.contains_key("room-1"));
+    }
+
+    #[test]
+    fn disconnected_event_returns_to_login_with_error() {
+        let mut app = AppState {
+            connected: true,
+            screen: AppScreen::RoomList,
+            ..AppState::default()
+        };
+
+        app.apply_event(AppEvent::Disconnected);
+
+        assert!(!app.connected);
+        assert_eq!(app.screen, AppScreen::Login);
+        assert_eq!(
+            app.error_message.as_deref(),
+            Some("Disconnected from server")
+        );
     }
 }

@@ -111,7 +111,9 @@ impl OpenRpc {
         key: impl Into<String>,
         value: impl Into<serde_json::Value>,
     ) -> Self {
-        self.extensions.insert(key, value);
+        self.extensions
+            .insert(key, value)
+            .expect("extension keys must start with 'x-'");
         self
     }
 
@@ -245,6 +247,7 @@ mod tests {
     use super::*;
     use crate::{ContentDescriptor, Schema};
     use serde_json::json;
+    use std::collections::HashMap;
 
     #[test]
     fn test_openrpc_creation() {
@@ -452,5 +455,98 @@ mod tests {
         assert_eq!(openrpc.methods.len(), 1);
         assert!(openrpc.servers.is_some());
         assert!(openrpc.components.is_some());
+    }
+
+    #[test]
+    fn server_helpers_replace_append_and_expose_default_server() {
+        let info = Info::new("Test API", "1.0.0");
+        let production = Server::new("production", "https://api.example.com");
+        let staging = Server::new("staging", "https://staging.example.com");
+
+        let openrpc = OpenRpc::v1_3_2(info, vec![])
+            .with_servers(vec![production.clone()])
+            .with_server(staging.clone());
+
+        let servers = openrpc.get_servers();
+        assert_eq!(servers, vec![&production, &staging]);
+
+        let empty_servers = OpenRpc::v1_3_2(Info::new("Test API", "1.0.0"), vec![]);
+        assert!(empty_servers.get_servers().is_empty());
+
+        let default_server = OpenRpc::get_default_server();
+        assert_eq!(default_server.name, "default");
+        assert_eq!(default_server.url, "localhost");
+    }
+
+    #[test]
+    fn method_or_reference_from_conversions_validate_both_variants() {
+        let method: MethodOrReference = Method::new("direct", vec![]).into();
+        assert!(matches!(method, MethodOrReference::Method(_)));
+        assert!(method.validate().is_ok());
+
+        let reference: MethodOrReference = Reference::schema("SharedSchema").into();
+        assert!(matches!(reference, MethodOrReference::Reference(_)));
+        assert!(reference.validate().is_ok());
+
+        let invalid_reference = MethodOrReference::Reference(Reference::new(""));
+        let err = invalid_reference.validate().unwrap_err();
+        assert!(err.to_string().contains("Reference string cannot be empty"));
+    }
+
+    #[test]
+    fn validation_errors_include_paths_for_nested_openrpc_objects() {
+        let invalid_info = OpenRpc::v1_3_2(Info::new("", "1.0.0"), vec![]);
+        let err = invalid_info.validate().unwrap_err();
+        assert!(err.to_string().contains("info"));
+
+        let invalid_server = OpenRpc::v1_3_2(Info::new("Test API", "1.0.0"), vec![])
+            .with_server(Server::new("", "https://api.example.com"));
+        let err = invalid_server.validate().unwrap_err();
+        assert!(err.to_string().contains("servers[0]"));
+
+        let invalid_method = OpenRpc::v1_3_2(
+            Info::new("Test API", "1.0.0"),
+            vec![Method::new("bad method", vec![]).into()],
+        );
+        let err = invalid_method.validate().unwrap_err();
+        assert!(err.to_string().contains("methods[0]"));
+
+        let invalid_components = OpenRpc::v1_3_2(Info::new("Test API", "1.0.0"), vec![])
+            .with_components(Components::new().with_schema("invalid key", Schema::string()));
+        let err = invalid_components.validate().unwrap_err();
+        assert!(err.to_string().contains("components"));
+
+        let invalid_external_docs = OpenRpc::v1_3_2(Info::new("Test API", "1.0.0"), vec![])
+            .with_external_docs(ExternalDocumentation::new("not-a-url"));
+        let err = invalid_external_docs.validate().unwrap_err();
+        assert!(err.to_string().contains("externalDocs"));
+    }
+
+    #[test]
+    fn validation_rejects_duplicate_reference_method_keys() {
+        let openrpc = OpenRpc::v1_3_2(
+            Info::new("Test API", "1.0.0"),
+            vec![
+                MethodOrReference::Reference(Reference::schema("Shared")),
+                MethodOrReference::Reference(Reference::schema("Shared")),
+            ],
+        );
+
+        let err = openrpc.validate().unwrap_err();
+        assert!(err.to_string().contains("Duplicate key"));
+        assert!(err.to_string().contains("methods"));
+    }
+
+    #[test]
+    fn validation_rejects_invalid_openrpc_extensions() {
+        let invalid_extensions: Extensions =
+            HashMap::from([("x-".to_string(), json!("missing suffix"))]).into();
+        let openrpc = OpenRpc {
+            extensions: invalid_extensions,
+            ..OpenRpc::v1_3_2(Info::new("Test API", "1.0.0"), vec![])
+        };
+
+        let err = openrpc.validate().unwrap_err();
+        assert!(err.to_string().contains("Extension key must have content"));
     }
 }

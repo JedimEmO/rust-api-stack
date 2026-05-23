@@ -15,9 +15,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Creating bidirectional JSON-RPC client...");
 
+    let url = std::env::var("BIDIRECTIONAL_CLIENT_URL")
+        .unwrap_or_else(|_| "ws://localhost:8080/ws".to_string());
+    let token =
+        std::env::var("BIDIRECTIONAL_CLIENT_TOKEN").unwrap_or_else(|_| "demo-token".to_string());
+
     // Create a client with configuration
-    let client = ClientBuilder::new("ws://localhost:8080/ws")
-        .with_jwt_token("your_jwt_token_here".to_string())
+    let client = ClientBuilder::new(url.clone())
+        .with_jwt_token(token)
         .with_jwt_in_header(true) // Send JWT in Authorization header
         .with_header("User-Agent", "RasClient/1.0")
         .with_request_timeout(Duration::from_secs(30))
@@ -34,20 +39,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "main",
         Arc::new(|event| match event {
             ConnectionEvent::Connected { connection_id } => {
-                println!("✅ Connected to server with ID: {}", connection_id);
+                println!("Connected to server with ID: {}", connection_id);
             }
             ConnectionEvent::Disconnected { reason } => {
-                println!("❌ Disconnected from server. Reason: {:?}", reason);
+                println!("Disconnected from server. Reason: {:?}", reason);
             }
-            ConnectionEvent::Reconnecting { attempt } => {
-                println!("🔄 Reconnecting... (attempt {})", attempt);
-            }
-            ConnectionEvent::ReconnectFailed { attempt, error } => {
-                println!("❌ Reconnection failed (attempt {}): {}", attempt, error);
-            }
-            ConnectionEvent::AuthenticationFailed { error } => {
-                println!("🔐 Authentication failed: {}", error);
-            }
+            _ => {}
         }),
     );
 
@@ -55,14 +52,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     client.on_notification(
         "user_message",
         Arc::new(|method, params| {
-            println!("📨 Received notification '{}': {:?}", method, params);
+            println!("Received notification '{}': {:?}", method, params);
         }),
     );
 
     client.on_notification(
         "system_alert",
         Arc::new(|method, params| {
-            println!("🚨 System alert '{}': {:?}", method, params);
+            println!("System alert '{}': {:?}", method, params);
         }),
     );
 
@@ -70,11 +67,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Connecting to WebSocket server...");
     match client.connect().await {
         Ok(()) => {
-            println!("✅ Connected successfully!");
+            println!("Connected successfully!");
         }
         Err(e) => {
-            println!("❌ Failed to connect: {}", e);
-            println!("💡 Make sure a WebSocket server is running on ws://localhost:8080/ws");
+            println!("Failed to connect: {}", e);
+            println!("Make sure a WebSocket server is running on {}", url);
             println!("   You can use the bidirectional server example or any compatible server.");
             return Ok(());
         }
@@ -86,24 +83,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .subscribe(
             "chat_room_general",
             Arc::new(|method, params| {
-                println!("💬 Chat message: {} - {:?}", method, params);
+                println!("Chat message: {} - {:?}", method, params);
             }),
         )
         .await
     {
-        println!("⚠️ Failed to subscribe to chat_room_general: {}", e);
+        println!("Failed to subscribe to chat_room_general: {}", e);
     }
 
     if let Err(e) = client
         .subscribe(
             "user_updates",
             Arc::new(|method, params| {
-                println!("👤 User update: {} - {:?}", method, params);
+                println!("User update: {} - {:?}", method, params);
             }),
         )
         .await
     {
-        println!("⚠️ Failed to subscribe to user_updates: {}", e);
+        println!("Failed to subscribe to user_updates: {}", e);
     }
 
     // Make some JSON-RPC calls
@@ -112,10 +109,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Call 1: Get server info
     match client.call("get_server_info", None).await {
         Ok(response) => {
-            println!("📊 Server info response: {:?}", response);
+            println!("Server info response: {:?}", response);
         }
         Err(e) => {
-            println!("⚠️ Failed to get server info: {}", e);
+            println!("Failed to get server info: {}", e);
         }
     }
 
@@ -131,10 +128,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
     {
         Ok(response) => {
-            println!("👤 User profile response: {:?}", response);
+            println!("User profile response: {:?}", response);
         }
         Err(e) => {
-            println!("⚠️ Failed to get user profile: {}", e);
+            println!("Failed to get user profile: {}", e);
         }
     }
 
@@ -150,10 +147,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
     {
         Ok(response) => {
-            println!("✅ Status update response: {:?}", response);
+            println!("Status update response: {:?}", response);
         }
         Err(e) => {
-            println!("⚠️ Failed to update status: {}", e);
+            println!("Failed to update status: {}", e);
         }
     }
 
@@ -170,14 +167,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .await
     {
-        println!("⚠️ Failed to send user_activity notification: {}", e);
+        println!("Failed to send user_activity notification: {}", e);
     }
 
     if let Err(e) = client
         .notify("heartbeat", Some(json!({"client": "ras-client"})))
         .await
     {
-        println!("⚠️ Failed to send heartbeat notification: {}", e);
+        println!("Failed to send heartbeat notification: {}", e);
     }
 
     // Wait a bit to receive any server notifications
@@ -185,7 +182,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::time::sleep(Duration::from_secs(5)).await;
 
     // Display client statistics
-    println!("\n📈 Client Statistics:");
+    println!("\nClient Statistics:");
     println!("  Connection state: {:?}", client.state().await);
     println!("  Connection ID: {:?}", client.connection_id().await);
     println!("  Pending requests: {}", client.pending_requests_count());
@@ -200,7 +197,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Unsubscribe from one topic
     println!("Unsubscribing from chat_room_general...");
     if let Err(e) = client.unsubscribe("chat_room_general").await {
-        println!("⚠️ Failed to unsubscribe: {}", e);
+        println!("Failed to unsubscribe: {}", e);
     }
 
     // Wait a bit more
@@ -209,15 +206,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Disconnect gracefully
     println!("Disconnecting from server...");
     if let Err(e) = client.disconnect().await {
-        println!("⚠️ Error during disconnect: {}", e);
+        println!("Error during disconnect: {}", e);
     } else {
-        println!("✅ Disconnected successfully!");
+        println!("Disconnected successfully!");
     }
 
-    println!("\n🎉 Example completed!");
-    println!("💡 To see this example working with a real server:");
-    println!("   1. Run a compatible bidirectional JSON-RPC server on ws://localhost:8080/ws");
-    println!("   2. Run this example again");
+    println!("\nExample completed.");
+    println!("To see this example working with a real server:");
+    println!(
+        "   1. Run a compatible bidirectional JSON-RPC server on {}",
+        url
+    );
+    println!(
+        "   2. Set BIDIRECTIONAL_CLIENT_URL and BIDIRECTIONAL_CLIENT_TOKEN if your server uses different values"
+    );
+    println!(
+        "   3. Run this example again with cargo run -p ras-jsonrpc-bidirectional-client --example bidirectional_client_usage --locked"
+    );
 
     Ok(())
 }

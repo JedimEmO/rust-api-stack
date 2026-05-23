@@ -4,7 +4,7 @@ Server-side WebSocket handling for bidirectional JSON-RPC communication with Axu
 
 ## Features
 
-- **WebSocket Server**: Full WebSocket server implementation with Axum integration
+- **WebSocket Server**: Axum WebSocket runtime for bidirectional JSON-RPC services
 - **Authentication**: JWT-based authentication during WebSocket handshake
 - **Connection Management**: Thread-safe connection tracking with DashMap
 - **Message Routing**: Dispatch JSON-RPC requests to appropriate handlers
@@ -17,7 +17,7 @@ Server-side WebSocket handling for bidirectional JSON-RPC communication with Axu
 
 ### DefaultConnectionManager
 
-Thread-safe connection manager using DashMap for high-performance concurrent access:
+Thread-safe connection manager using DashMap for concurrent access:
 
 ```rust
 use ras_jsonrpc_bidirectional_server::DefaultConnectionManager;
@@ -90,11 +90,31 @@ let metadata = ws_upgrade.create_metadata();
 ## Usage Example
 
 ```rust
-use ras_jsonrpc_bidirectional_server::{
-    create_router_service, websocket_handler, MessageRouter
-};
 use axum::{routing::get, Router};
-use std::sync::Arc;
+use ras_auth_core::{AuthError, AuthFuture, AuthProvider, AuthenticatedUser};
+use ras_jsonrpc_bidirectional_server::{
+    create_router_service, websocket_handler, MessageRouter, ServerError
+};
+use serde_json::json;
+use std::{collections::HashSet, sync::Arc};
+
+struct DemoAuthProvider;
+
+impl AuthProvider for DemoAuthProvider {
+    fn authenticate(&self, token: String) -> AuthFuture<'_> {
+        Box::pin(async move {
+            if token != "demo-token" {
+                return Err(AuthError::InvalidToken);
+            }
+
+            Ok(AuthenticatedUser {
+                user_id: "demo-user".to_string(),
+                permissions: HashSet::from(["user".to_string()]),
+                metadata: None,
+            })
+        })
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -103,13 +123,13 @@ async fn main() {
     
     // Register handlers
     router.register_value("echo", |req, _ctx| async move {
-        Ok::<serde_json::Value, _>(req.params.unwrap_or(json!(null)))
+        Ok::<serde_json::Value, ServerError>(req.params.unwrap_or(json!(null)))
     });
     
     // Create WebSocket service
     let ws_service = create_router_service(
         router,
-        Arc::new(auth_provider),
+        Arc::new(DemoAuthProvider),
         true // require authentication
     );
     
@@ -161,7 +181,7 @@ manager.broadcast_to_topic("updates", message).await?;
 
 ## Integration with Axum
 
-The server is designed to integrate seamlessly with Axum:
+The server is designed to integrate with Axum:
 
 - **WebSocket Extractor**: Compatible with Axum's WebSocket support
 - **State Management**: Uses Axum's state system
@@ -191,12 +211,20 @@ All components are thread-safe:
 Run tests with:
 
 ```bash
-cargo test -p ras-jsonrpc-bidirectional-server
+cargo test -p ras-jsonrpc-bidirectional-server --locked
 ```
 
-The crate includes comprehensive tests for:
+The crate includes tests for:
 
 - Message routing
 - Service configuration
 - Header parsing
 - Connection management
+- In-memory WebSocket handler round trips without binding sockets
+
+## Checks
+
+```bash
+cargo test -p ras-jsonrpc-bidirectional-server --locked
+cargo clippy -p ras-jsonrpc-bidirectional-server --all-targets --all-features --locked -- -D warnings
+```

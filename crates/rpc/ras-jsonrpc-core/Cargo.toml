@@ -2,15 +2,17 @@
 name = "ras-jsonrpc-core"
 version = "0.1.2"
 edition = "2024"
+rust-version = "1.88"
 description = "Core types and traits for the ras-jsonrpc crate family"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/example/rust-agent-stack"
-homepage = "https://github.com/example/rust-agent-stack"
+repository = "https://github.com/JedimEmO/rust-agent-stack"
+homepage = "https://github.com/JedimEmO/rust-agent-stack"
+readme = "README.md"
 
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-ras-jsonrpc-types = { path = "../ras-jsonrpc-types" }
-ras-auth-core = { path = "../../core/ras-auth-core" }
-ras-version-core = { path = "../../core/ras-version-core" }
+ras-jsonrpc-types = { path = "../ras-jsonrpc-types", version = "0.1.1" }
+ras-auth-core = { path = "../../core/ras-auth-core", version = "0.1.0" }
+ras-version-core = { path = "../../core/ras-version-core", version = "0.1.0" }

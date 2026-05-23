@@ -1,17 +1,17 @@
 # OpenRPC Types
 
-Complete Rust types for the OpenRPC 1.3.2 specification with serde support, bon builders, and comprehensive validation.
+Rust types for the OpenRPC 1.3.2 specification with serde support, bon builders, and runtime validation helpers.
 
 ## Features
 
-- **Complete OpenRPC 1.3.2 specification types** - All objects and fields from the specification
+- **OpenRPC 1.3.2 specification types** - Objects and fields from the specification
 - **Serde serialization/deserialization** - Full JSON support with proper field naming
 - **Bon builder patterns** - Ergonomic API construction with type-safe builders
-- **Comprehensive validation** - Validates against OpenRPC specification constraints
-- **JSON Schema Draft 7 compatibility** - For Schema objects with full validation
+- **Validation helpers** - Checks OpenRPC specification constraints
+- **JSON Schema Draft 7 compatibility** - For Schema objects used in OpenRPC documents
 - **Reference resolution support** - For $ref within components
 - **Specification extensions** - Support for x-* extension fields
-- **Type safety** - Prevents invalid OpenRPC documents at compile time
+- **Type safety** - Helps construct OpenRPC documents with strongly typed Rust values
 
 ## Quick Start
 
@@ -19,7 +19,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-openrpc-types = "0.1.0"
+openrpc-types = "0.1.1"
 ```
 
 ## Example Usage
@@ -81,7 +81,7 @@ println!("{}", json);
 - **`ContentDescriptor`** - Describes parameters and results with schemas
 - **`Schema`** - JSON Schema Draft 7 compliant schema definitions
 - **`Example`** - Example values with embedded or external references
-- **`ExamplePairing`** - Complete request/response example pairs
+- **`ExamplePairing`** - Request/response example pairs
 
 ### Linking and Documentation
 
@@ -97,9 +97,9 @@ println!("{}", json);
 
 ## Validation
 
-The crate provides comprehensive validation that ensures:
+The crate provides validation helpers for:
 
-- **Specification compliance** - All OpenRPC 1.3.2 constraints are enforced
+- **Specification compliance** - OpenRPC 1.3.2 constraints represented by this crate
 - **Unique constraints** - Method names, parameter names, error codes are unique
 - **Type consistency** - Schemas and examples match their expected types
 - **URL and email format validation** - Proper format checking for contact info
@@ -107,9 +107,12 @@ The crate provides comprehensive validation that ensures:
 - **Reference validity** - Internal references point to valid components
 
 ```rust
-use openrpc_types::{OpenRpc, validation::Validate};
+use openrpc_types::{Info, OpenRpc, validation::Validate};
 
-let openrpc = // ... build your OpenRPC document
+let openrpc = OpenRpc::v1_3_2(
+    Info::new("Validation Example API", "1.0.0"),
+    Vec::new(),
+);
 
 // Validate returns detailed error information
 match openrpc.validate() {
@@ -120,7 +123,7 @@ match openrpc.validate() {
 
 ## JSON Schema Integration
 
-Schema objects are fully compatible with JSON Schema Draft 7:
+Schema objects model the JSON Schema Draft 7 shapes used by OpenRPC:
 
 ```rust
 use openrpc_types::Schema;
@@ -163,7 +166,7 @@ let method = Method::builder()
 
 ## Error Handling
 
-Comprehensive error types provide detailed information about validation failures:
+Error types provide detailed information about validation failures:
 
 ```rust
 use openrpc_types::{OpenRpcError, OpenRpcResult};
@@ -188,12 +191,20 @@ fn validate_document(openrpc: &OpenRpc) -> OpenRpcResult<()> {
 
 ```toml
 [dependencies]
-openrpc-types = { version = "0.1.0", features = ["json-schema"] }
+openrpc-types = { version = "0.1.1", features = ["json-schema"] }
+```
+
+## Checks
+
+```bash
+cargo test -p openrpc-types --locked
+cargo clippy -p openrpc-types --all-targets --all-features --locked -- -D warnings
 ```
 
 ## License
 
-This project is licensed under the same terms as the workspace.
+This project is licensed under either MIT or Apache-2.0. See
+[LICENSE-MIT](../../../LICENSE-MIT) and [LICENSE-APACHE](../../../LICENSE-APACHE).
 
 ## Contributing
 

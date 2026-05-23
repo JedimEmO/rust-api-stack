@@ -82,6 +82,7 @@ impl UserPermissions for StaticPermissions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn vi() -> VerifiedIdentity {
         VerifiedIdentity {
@@ -90,6 +91,36 @@ mod tests {
             email: Some("a@b.com".into()),
             display_name: Some("Alice".into()),
             metadata: None,
+        }
+    }
+
+    struct SubjectIdentityProvider;
+
+    #[async_trait]
+    impl IdentityProvider for SubjectIdentityProvider {
+        fn provider_id(&self) -> &str {
+            "subject"
+        }
+
+        async fn verify(
+            &self,
+            auth_payload: serde_json::Value,
+        ) -> IdentityResult<VerifiedIdentity> {
+            let subject = auth_payload
+                .get("subject")
+                .and_then(|value| value.as_str())
+                .ok_or(IdentityError::InvalidPayload)?;
+
+            Ok(VerifiedIdentity {
+                provider_id: self.provider_id().to_string(),
+                subject: subject.to_string(),
+                email: auth_payload
+                    .get("email")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string),
+                display_name: None,
+                metadata: Some(json!({ "source": "test" })),
+            })
         }
     }
 
@@ -139,6 +170,17 @@ mod tests {
         assert_eq!(perms, vec!["a".to_string(), "b".to_string()]);
     }
 
+    #[tokio::test]
+    async fn static_permissions_returns_a_fresh_vec_each_time() {
+        let p = StaticPermissions::new(vec!["read".into(), "write".into()]);
+        let mut first = p.get_permissions(&vi()).await.unwrap();
+        first.push("mutated".to_string());
+
+        let second = p.get_permissions(&vi()).await.unwrap();
+
+        assert_eq!(second, vec!["read".to_string(), "write".to_string()]);
+    }
+
     #[test]
     fn verified_identity_serde_round_trips() {
         let v = vi();
@@ -146,5 +188,58 @@ mod tests {
         let parsed: VerifiedIdentity = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.subject, "alice");
         assert_eq!(parsed.provider_id, "test");
+    }
+
+    #[test]
+    fn verified_identity_serializes_optional_profile_and_metadata() {
+        let identity = VerifiedIdentity {
+            provider_id: "oauth2".to_string(),
+            subject: "user-123".to_string(),
+            email: Some("user@example.test".to_string()),
+            display_name: Some("Example User".to_string()),
+            metadata: Some(json!({
+                "tenant": "demo",
+                "groups": ["engineering", "admin"]
+            })),
+        };
+
+        assert_eq!(
+            serde_json::to_value(identity).unwrap(),
+            json!({
+                "provider_id": "oauth2",
+                "subject": "user-123",
+                "email": "user@example.test",
+                "display_name": "Example User",
+                "metadata": {
+                    "tenant": "demo",
+                    "groups": ["engineering", "admin"]
+                }
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn identity_provider_trait_verifies_valid_payload_and_rejects_invalid_payload() {
+        let provider = SubjectIdentityProvider;
+
+        let identity = provider
+            .verify(json!({
+                "subject": "alice",
+                "email": "alice@example.test"
+            }))
+            .await
+            .expect("valid payload verifies");
+
+        assert_eq!(identity.provider_id, "subject");
+        assert_eq!(identity.subject, "alice");
+        assert_eq!(identity.email, Some("alice@example.test".to_string()));
+        assert_eq!(identity.metadata, Some(json!({ "source": "test" })));
+
+        let error = provider
+            .verify(json!({ "email": "alice@example.test" }))
+            .await
+            .expect_err("missing subject should fail");
+
+        assert!(matches!(error, IdentityError::InvalidPayload));
     }
 }

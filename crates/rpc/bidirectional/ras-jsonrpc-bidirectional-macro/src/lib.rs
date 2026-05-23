@@ -116,7 +116,7 @@ impl Parse for BidirectionalServiceDefinition {
 
         let mut server_to_client_calls = Vec::new();
         while !server_to_client_calls_content.is_empty() {
-            let method = server_to_client_calls_content.parse::<MethodDefinition>()?;
+            let method = parse_server_to_client_call(&server_to_client_calls_content)?;
             server_to_client_calls.push(method);
 
             // Handle optional trailing comma
@@ -132,6 +132,33 @@ impl Parse for BidirectionalServiceDefinition {
             server_to_client_calls,
         })
     }
+}
+
+fn parse_server_to_client_call(input: syn::parse::ParseStream) -> syn::Result<MethodDefinition> {
+    let fork = input.fork();
+    if fork.peek(syn::Ident) {
+        let ident = fork.parse::<Ident>()?;
+        match ident.to_string().as_str() {
+            "UNAUTHORIZED" | "WITH_PERMISSIONS" => return input.parse::<MethodDefinition>(),
+            _ => {}
+        }
+    }
+
+    let name = input.parse::<Ident>()?;
+
+    let request_content;
+    syn::parenthesized!(request_content in input);
+    let request_type = request_content.parse::<Type>()?;
+
+    let _ = input.parse::<Token![->]>()?;
+    let response_type = input.parse::<Type>()?;
+
+    Ok(MethodDefinition {
+        auth: AuthRequirement::Unauthorized,
+        name,
+        request_type,
+        response_type,
+    })
 }
 
 impl Parse for MethodDefinition {

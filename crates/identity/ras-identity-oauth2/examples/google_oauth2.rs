@@ -23,9 +23,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let google_config = OAuth2ProviderConfig {
         provider_id: "google".to_string(),
         client_id: std::env::var("GOOGLE_CLIENT_ID")
-            .unwrap_or_else(|_| "your-google-client-id".to_string()),
+            .expect("GOOGLE_CLIENT_ID must be set for the Google OAuth2 example"),
         client_secret: std::env::var("GOOGLE_CLIENT_SECRET")
-            .unwrap_or_else(|_| "your-google-client-secret".to_string()),
+            .expect("GOOGLE_CLIENT_SECRET must be set for the Google OAuth2 example"),
         authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
         token_endpoint: "https://oauth2.googleapis.com/token".to_string(),
         userinfo_endpoint: Some("https://www.googleapis.com/oauth2/v1/userinfo".to_string()),
@@ -124,14 +124,14 @@ async fn simulate_callback(
         .await
     {
         Ok(jwt_token) => {
-            println!("✅ OAuth2 authentication successful!");
+            println!("OAuth2 authentication successful.");
             println!("JWT Token: {}", jwt_token);
 
             // Verify the token
             println!("\n3. Verifying JWT token...");
             match session_service.verify_session(&jwt_token).await {
                 Ok(claims) => {
-                    println!("✅ Token verified successfully!");
+                    println!("Token verified successfully.");
                     println!("User ID: {}", claims.sub);
                     println!("Email: {:?}", claims.email);
                     println!("Display Name: {:?}", claims.display_name);
@@ -139,12 +139,12 @@ async fn simulate_callback(
                     println!("Permissions: {:?}", claims.permissions);
                 }
                 Err(e) => {
-                    println!("❌ Token verification failed: {}", e);
+                    println!("Token verification failed: {}", e);
                 }
             }
         }
         Err(e) => {
-            println!("❌ OAuth2 callback failed: {}", e);
+            println!("OAuth2 callback failed: {}", e);
             println!(
                 "Note: This is expected in the simulation as we're not using real OAuth2 endpoints"
             );
@@ -157,6 +157,7 @@ async fn simulate_callback(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ras_identity_core::IdentityProvider;
 
     #[tokio::test]
     async fn test_oauth2_configuration() {

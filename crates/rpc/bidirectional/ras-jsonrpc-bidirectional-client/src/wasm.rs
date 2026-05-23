@@ -18,7 +18,6 @@ use web_sys::{BinaryType, CloseEvent, ErrorEvent, MessageEvent, WebSocket};
 
 /// WASM WebSocket transport using web-sys
 pub struct WasmWebSocketTransport {
-    config: ClientConfig,
     websocket: Arc<Mutex<Option<WebSocket>>>,
     message_queue: Arc<Mutex<VecDeque<BidirectionalMessage>>>,
     connection_state: Arc<Mutex<WasmConnectionState>>,
@@ -41,7 +40,6 @@ impl WasmWebSocketTransport {
         let url = config.get_connection_url();
 
         Self {
-            config,
             websocket: Arc::new(Mutex::new(None)),
             message_queue: Arc::new(Mutex::new(VecDeque::new())),
             connection_state: Arc::new(Mutex::new(WasmConnectionState::Disconnected)),
@@ -161,7 +159,7 @@ impl WasmWebSocketTransport {
     }
 }
 
-#[async_trait]
+#[async_trait(?Send)]
 impl WebSocketTransport for WasmWebSocketTransport {
     async fn connect(&mut self) -> ClientResult<()> {
         // Check if already connected

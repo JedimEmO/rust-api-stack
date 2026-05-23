@@ -36,4 +36,11 @@ let context = context.with_metadata("request_id", "12345");
 
 ## Integration
 
-This crate provides the core abstractions. For a production-ready implementation with OpenTelemetry and Prometheus support, see `ras-observability-otel`.
+This crate provides the core abstractions. For an OpenTelemetry and Prometheus implementation, see `ras-observability-otel`.
+
+## Checks
+
+```bash
+cargo test -p ras-observability-core --locked
+cargo clippy -p ras-observability-core --all-targets --all-features --locked -- -D warnings
+```

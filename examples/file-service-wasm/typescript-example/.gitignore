@@ -1,19 +1,7 @@
-# Dependencies
+src/generated/
 node_modules/
 dist/
-
-# Build outputs
-public/pkg/
-pkg-node/
-pkg-bundler/
-
-# IDE
-.vscode/
-.idea/
-
-# Logs
+public/
 *.log
-
-# OS
 .DS_Store
 Thumbs.db

@@ -43,7 +43,7 @@ impl UserServiceTrait for UserServiceImpl {
         users
             .get(&id)
             .cloned()
-            .map(|user| RestResponse::ok(user))
+            .map(RestResponse::ok)
             .ok_or_else(|| RestError::not_found("User not found"))
     }
 
@@ -125,10 +125,7 @@ impl UserServiceTrait for UserServiceImpl {
             user_id: user_id.clone(),
         };
 
-        tasks
-            .entry(user_id)
-            .or_insert_with(Vec::new)
-            .push(task.clone());
+        tasks.entry(user_id).or_default().push(task.clone());
 
         Ok(RestResponse::created(task))
     }
@@ -223,7 +220,7 @@ impl UserServiceTrait for UserServiceImpl {
         per_page: Option<u32>,
     ) -> RestResult<TasksResponse> {
         let tasks = self.state.tasks.lock().unwrap();
-        let page = page.unwrap_or(1);
+        let page = page.unwrap_or(1).max(1);
         let per_page = per_page.unwrap_or(10) as usize;
         let skip = ((page - 1) * per_page as u32) as usize;
 
@@ -232,7 +229,7 @@ impl UserServiceTrait for UserServiceImpl {
         // Filter by completed status if provided
         let filtered: Vec<Task> = user_tasks
             .into_iter()
-            .filter(|task| completed.map_or(true, |c| task.completed == c))
+            .filter(|task| completed.is_none_or(|c| task.completed == c))
             .skip(skip)
             .take(per_page)
             .collect();
@@ -291,7 +288,7 @@ async fn main() -> Result<()> {
         .auth_provider(auth_provider)
         .build();
 
-    // Setup CORS for WASM client
+    // Allow local generated-client examples and browser tooling to call the API.
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
@@ -307,4 +304,257 @@ async fn main() -> Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn empty_service() -> UserServiceImpl {
+        UserServiceImpl {
+            state: AppState {
+                users: Arc::new(Mutex::new(HashMap::new())),
+                tasks: Arc::new(Mutex::new(HashMap::new())),
+            },
+        }
+    }
+
+    fn auth_user(user_id: &str, permissions: &[&str]) -> AuthenticatedUser {
+        AuthenticatedUser {
+            user_id: user_id.to_string(),
+            permissions: permissions
+                .iter()
+                .map(|permission| (*permission).to_string())
+                .collect::<HashSet<_>>(),
+            metadata: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn user_crud_and_search_round_trip_through_service() {
+        let service = empty_service();
+        let admin = auth_user("admin", &["admin", "user"]);
+
+        let created = service
+            .post_users(
+                &admin,
+                CreateUserRequest {
+                    name: "Alice Example".to_string(),
+                    email: "alice@example.com".to_string(),
+                },
+            )
+            .await
+            .expect("create user");
+
+        assert_eq!(created.status, 201);
+        assert_eq!(created.body.role, "user");
+
+        let user_id = created.body.id.clone();
+        let fetched = service
+            .get_users_by_id(user_id.clone())
+            .await
+            .expect("fetch created user");
+        assert_eq!(fetched.body.email, "alice@example.com");
+
+        let updated = service
+            .put_users_by_id(
+                &admin,
+                user_id.clone(),
+                UpdateUserRequest {
+                    name: Some("Alice Updated".to_string()),
+                    email: None,
+                },
+            )
+            .await
+            .expect("update user");
+        assert_eq!(updated.body.name, "Alice Updated");
+        assert_eq!(updated.body.email, "alice@example.com");
+
+        let search = service
+            .get_search_users("updated".to_string(), Some(10), Some(0))
+            .await
+            .expect("search user");
+        assert_eq!(search.body.total, 1);
+        assert_eq!(search.body.users.len(), 1);
+        assert_eq!(search.body.users[0].id, user_id);
+
+        let deleted = service
+            .delete_users_by_id(&admin, user_id.clone())
+            .await
+            .expect("delete user");
+        assert_eq!(deleted.status, 200);
+
+        let error = service
+            .get_users_by_id(user_id)
+            .await
+            .expect_err("deleted user should not be found");
+        assert_eq!(error.status, 404);
+        assert_eq!(error.message, "User not found");
+    }
+
+    #[tokio::test]
+    async fn task_crud_and_filtered_search_round_trip_through_service() {
+        let service = empty_service();
+        let user = auth_user("testuser", &["user"]);
+        let user_id = "user-1".to_string();
+
+        let first = service
+            .post_users_by_user_id_tasks(
+                &user,
+                user_id.clone(),
+                CreateTaskRequest {
+                    title: "Draft docs".to_string(),
+                    description: "Write API notes".to_string(),
+                },
+            )
+            .await
+            .expect("create first task");
+        let second = service
+            .post_users_by_user_id_tasks(
+                &user,
+                user_id.clone(),
+                CreateTaskRequest {
+                    title: "Review examples".to_string(),
+                    description: "Check example flows".to_string(),
+                },
+            )
+            .await
+            .expect("create second task");
+
+        assert_eq!(first.status, 201);
+        assert_eq!(second.status, 201);
+
+        let updated = service
+            .put_users_by_user_id_tasks_by_task_id(
+                &user,
+                user_id.clone(),
+                first.body.id.clone(),
+                UpdateTaskRequest {
+                    title: None,
+                    description: Some("Write and verify API notes".to_string()),
+                    completed: Some(true),
+                },
+            )
+            .await
+            .expect("update task");
+        assert!(updated.body.completed);
+        assert_eq!(updated.body.description, "Write and verify API notes");
+
+        let completed = service
+            .get_users_by_user_id_tasks_search(
+                &user,
+                user_id.clone(),
+                Some(true),
+                Some(1),
+                Some(10),
+            )
+            .await
+            .expect("search completed tasks");
+        assert_eq!(completed.body.tasks.len(), 1);
+        assert_eq!(completed.body.tasks[0].id, first.body.id);
+
+        let all_tasks = service
+            .get_users_by_user_id_tasks(&user, user_id.clone())
+            .await
+            .expect("list tasks");
+        assert_eq!(all_tasks.body.tasks.len(), 2);
+
+        service
+            .delete_users_by_user_id_tasks_by_task_id(&user, user_id.clone(), first.body.id.clone())
+            .await
+            .expect("delete task");
+
+        let remaining = service
+            .get_users_by_user_id_tasks(&user, user_id)
+            .await
+            .expect("list remaining tasks");
+        assert_eq!(remaining.body.tasks.len(), 1);
+        assert_eq!(remaining.body.tasks[0].id, second.body.id);
+    }
+
+    #[tokio::test]
+    async fn updating_missing_task_returns_not_found() {
+        let service = empty_service();
+        let user = auth_user("testuser", &["user"]);
+
+        let error = service
+            .put_users_by_user_id_tasks_by_task_id(
+                &user,
+                "missing-user".to_string(),
+                "missing-task".to_string(),
+                UpdateTaskRequest {
+                    title: Some("Nope".to_string()),
+                    description: None,
+                    completed: None,
+                },
+            )
+            .await
+            .expect_err("missing task collection should be rejected");
+
+        assert_eq!(error.status, 404);
+        assert_eq!(error.message, "User tasks not found");
+    }
+
+    #[tokio::test]
+    async fn updating_missing_task_in_existing_collection_returns_task_not_found() {
+        let service = empty_service();
+        let user = auth_user("testuser", &["user"]);
+        service
+            .post_users_by_user_id_tasks(
+                &user,
+                "user-1".to_string(),
+                CreateTaskRequest {
+                    title: "Existing task".to_string(),
+                    description: "Creates the collection".to_string(),
+                },
+            )
+            .await
+            .expect("create task");
+
+        let error = service
+            .put_users_by_user_id_tasks_by_task_id(
+                &user,
+                "user-1".to_string(),
+                "missing-task".to_string(),
+                UpdateTaskRequest {
+                    title: Some("Nope".to_string()),
+                    description: None,
+                    completed: None,
+                },
+            )
+            .await
+            .expect_err("missing task should be rejected");
+
+        assert_eq!(error.status, 404);
+        assert_eq!(error.message, "Task not found");
+    }
+
+    #[tokio::test]
+    async fn task_search_treats_zero_page_as_first_page() {
+        let service = empty_service();
+        let user = auth_user("testuser", &["user"]);
+        let user_id = "user-1".to_string();
+
+        let task = service
+            .post_users_by_user_id_tasks(
+                &user,
+                user_id.clone(),
+                CreateTaskRequest {
+                    title: "First task".to_string(),
+                    description: "Should appear on page zero".to_string(),
+                },
+            )
+            .await
+            .expect("create task")
+            .body;
+
+        let result = service
+            .get_users_by_user_id_tasks_search(&user, user_id, None, Some(0), Some(10))
+            .await
+            .expect("search tasks");
+
+        assert_eq!(result.body.tasks.len(), 1);
+        assert_eq!(result.body.tasks[0].id, task.id);
+    }
 }

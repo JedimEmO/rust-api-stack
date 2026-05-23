@@ -422,7 +422,9 @@ impl Schema {
 
     /// Add an extension field
     pub fn with_extension(mut self, key: impl Into<String>, value: impl Into<Value>) -> Self {
-        self.extensions.insert(key, value);
+        self.extensions
+            .insert(key, value)
+            .expect("extension keys must start with 'x-'");
         self
     }
 }
@@ -542,10 +544,15 @@ impl Validate for Schema {
 
         // Validate items schema
         if let Some(ref items) = self.items {
-            match items.as_ref() {
-                SchemaOrBool::Schema(schema) => schema.as_ref().validate()?,
-                SchemaOrBool::Bool(_) => {} // Boolean is always valid
-            }
+            validate_schema_or_bool(items.as_ref())?;
+        }
+
+        if let Some(ref additional_items) = self.additional_items {
+            validate_schema_or_bool(additional_items.as_ref())?;
+        }
+
+        if let Some(ref additional_properties) = self.additional_properties {
+            validate_schema_or_bool(additional_properties.as_ref())?;
         }
 
         // Validate properties
@@ -556,38 +563,48 @@ impl Validate for Schema {
                         "property name cannot be empty",
                     ));
                 }
-                match schema_or_ref {
-                    SchemaOrReference::Schema(schema) => schema.as_ref().validate()?,
-                    SchemaOrReference::Reference(reference) => reference.validate()?,
+                validate_schema_or_reference(schema_or_ref)?;
+            }
+        }
+
+        if let Some(ref pattern_properties) = self.pattern_properties {
+            for (pattern, schema_or_ref) in pattern_properties {
+                if pattern.is_empty() {
+                    return Err(crate::error::OpenRpcError::validation(
+                        "pattern property name cannot be empty",
+                    ));
                 }
+                validate_schema_or_reference(schema_or_ref)?;
+            }
+        }
+
+        if let Some(ref dependencies) = self.dependencies {
+            for (property, dependency) in dependencies {
+                if property.is_empty() {
+                    return Err(crate::error::OpenRpcError::validation(
+                        "dependency property name cannot be empty",
+                    ));
+                }
+                validate_schema_dependency(dependency)?;
             }
         }
 
         // Validate composition schemas
         if let Some(ref all_of) = self.all_of {
             for schema_or_ref in all_of {
-                match schema_or_ref {
-                    SchemaOrReference::Schema(schema) => schema.as_ref().validate()?,
-                    SchemaOrReference::Reference(reference) => reference.validate()?,
-                }
+                validate_schema_or_reference(schema_or_ref)?;
             }
         }
 
         if let Some(ref any_of) = self.any_of {
             for schema_or_ref in any_of {
-                match schema_or_ref {
-                    SchemaOrReference::Schema(schema) => schema.as_ref().validate()?,
-                    SchemaOrReference::Reference(reference) => reference.validate()?,
-                }
+                validate_schema_or_reference(schema_or_ref)?;
             }
         }
 
         if let Some(ref one_of) = self.one_of {
             for schema_or_ref in one_of {
-                match schema_or_ref {
-                    SchemaOrReference::Schema(schema) => schema.as_ref().validate()?,
-                    SchemaOrReference::Reference(reference) => reference.validate()?,
-                }
+                validate_schema_or_reference(schema_or_ref)?;
             }
         }
 
@@ -613,10 +630,7 @@ impl Validate for Schema {
         }
 
         if let Some(ref not) = self.not {
-            match not.as_ref() {
-                SchemaOrReference::Schema(schema) => schema.as_ref().validate()?,
-                SchemaOrReference::Reference(reference) => reference.validate()?,
-            }
+            validate_schema_or_reference(not.as_ref())?;
         }
 
         // Validate definitions
@@ -631,6 +645,34 @@ impl Validate for Schema {
         self.extensions.validate()?;
 
         Ok(())
+    }
+}
+
+fn validate_schema_or_bool(schema_or_bool: &SchemaOrBool) -> OpenRpcResult<()> {
+    match schema_or_bool {
+        SchemaOrBool::Schema(schema) => schema.as_ref().validate(),
+        SchemaOrBool::Bool(_) => Ok(()),
+    }
+}
+
+fn validate_schema_or_reference(schema_or_ref: &SchemaOrReference) -> OpenRpcResult<()> {
+    match schema_or_ref {
+        SchemaOrReference::Schema(schema) => schema.as_ref().validate(),
+        SchemaOrReference::Reference(reference) => reference.validate(),
+    }
+}
+
+fn validate_schema_dependency(dependency: &SchemaOrStringArray) -> OpenRpcResult<()> {
+    match dependency {
+        SchemaOrStringArray::Schema(schema) => schema.as_ref().validate(),
+        SchemaOrStringArray::StringArray(required_properties) => {
+            if required_properties.iter().any(String::is_empty) {
+                return Err(crate::error::OpenRpcError::validation(
+                    "dependency property names cannot be empty",
+                ));
+            }
+            Ok(())
+        }
     }
 }
 
@@ -752,5 +794,145 @@ mod tests {
 
         assert!(!schema.extensions.is_empty());
         assert_eq!(schema.extensions.get("x-custom"), Some(&json!("value")));
+    }
+
+    #[test]
+    fn convenience_methods_cover_common_schema_fields() {
+        let mut properties = HashMap::new();
+        properties.insert(
+            "manager".to_string(),
+            SchemaOrReference::Reference(Reference::schema("User")),
+        );
+
+        let schema = Schema::any()
+            .with_title("User")
+            .with_description("A user object")
+            .with_default(json!({"name": "Alice"}))
+            .with_enum(vec![json!("admin"), json!("user")])
+            .with_properties(properties)
+            .with_required(vec!["name".to_string()])
+            .require_property("email")
+            .with_minimum(1.0)
+            .with_maximum(10.0)
+            .with_pattern("^[a-z]+$")
+            .with_format("email");
+
+        assert_eq!(schema.schema_type, None);
+        assert_eq!(schema.title.as_deref(), Some("User"));
+        assert_eq!(schema.description.as_deref(), Some("A user object"));
+        assert_eq!(schema.default, Some(json!({"name": "Alice"})));
+        assert_eq!(schema.enum_values.as_ref().unwrap().len(), 2);
+        assert_eq!(schema.properties.as_ref().unwrap().len(), 1);
+        assert_eq!(
+            schema.required,
+            Some(vec!["name".to_string(), "email".to_string()])
+        );
+        assert_eq!(schema.minimum, Some(1.0));
+        assert_eq!(schema.maximum, Some(10.0));
+        assert_eq!(schema.pattern.as_deref(), Some("^[a-z]+$"));
+        assert_eq!(schema.format.as_deref(), Some("email"));
+    }
+
+    #[test]
+    fn validate_accepts_nested_schema_containers() {
+        let valid_nested = Schema::string().with_min_length(1);
+        let mut pattern_properties = HashMap::new();
+        pattern_properties.insert(
+            "^x-".to_string(),
+            SchemaOrReference::Schema(Box::new(valid_nested.clone())),
+        );
+        let mut dependencies = HashMap::new();
+        dependencies.insert(
+            "credit_card".to_string(),
+            SchemaOrStringArray::StringArray(vec!["billing_address".to_string()]),
+        );
+        dependencies.insert(
+            "billing_address".to_string(),
+            SchemaOrStringArray::Schema(Box::new(Schema::object())),
+        );
+        let mut definitions = HashMap::new();
+        definitions.insert("Address".to_string(), Schema::object());
+
+        let mut schema = Schema::object()
+            .with_property("name", valid_nested.clone())
+            .with_items(valid_nested.clone());
+        schema.additional_items = Some(Box::new(SchemaOrBool::Bool(false)));
+        schema.additional_properties = Some(Box::new(SchemaOrBool::Schema(Box::new(
+            valid_nested.clone(),
+        ))));
+        schema.pattern_properties = Some(pattern_properties);
+        schema.dependencies = Some(dependencies);
+        schema.contains = Some(Box::new(valid_nested.clone()));
+        schema.property_names = Some(Box::new(Schema::string()));
+        schema.if_schema = Some(Box::new(Schema::object()));
+        schema.then_schema = Some(Box::new(Schema::object()));
+        schema.else_schema = Some(Box::new(Schema::object()));
+        schema.all_of = Some(vec![SchemaOrReference::Schema(Box::new(Schema::object()))]);
+        schema.any_of = Some(vec![SchemaOrReference::Reference(Reference::schema(
+            "Address",
+        ))]);
+        schema.one_of = Some(vec![SchemaOrReference::Schema(Box::new(Schema::string()))]);
+        schema.not = Some(Box::new(SchemaOrReference::Schema(
+            Box::new(Schema::null()),
+        )));
+        schema.definitions = Some(definitions);
+
+        assert!(schema.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_invalid_nested_schema_containers() {
+        let invalid_nested = Schema::string().with_min_length(10).with_max_length(1);
+
+        let mut schema = Schema::array();
+        schema.additional_items = Some(Box::new(SchemaOrBool::Schema(Box::new(
+            invalid_nested.clone(),
+        ))));
+        assert!(schema.validate().is_err());
+
+        let mut schema = Schema::object();
+        schema.additional_properties = Some(Box::new(SchemaOrBool::Schema(Box::new(
+            invalid_nested.clone(),
+        ))));
+        assert!(schema.validate().is_err());
+
+        let mut pattern_properties = HashMap::new();
+        pattern_properties.insert(
+            "".to_string(),
+            SchemaOrReference::Schema(Box::new(Schema::string())),
+        );
+        let mut schema = Schema::object();
+        schema.pattern_properties = Some(pattern_properties);
+        assert!(schema.validate().is_err());
+
+        let mut dependencies = HashMap::new();
+        dependencies.insert(
+            "".to_string(),
+            SchemaOrStringArray::StringArray(vec!["name".to_string()]),
+        );
+        let mut schema = Schema::object();
+        schema.dependencies = Some(dependencies);
+        assert!(schema.validate().is_err());
+
+        let mut dependencies = HashMap::new();
+        dependencies.insert(
+            "name".to_string(),
+            SchemaOrStringArray::StringArray(vec!["".to_string()]),
+        );
+        let mut schema = Schema::object();
+        schema.dependencies = Some(dependencies);
+        assert!(schema.validate().is_err());
+
+        let mut schema = Schema::object();
+        schema.all_of = Some(vec![SchemaOrReference::Schema(Box::new(
+            invalid_nested.clone(),
+        ))]);
+        assert!(schema.validate().is_err());
+
+        let mut schema = Schema::object();
+        schema.not = Some(Box::new(SchemaOrReference::Reference(Reference::new(
+            "#/components/schemas/invalid name",
+        ))));
+        assert!(schema.validate().is_err());
     }
 }

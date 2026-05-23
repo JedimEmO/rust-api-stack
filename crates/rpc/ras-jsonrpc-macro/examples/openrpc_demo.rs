@@ -1,6 +1,6 @@
 //! Example demonstrating OpenRPC document generation
 //!
-//! Run with: cargo run --example openrpc_demo
+//! Run with: cargo run --locked --example openrpc_demo
 
 use ras_jsonrpc_macro::jsonrpc_service;
 use schemars::JsonSchema;

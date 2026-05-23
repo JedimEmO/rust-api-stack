@@ -251,7 +251,7 @@ pub fn generate_server_code(
 
                 // Wait for response with timeout
                 let response = tokio::time::timeout(
-                    std::time::Duration::from_secs(30), // TODO: Make configurable
+                    std::time::Duration::from_secs(30),
                     response_receiver
                 ).await
                 .map_err(|_| ras_jsonrpc_bidirectional_types::BidirectionalError::Timeout)?
@@ -424,8 +424,7 @@ pub fn generate_server_code(
                 Ok(())
             }
 
-            async fn on_disconnect(&self, context: std::sync::Arc<ras_jsonrpc_bidirectional_server::ConnectionContext>, reason: Option<String>) -> ras_jsonrpc_bidirectional_server::ServerResult<()> {
-                let _ = reason; // Unused for now
+            async fn on_disconnect(&self, context: std::sync::Arc<ras_jsonrpc_bidirectional_server::ConnectionContext>, _reason: Option<String>) -> ras_jsonrpc_bidirectional_server::ServerResult<()> {
                 // Call the service's on_client_disconnected
                 if let Err(e) = self.service.on_client_disconnected(context.id, self.connection_manager.as_ref()).await {
                     return Err(ras_jsonrpc_bidirectional_server::ServerError::Internal(e.to_string()));

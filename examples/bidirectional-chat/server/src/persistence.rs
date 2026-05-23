@@ -232,11 +232,12 @@ impl PersistenceManager {
 
         // Apply limit if specified (return most recent messages)
         if let Some(limit) = limit {
+            let total_messages = messages.len();
             let start = messages.len().saturating_sub(limit);
             messages = messages[start..].to_vec();
             debug!(
-                total_messages = messages.len(),
-                returned_messages = messages.len() - start,
+                total_messages,
+                returned_messages = messages.len(),
                 "Applied message limit"
             );
         }
@@ -307,6 +308,36 @@ mod tests {
 
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].text, "Hello, world!");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn load_room_messages_returns_recent_limit_without_underflow() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let persistence = PersistenceManager::new(temp_dir.path());
+        persistence.init().await?;
+
+        for id in 1..=3 {
+            persistence
+                .append_message(
+                    "general",
+                    &PersistedMessage {
+                        id,
+                        room_id: "general".to_string(),
+                        username: "alice".to_string(),
+                        text: format!("message-{id}"),
+                        timestamp: Utc::now(),
+                    },
+                )
+                .await?;
+        }
+
+        let messages = persistence.load_room_messages("general", Some(1)).await?;
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].id, 3);
+        assert_eq!(messages[0].text, "message-3");
 
         Ok(())
     }

@@ -1,115 +1,33 @@
-# Basic JSON-RPC Service with Unified Observability
+# Basic JSON-RPC Service
 
-This example demonstrates a basic JSON-RPC service using the new unified observability crates (`ras-observability-core` and `ras-observability-otel`) for production-ready metrics collection.
+Runnable JSON-RPC task service demonstrating the `jsonrpc_service!` macro,
+authentication, generated OpenRPC documentation, and Prometheus-compatible
+metrics.
 
-## Features
+## Run
 
-- ✅ **JSON-RPC service** with authentication and permissions
-- ✅ **Unified observability** using ras-observability-* crates
-- ✅ **Prometheus metrics endpoint** at `/metrics`
-- ✅ **Automatic metric collection** for RPC requests
-- ✅ **Method duration tracking** with low-cardinality labels
-- ✅ **Interactive Explorer** - Built-in JSON-RPC Explorer UI
-- ✅ **OpenRPC Document** - Auto-generated API specification
-
-## Metrics Collected
-
-1. **`requests_started_total`** (Counter) - Total number of requests started
-   - Labels: `method`, `protocol` (JSON-RPC)
-
-2. **`requests_completed_total`** (Counter) - Total number of requests completed
-   - Labels: `method`, `protocol`, `success`
-
-3. **`method_duration_seconds`** (Histogram) - Method execution duration
-   - Labels: `method`, `protocol` (no user attributes to prevent cardinality explosion)
-
-### Design Principles
-
-This example follows best practices for production metrics:
-- **Low cardinality**: No user-specific labels in metrics
-- **Meaningful aggregations**: Duration percentiles (P50, P95, P99) are actually useful
-- **Cost-effective**: Won't explode your metrics storage
-- **User tracking via logs**: User details are logged but not in metrics
-
-## Running the Example
+From the workspace root:
 
 ```bash
-cargo run -p basic-jsonrpc-service
+cargo run -p basic-jsonrpc-service --locked
 ```
 
-The service will start on `http://localhost:3000` with the following endpoints:
+The service listens on `http://localhost:3000`:
 
-- **JSON-RPC endpoint**: http://localhost:3000/rpc
-- **JSON-RPC Explorer**: http://localhost:3000/rpc/explorer
-- **Prometheus metrics**: http://localhost:3000/metrics
-- **OpenRPC Document**: http://localhost:3000/rpc/explorer/openrpc.json
+- JSON-RPC endpoint: `POST /rpc`
+- Explorer UI: `/rpc/explorer`
+- OpenRPC document: `/rpc/explorer/openrpc.json`
+- Prometheus metrics: `/metrics`
 
-## Configuration
+## Credentials
 
-### Environment Variables
+The example uses fixed demo credentials:
 
-- `OTLP_ENDPOINT`: The endpoint for the OTLP exporter (default: `http://localhost:4317`)
+- User: `user` / `password`, returns bearer token `valid_token`
+- Admin: `admin` / `secret`, returns bearer token `admin_token`
 
-## Integration with OTLP
+## Sign In
 
-While this example uses OpenTelemetry with a Prometheus exporter, you can integrate with OTLP (OpenTelemetry Protocol) backends by using an OpenTelemetry Collector:
-
-### 1. Create a Collector Configuration
-
-Create `collector-config.yaml`:
-
-```yaml
-receivers:
-  prometheus:
-    config:
-      scrape_configs:
-        - job_name: 'jsonrpc-service'
-          scrape_interval: 10s
-          static_configs:
-            - targets: ['host.docker.internal:3000']  # or 'localhost:3000' if not using Docker
-
-processors:
-  batch:
-
-exporters:
-  otlp:
-    endpoint: "your-otlp-endpoint:4317"  # Replace with your OTLP backend
-    tls:
-      insecure: true  # Set to false in production with proper certs
-  logging:
-    verbosity: detailed
-
-service:
-  pipelines:
-    metrics:
-      receivers: [prometheus]
-      processors: [batch]
-      exporters: [otlp, logging]
-```
-
-### 2. Run the Collector
-
-```bash
-docker run -p 4317:4317 \
-  -v $(pwd)/collector-config.yaml:/etc/otel-collector-config.yaml \
-  otel/opentelemetry-collector:latest \
-  --config=/etc/otel-collector-config.yaml
-```
-
-### 3. Start the Service
-
-The collector will scrape metrics from `http://localhost:3000/metrics` and forward them to your OTLP backend.
-
-## Using the Service
-
-### Example Credentials
-
-- Username: `user`, Password: `password` (basic user)
-- Username: `admin`, Password: `secret` (admin user)
-
-### 1. Sign In (Get a Token)
-
-**Admin User:**
 ```bash
 curl -X POST http://localhost:3000/rpc \
   -H "Content-Type: application/json" \
@@ -126,7 +44,8 @@ curl -X POST http://localhost:3000/rpc \
   }'
 ```
 
-**Response:**
+Successful admin response:
+
 ```json
 {
   "jsonrpc": "2.0",
@@ -139,7 +58,7 @@ curl -X POST http://localhost:3000/rpc \
 }
 ```
 
-### 2. Make Authenticated Requests
+## Authenticated Request
 
 ```bash
 curl -X POST http://localhost:3000/rpc \
@@ -153,96 +72,78 @@ curl -X POST http://localhost:3000/rpc \
   }'
 ```
 
-### 3. Check Metrics
+## Metrics
 
-Visit `http://localhost:3000/metrics` to see collected metrics:
+The service wires `ras-observability-otel` into the generated JSON-RPC builder
+with `with_usage_tracker` and `with_method_duration_tracker`.
 
-```
-# HELP rpc_requests_started_total Total number of RPC requests started
-# TYPE rpc_requests_started_total counter
-rpc_requests_started_total{method="sign_in",user_agent="curl/7.81.0",authenticated="false"} 2
-rpc_requests_started_total{method="delete_everything",user_agent="curl/7.81.0",authenticated="true",user_id="admin123",has_admin="true"} 1
+Prometheus metrics use low-cardinality labels:
 
-# HELP rpc_requests_completed_total Total number of RPC requests completed (Note: This tracks usage_tracker completion, not actual method execution)
-# TYPE rpc_requests_completed_total counter
-rpc_requests_completed_total{method="sign_in",user_agent="curl/7.81.0",authenticated="false"} 2
-rpc_requests_completed_total{method="delete_everything",user_agent="curl/7.81.0",authenticated="true",user_id="admin123",has_admin="true"} 1
+- `requests_started_total`: labels `method`, `protocol`
+- `requests_completed_total`: labels `method`, `protocol`, `success`
+- `method_duration_milliseconds`: labels `method`, `protocol`
 
-# HELP active_users Number of active users
-# TYPE active_users counter
-active_users{user_type="admin",action="sign_in"} 1
-active_users{user_type="user",action="sign_in"} 1
-active_users{user_type="user",action="sign_out"} -1
+The trackers log authenticated user details with `tracing`, but the metrics do
+not include user ids, session ids, request ids, or arbitrary path values.
+
+Check metrics after making a request:
+
+```bash
+curl http://localhost:3000/metrics
 ```
 
-## Architecture
+Example output shape:
 
-The example demonstrates:
+```text
+requests_started_total{method="sign_in",protocol="JSON-RPC"} 1
+requests_completed_total{method="sign_in",protocol="JSON-RPC",success="true"} 1
+method_duration_milliseconds_bucket{method="sign_in",protocol="JSON-RPC",le="5"} 1
+```
 
-1. **Dual Metric Export**: Both push-based (OTLP) and pull-based (Prometheus) metrics
-2. **Graceful Fallback**: Continues with Prometheus-only if OTLP collector is unavailable
-3. **Request Interception**: Uses `with_usage_tracker` to capture all RPC requests
-4. **Rich Labels**: Captures method, authentication status, user info, and user agent
+## OpenTelemetry Collector
 
-## Integration with Monitoring Systems
+This example exposes Prometheus text metrics. To forward them to an OTLP backend,
+run an OpenTelemetry Collector that scrapes `http://localhost:3000/metrics` and
+exports to your OTLP destination.
 
-### Prometheus
-
-Configure Prometheus to scrape the `/metrics` endpoint:
+Minimal collector sketch:
 
 ```yaml
-scrape_configs:
-  - job_name: 'jsonrpc-service'
-    static_configs:
-      - targets: ['localhost:3000']
+receivers:
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: 'basic-jsonrpc-service'
+          static_configs:
+            - targets: ['host.docker.internal:3000']
+
+processors:
+  batch:
+
+exporters:
+  otlp:
+    endpoint: "tempo:4317"
+
+service:
+  pipelines:
+    metrics:
+      receivers: [prometheus]
+      processors: [batch]
+      exporters: [otlp]
 ```
 
-### Grafana
+## Tests
 
-Import metrics from either Prometheus or the OTLP collector to visualize:
-- Request rates by method and user
-- Active user counts
-- Authentication success/failure ratios
+The service has focused unit tests for authentication, task lifecycle behavior,
+profile methods, and missing-task errors:
 
-### Jaeger/Tempo
-
-While this example focuses on metrics, the OTLP setup can be extended to support distributed tracing by adding:
-- `opentelemetry-tracing` dependencies
-- Trace context propagation
-- Span creation in handlers
-
-## Extending the Example
-
-To add custom metrics:
-
-1. **Add to the Metrics struct**:
-```rust
-struct Metrics {
-    // ... existing metrics
-    custom_operations: Counter<u64>,
-}
+```bash
+cargo test -p basic-jsonrpc-service --locked
 ```
 
-2. **Initialize in `Metrics::new()`**:
-```rust
-custom_operations: meter
-    .u64_counter("custom_operations_total")
-    .with_description("Custom business operations")
-    .build(),
+## Checks
+
+```bash
+cargo test -p basic-jsonrpc-service --locked
+cargo clippy -p basic-jsonrpc-service --all-targets --all-features --locked -- -D warnings
 ```
-
-3. **Record in handlers**:
-```rust
-metrics.custom_operations.add(1, &[
-    KeyValue::new("operation", "important_action"),
-]);
-```
-
-## Production Considerations
-
-- **OTLP Authentication**: Configure TLS and authentication for secure metric export
-- **Cardinality**: Be careful with label values to avoid metric explosion
-- **Sampling**: Consider implementing adaptive sampling for high-traffic services
-- **Resource Attributes**: Add more service metadata (version, environment, etc.)
-- **Error Handling**: Implement proper error tracking metrics
-- **Performance**: The metrics collection adds minimal overhead to request processing

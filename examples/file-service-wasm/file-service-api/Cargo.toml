@@ -2,15 +2,20 @@
 name = "file-service-api"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
+description = "Shared API definition for the Rust Agent Stack file-service OpenAPI usage example"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-agent-stack"
+homepage = "https://github.com/JedimEmO/rust-agent-stack"
+publish = false
+readme = "README.md"
 
 [lib]
-# Default to rlib only to avoid conflicts with build dependencies
-# cdylib will be added when building for wasm32 target via wasm-pack
 crate-type = ["rlib"]
 
 [dependencies]
-ras-file-macro = { path = "../../../crates/rest/ras-file-macro" }
-ras-auth-core = { path = "../../../crates/core/ras-auth-core" }
+ras-file-macro = { path = "../../../crates/rest/ras-file-macro", version = "0.1.0" }
+ras-auth-core = { path = "../../../crates/core/ras-auth-core", version = "0.1.0" }
 serde = { workspace = true, features = ["derive"] }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
@@ -22,7 +27,7 @@ serde-wasm-bindgen = { version = "0.6", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 axum = { workspace = true }
-axum-extra.workspace = true
+axum-extra = { workspace = true }
 tower = { workspace = true }
 http = { workspace = true }
 reqwest = { workspace = true }

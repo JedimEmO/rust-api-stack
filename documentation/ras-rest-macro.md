@@ -1,6 +1,6 @@
 # RAS REST Macro Documentation
 
-The `ras-rest-macro` crate provides a powerful procedural macro for building type-safe REST APIs in Rust with automatic client generation for both native Rust and TypeScript environments.
+The `ras-rest-macro` crate provides a procedural macro for building type-safe REST APIs in Rust with generated native Rust clients and OpenAPI documents for TypeScript client generation.
 
 ## Table of Contents
 
@@ -15,7 +15,7 @@ The `ras-rest-macro` crate provides a powerful procedural macro for building typ
 9. [OpenAPI Documentation](#openapi-documentation)
 10. [Error Handling](#error-handling)
 11. [Advanced Features](#advanced-features)
-12. [Complete Example](#complete-example)
+12. [Task API Example](#task-api-example)
 
 ## Overview
 
@@ -24,7 +24,7 @@ The `rest_service!` macro generates:
 - An Axum router builder with authentication support
 - Native Rust client with async/await support
 - OpenAPI 3.0 specification for TypeScript client generation
-- Built-in Swagger UI hosting (optional)
+- Built-in API explorer hosting (optional)
 - Optional compatibility routes that migrate legacy request/response shapes
 
 ## Installation
@@ -33,17 +33,35 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-ras-rest-macro = "0.2.1"
-ras-rest-core = "0.1.1"
-ras-auth-core = "0.1.0"  # For authentication
+ras-rest-macro = { version = "0.2.1", default-features = false }
+ras-rest-core = { version = "0.1.1", optional = true }
+ras-auth-core = { version = "0.1.0", optional = true }
 serde = { version = "1.0", features = ["derive"] }
-schemars = "0.8"  # Required for OpenAPI generation
-axum = "0.7"  # Web framework
-tokio = { version = "1", features = ["full"] }
+serde_json = "1.0"
+schemars = "1.0.0-alpha.20"
+async-trait = { version = "0.1", optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+axum = { version = "0.8", optional = true }
+axum-extra = { version = "0.10", features = ["query"], optional = true }
+tokio = { version = "1.0", features = ["full"], optional = true }
+reqwest = { version = "0.12", features = ["json"], optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json"], optional = true }
 
 [features]
-server = []  # Enable server-side code generation
-client = []  # Enable native client generation
+default = ["server"]
+server = [
+    "ras-rest-macro/server",
+    "dep:ras-rest-core",
+    "dep:ras-auth-core",
+    "dep:async-trait",
+    "dep:axum",
+    "dep:axum-extra",
+    "dep:tokio",
+]
+client = ["ras-rest-macro/client", "dep:reqwest"]
 ```
 
 ## Basic Usage
@@ -65,6 +83,12 @@ pub struct User {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CreateUserRequest {
+    pub name: String,
+    pub email: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct UpdateUserRequest {
     pub name: String,
     pub email: String,
 }
@@ -104,40 +128,94 @@ rest_service!({
 
 ```rust
 use ras_auth_core::AuthenticatedUser;
-use ras_rest_core::{RestResult, RestResponse, RestError};
+use ras_rest_core::{RestError, RestResponse, RestResult};
+use std::collections::HashMap;
+use std::sync::Mutex;
 
 struct UserServiceImpl {
-    // Your service state
+    users: Mutex<HashMap<String, User>>,
+}
+
+impl UserServiceImpl {
+    fn new() -> Self {
+        Self {
+            users: Mutex::new(HashMap::new()),
+        }
+    }
 }
 
 #[async_trait::async_trait]
 impl UserServiceTrait for UserServiceImpl {
     async fn get_users(&self) -> RestResult<UsersResponse> {
-        // Implementation
+        let users: Vec<User> = self
+            .users
+            .lock()
+            .expect("users lock")
+            .values()
+            .cloned()
+            .collect();
+
         Ok(RestResponse::ok(UsersResponse {
-            users: vec![],
-            total: 0,
+            total: users.len(),
+            users,
         }))
     }
 
     async fn get_users_by_id(&self, id: String) -> RestResult<User> {
-        // Implementation
-        users.get(&id)
+        self.users
+            .lock()
+            .expect("users lock")
+            .get(&id)
             .cloned()
-            .map(|user| RestResponse::ok(user))
+            .map(RestResponse::ok)
             .ok_or_else(|| RestError::not_found("User not found"))
     }
 
     async fn post_users(
         &self,
-        user: &AuthenticatedUser,  // Auto-injected for authenticated endpoints
+        _user: &AuthenticatedUser,  // Auto-injected for authenticated endpoints
         request: CreateUserRequest,
     ) -> RestResult<User> {
-        // Implementation with access to authenticated user
-        Ok(RestResponse::created(new_user))
+        let mut users = self.users.lock().expect("users lock");
+        let id = format!("user-{}", users.len() + 1);
+        let user = User {
+            id: id.clone(),
+            name: request.name,
+            email: request.email,
+        };
+        users.insert(id, user.clone());
+
+        Ok(RestResponse::created(user))
     }
-    
-    // ... implement other methods
+
+    async fn put_users_by_id(
+        &self,
+        _user: &AuthenticatedUser,
+        id: String,
+        request: UpdateUserRequest,
+    ) -> RestResult<User> {
+        let mut users = self.users.lock().expect("users lock");
+        let user = users
+            .get_mut(&id)
+            .ok_or_else(|| RestError::not_found("User not found"))?;
+        user.name = request.name;
+        user.email = request.email;
+
+        Ok(RestResponse::ok(user.clone()))
+    }
+
+    async fn delete_users_by_id(
+        &self,
+        _user: &AuthenticatedUser,
+        id: String,
+    ) -> RestResult<()> {
+        let removed = self.users.lock().expect("users lock").remove(&id);
+        if removed.is_some() {
+            Ok(RestResponse::no_content())
+        } else {
+            Err(RestError::not_found("User not found"))
+        }
+    }
 }
 ```
 
@@ -145,19 +223,48 @@ impl UserServiceTrait for UserServiceImpl {
 
 ```rust
 use axum::Router;
+use ras_auth_core::{AuthError, AuthFuture, AuthProvider, AuthenticatedUser};
+use std::collections::HashSet;
+
+struct DemoAuthProvider;
+
+impl AuthProvider for DemoAuthProvider {
+    fn authenticate(&self, token: String) -> AuthFuture<'_> {
+        Box::pin(async move {
+            if token != "admin-token" {
+                return Err(AuthError::InvalidToken);
+            }
+
+            Ok(AuthenticatedUser {
+                user_id: "admin-user".to_string(),
+                permissions: HashSet::from(["admin".to_string()]),
+                metadata: None,
+            })
+        })
+    }
+}
 
 #[tokio::main]
-async fn main() {
-    let service = UserServiceImpl { /* ... */ };
-    let auth_provider = MyAuthProvider { /* ... */ };
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let service = UserServiceImpl::new();
+    let auth_provider = DemoAuthProvider;
 
     let api_router = UserServiceBuilder::new(service)
         .auth_provider(auth_provider)
-        .with_usage_tracker(|headers, user, method, path| async move {
-            // Log API usage
+        .with_usage_tracker(|_headers, user, method, path| {
+            let method = method.to_string();
+            let path = path.to_string();
+            let user_id = user.map(|user| user.user_id.clone());
+            async move {
+                println!("{} {} user={:?}", method, path, user_id);
+            }
         })
-        .with_method_duration_tracker(|method, path, user, duration| async move {
-            // Track performance metrics
+        .with_method_duration_tracker(|method, path, _user, duration| {
+            let method = method.to_string();
+            let path = path.to_string();
+            async move {
+                println!("{} {} took {:?}", method, path, duration);
+            }
         })
         .build();
 
@@ -165,6 +272,7 @@ async fn main() {
     
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
     axum::serve(listener, app).await?;
+    Ok(())
 }
 ```
 
@@ -177,15 +285,18 @@ rest_service!({
     service_name: ServiceName,           // Required: Name for generated types
     base_path: "/api/v1",               // Required: Base URL path
     openapi: true,                      // Optional: Enable OpenAPI generation
-    openapi: { output: "api.json" },    // Optional: Custom OpenAPI output path
-    serve_docs: true,                   // Optional: Enable Swagger UI
-    docs_path: "/docs",                 // Optional: Swagger UI path (default: "/docs")
-    ui_theme: "dark",                   // Optional: Swagger UI theme
+    serve_docs: true,                   // Optional: Enable the built-in API explorer
+    docs_path: "/docs",                 // Optional: API explorer path (default: "/docs")
+    ui_theme: "dark",                   // Optional: retained for compatibility
     endpoints: [
-        // Endpoint definitions
+        GET UNAUTHORIZED users() -> UsersResponse,
+        POST WITH_PERMISSIONS(["admin"]) users(CreateUserRequest) -> User,
     ]
 });
 ```
+
+Use `openapi: { output: "api.json" }` instead of `openapi: true` when you
+want a custom OpenAPI output path.
 
 ### Endpoint Syntax
 
@@ -218,22 +329,45 @@ PUT WITH_PERMISSIONS(["admin"]) posts/{post_id: i32}/comments/{comment_id: i32}(
 The macro integrates with `ras-auth-core` for authentication:
 
 ```rust
-use ras_auth_core::{AuthProvider, AuthenticatedUser, AuthResult};
+use ras_auth_core::{AuthError, AuthFuture, AuthProvider, AuthenticatedUser, AuthResult};
+use std::collections::HashSet;
 
-struct MyAuthProvider;
+struct DemoAuthProvider;
 
-#[async_trait::async_trait]
-impl AuthProvider for MyAuthProvider {
-    async fn authenticate(&self, token: String) -> AuthResult<AuthenticatedUser> {
-        // Validate JWT token and return user info
+impl AuthProvider for DemoAuthProvider {
+    fn authenticate(&self, token: String) -> AuthFuture<'_> {
+        Box::pin(async move {
+            if token != "admin-token" {
+                return Err(AuthError::InvalidToken);
+            }
+
+            Ok(AuthenticatedUser {
+                user_id: "admin-user".to_string(),
+                permissions: HashSet::from(["admin".to_string()]),
+                metadata: None,
+            })
+        })
     }
 
-    async fn check_permissions(
+    fn check_permissions(
         &self,
         user: &AuthenticatedUser,
         required_permissions: &[String],
     ) -> AuthResult<()> {
-        // Check if user has required permissions
+        let missing: Vec<String> = required_permissions
+            .iter()
+            .filter(|permission| !user.permissions.contains(*permission))
+            .cloned()
+            .collect();
+
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(AuthError::InsufficientPermissions {
+                required: required_permissions.to_vec(),
+                has: user.permissions.iter().cloned().collect(),
+            })
+        }
     }
 }
 ```
@@ -342,17 +476,14 @@ pub trait UserServiceTrait: Send + Sync + 'static {
     async fn get_users(&self) -> RestResult<UsersResponse>;
     async fn get_users_by_id(&self, id: String) -> RestResult<User>;
     async fn post_users(&self, user: &AuthenticatedUser, request: CreateUserRequest) -> RestResult<User>;
-    // ... other methods
+    async fn put_users_by_id(&self, user: &AuthenticatedUser, id: String, request: UpdateUserRequest) -> RestResult<User>;
+    async fn delete_users_by_id(&self, user: &AuthenticatedUser, id: String) -> RestResult<()>;
 }
 ```
 
 ### 2. Service Builder
 
 ```rust
-pub struct UserServiceBuilder<T: UserServiceTrait> {
-    // ...
-}
-
 impl<T: UserServiceTrait> UserServiceBuilder<T> {
     pub fn new(service: T) -> Self;
     pub fn auth_provider<A: AuthProvider>(self, provider: A) -> Self;
@@ -365,10 +496,6 @@ impl<T: UserServiceTrait> UserServiceBuilder<T> {
 ### 3. Native Rust Client
 
 ```rust
-pub struct UserServiceClient {
-    // ...
-}
-
 impl UserServiceClient {
     pub fn builder(server_url: impl Into<String>) -> UserServiceClientBuilder;
     pub fn set_bearer_token(&mut self, token: Option<impl Into<String>>);
@@ -389,8 +516,8 @@ The macro generates an OpenAPI 3.0 specification that can be used to generate Ty
 
 ```rust
 // Generated function to create OpenAPI spec
-pub fn generate_userservice_openapi() -> String {
-    // Returns OpenAPI 3.0 JSON specification
+pub fn generate_userservice_openapi() -> serde_json::Value {
+    // Returns the OpenAPI 3.0 JSON document
 }
 
 // Generated function to write OpenAPI spec to file
@@ -419,68 +546,34 @@ fn main() {
 
 This creates `target/openapi/userservice.json` during compilation.
 
-### 2. Set Up TypeScript Client Generation
+### 2. TypeScript Usage
 
-Install dependencies:
-
-```bash
-cd typescript-example
-npm install @hey-api/openapi-ts @hey-api/client-fetch --save-dev
-```
-
-Create `openapi-ts.config.ts`:
+Generate a TypeScript fetch client from the OpenAPI document with your preferred
+OpenAPI generator. The examples below assume the generated client exports
+methods and schemas from `./generated`.
 
 ```typescript
-import { defineConfig } from '@hey-api/openapi-ts';
+import * as api from './generated';
+import type { CreateUserRequest } from './generated';
 
-export default defineConfig({
-  client: '@hey-api/client-fetch',
-  input: '../backend/target/openapi/userservice.json',
-  output: {
-    path: './src/generated',
-    format: 'prettier',
-    lint: 'eslint',
-  },
-});
-```
-
-Update your `package.json`:
-
-```json
-{
-  "scripts": {
-    "generate": "openapi-ts",
-    "dev": "npm run generate && vite",
-    "build": "npm run generate && vite build"
-  }
-}
-```
-
-### 3. TypeScript Usage
-
-```typescript
-import * as api from './generated/services.gen';
-import type { User, CreateUserRequest, UsersResponse } from './generated/types.gen';
-
-// Configuration object for all requests
-const config = {
+// Shared configuration object for all requests
+const baseConfig = {
   baseUrl: 'http://localhost:3000/api/v1',
   headers: {
-    Authorization: 'Bearer jwt-token'
+    Authorization: 'Bearer admin-token'
   }
 };
 
 // Make API calls with named methods
-const response = await api.getUsers(config);
+const response = await api.getUsers(baseConfig);
 if (response.data) {
   const users = response.data.users;
 }
 
 // GET with path parameter
-const userResponse = await api.getUsersId({
-  ...config,
-  path: { id: '123' }
-});
+const userResponse = await api.getUsersId(
+  Object.assign({}, baseConfig, { path: { id: '123' } })
+);
 
 // POST with typed body
 const newUser: CreateUserRequest = {
@@ -488,24 +581,22 @@ const newUser: CreateUserRequest = {
   email: 'john@example.com'
 };
 
-const created = await api.postUsers({
-  ...config,
-  body: newUser
-});
+const created = await api.postUsers(
+  Object.assign({}, baseConfig, { body: newUser })
+);
 
 // DELETE request
-await api.deleteUsersId({
-  ...config,
-  path: { id: '123' }
-});
+await api.deleteUsersId(
+  Object.assign({}, baseConfig, { path: { id: '123' } })
+);
 ```
 
-### 4. Benefits Over WASM
+### Why Use An OpenAPI-Generated Fetch Client
 
-- **Smaller Bundle Size**: ~10KB vs ~200KB+ for WASM
-- **Better Developer Experience**: Standard TypeScript/JavaScript
-- **Universal Compatibility**: Works in Node.js, Deno, Bun, and browsers
-- **Better Tree-shaking**: Standard JavaScript optimization applies
+- **Small browser surface**: Standard fetch client code instead of a full app scaffold
+- **Better developer experience**: Standard TypeScript/JavaScript
+- **Runtime flexibility**: Fetch-based clients can be used in common JavaScript runtimes and browsers
+- **Tree-shaking friendly**: Standard JavaScript optimization applies
 - **Easier Debugging**: Standard network requests in DevTools
 
 ## OpenAPI Documentation
@@ -516,27 +607,31 @@ await api.deleteUsersId({
 rest_service!({
     service_name: UserService,
     base_path: "/api/v1",
-    openapi: true,                    // Generate to target/openapi/UserService.json
-    openapi: { output: "api.json" },  // Custom output path
-    serve_docs: true,                 // Enable Swagger UI
-    docs_path: "/docs",               // Swagger UI path
-    // ...
+    openapi: true,                    // Generate to target/openapi/userservice.json
+    serve_docs: true,                 // Enable the built-in API explorer
+    docs_path: "/docs",               // API explorer path
+    endpoints: [
+        GET UNAUTHORIZED users() -> UsersResponse,
+        POST WITH_PERMISSIONS(["admin"]) users(CreateUserRequest) -> User,
+    ]
 });
 ```
 
+Use `openapi: { output: "api.json" }` instead when you need a custom output path.
+
 ### Generated OpenAPI Features
 
-- Full endpoint documentation with request/response schemas
+- Endpoint documentation with request/response schemas
 - Authentication requirements via `x-authentication` extension
 - Permission requirements via `x-permissions` extension
 - JSON Schema generation for all types
-- Swagger UI integration
+- Built-in API explorer integration
 
 ### Accessing OpenAPI Documentation
 
-1. **Swagger UI**: Navigate to `http://localhost:3000/api/v1/docs`
-2. **OpenAPI JSON**: Available at `http://localhost:3000/api/v1/openapi.json`
-3. **Generated File**: Check `target/openapi/ServiceName.json` or custom path
+1. **API explorer**: Navigate to `http://localhost:3000/api/v1/docs`
+2. **OpenAPI JSON**: Available at `http://localhost:3000/api/v1/docs/openapi.json`
+3. **Generated File**: Check `target/openapi/<lowercase-service-name>.json` or custom path
 
 ## Error Handling
 
@@ -548,23 +643,29 @@ The macro uses `RestResult<T>` for all endpoints, allowing explicit HTTP status 
 use ras_rest_core::{RestResult, RestResponse, RestError};
 
 async fn get_user(&self, id: String) -> RestResult<User> {
-    // Success with 200 OK
+    if id.trim().is_empty() {
+        return Err(RestError::bad_request("Invalid user ID"));
+    }
+
+    let user = self
+        .users
+        .lock()
+        .expect("users lock")
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| RestError::not_found("User not found"))?;
+
     Ok(RestResponse::ok(user))
-    
-    // Success with 201 Created
+}
+
+async fn create_user(&self, request: CreateUserRequest) -> RestResult<User> {
+    let user = User {
+        id: "user-1".to_string(),
+        name: request.name,
+        email: request.email,
+    };
+
     Ok(RestResponse::created(user))
-    
-    // Success with custom status
-    Ok(RestResponse::with_status(202, user))
-    
-    // Error responses
-    Err(RestError::not_found("User not found"))
-    Err(RestError::bad_request("Invalid user ID"))
-    Err(RestError::unauthorized("Invalid token"))
-    Err(RestError::forbidden("Insufficient permissions"))
-    
-    // Error with internal details (logged but not sent to client)
-    Err(RestError::with_internal(500, "Database error", db_error))
 }
 ```
 
@@ -586,9 +687,13 @@ try {
 Track API usage for analytics or rate limiting:
 
 ```rust
-.with_usage_tracker(|headers, user, method, path| async move {
-    println!("API call: {} {} by {:?}", method, path, user);
-    // Log to database, increment counters, etc.
+.with_usage_tracker(|_headers, user, method, path| {
+    let method = method.to_string();
+    let path = path.to_string();
+    let user_id = user.map(|user| user.user_id.clone());
+    async move {
+        println!("API call: {} {} by {:?}", method, path, user_id);
+    }
 })
 ```
 
@@ -597,9 +702,12 @@ Track API usage for analytics or rate limiting:
 Track endpoint execution time:
 
 ```rust
-.with_method_duration_tracker(|method, path, user, duration| async move {
-    println!("{} {} took {:?}", method, path, duration);
-    // Send metrics to monitoring system
+.with_method_duration_tracker(|method, path, _user, duration| {
+    let method = method.to_string();
+    let path = path.to_string();
+    async move {
+        println!("{} {} took {:?}", method, path, duration);
+    }
 })
 ```
 
@@ -625,9 +733,10 @@ OR logic between groups, AND logic within:
 WITH_PERMISSIONS(["admin"] | ["moderator", "editor"] | ["viewer", "commenter", "subscriber"])
 ```
 
-## Complete Example
+## Task API Example
 
-Here's a complete example of a task management API:
+This example shows a task management API definition with public, authenticated,
+and permission-gated routes:
 
 ```rust
 use ras_rest_macro::rest_service;
@@ -692,34 +801,36 @@ rest_service!({
 
 // TypeScript usage
 /*
-import * as api from './generated/services.gen';
+import * as api from './generated';
 
-const config = {
+const userToken = 'user-token';
+const baseConfig = {
   baseUrl: 'http://localhost:3000/api/v1',
   headers: { Authorization: `Bearer ${userToken}` }
 };
 
 // Create a task
-const newTask = await api.postTasks({
-  ...config,
-  body: {
-    title: 'Complete documentation',
-    description: 'Write comprehensive REST macro docs'
-  }
-});
+const newTask = await api.postTasks(
+  Object.assign({}, baseConfig, {
+    body: {
+      title: 'Complete documentation',
+      description: 'Document REST endpoints'
+    }
+  })
+);
 
 // Update task
-await api.putTasksId({
-  ...config,
-  path: { id: newTask.data.id },
-  body: { completed: true }
-});
+await api.putTasksId(
+  Object.assign({}, baseConfig, {
+    path: { id: newTask.data.id },
+    body: { completed: true }
+  })
+);
 
 // Get user's tasks
-const myTasks = await api.getUsersUserIdTasks({
-  ...config,
-  path: { user_id: userId }
-});
+const myTasks = await api.getUsersUserIdTasks(
+  Object.assign({}, baseConfig, { path: { user_id: userId } })
+);
 */
 ```
 
@@ -727,14 +838,14 @@ const myTasks = await api.getUsersUserIdTasks({
 
 1. **Type Safety**: Always use strongly-typed request/response objects
 2. **Error Handling**: Use appropriate HTTP status codes via `RestError`
-3. **Authentication**: Implement proper JWT validation in your `AuthProvider`
+3. **Authentication**: Implement proper bearer token validation in your `AuthProvider`
 4. **Documentation**: Enable OpenAPI generation for API documentation
 5. **Monitoring**: Use usage and duration trackers for observability
 6. **CORS**: Configure CORS appropriately for frontend clients
 7. **Validation**: Validate request data in your service implementation
 8. **Logging**: Log internal errors while keeping client messages generic
-9. **Client Generation**: Use build.rs to generate OpenAPI spec at compile time
-10. **TypeScript Setup**: Configure openapi-ts to generate clients from OpenAPI spec
+9. **OpenAPI Output**: Use `build.rs` when you want to emit the OpenAPI spec at compile time
+10. **Client Generation**: Generate clients from the OpenAPI document when you need frontend bindings
 
 ## Troubleshooting
 
@@ -753,19 +864,27 @@ Control code generation with feature flags:
 ```toml
 [features]
 default = ["server"]
-server = []      # Generate server-side code
-client = []      # Generate native Rust client
+server = [
+    "ras-rest-macro/server",
+    "dep:ras-rest-core",
+    "dep:ras-auth-core",
+    "dep:async-trait",
+    "dep:axum",
+    "dep:axum-extra",
+    "dep:tokio",
+]
+client = ["ras-rest-macro/client", "dep:reqwest"]
 ```
 
 ## Conclusion
 
-The `ras-rest-macro` provides a comprehensive solution for building type-safe REST APIs in Rust with automatic client generation. By defining your API once, you get:
+The `ras-rest-macro` provides a typed workflow for building REST APIs in Rust with automatic client generation. By defining your API once, you get:
 
 - Type-safe server implementation
 - Native Rust client
 - OpenAPI specification for TypeScript client generation
-- Full type safety in TypeScript with standard JavaScript
+- Typed TypeScript clients when generated from the OpenAPI document
 - Built-in authentication and authorization
 - Performance monitoring and usage tracking
 
-This approach eliminates the need for manual client maintenance and ensures your API clients are always in sync with your server implementation. The shift from WASM to OpenAPI-based TypeScript generation provides significant benefits in bundle size (95% reduction), developer experience, and debugging capabilities.
+This approach avoids hand-maintained client DTOs and keeps browser clients aligned with the server contract. OpenAPI-based TypeScript generation also keeps the browser path easy to inspect and debug with standard network tooling.

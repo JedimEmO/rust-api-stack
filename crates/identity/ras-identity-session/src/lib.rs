@@ -1,11 +1,14 @@
 //! Session management with JWT token generation and validation.
 
 use async_trait::async_trait;
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{Duration, Utc};
-use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
+use hmac::{Hmac, Mac};
 use ras_auth_core::{AuthError, AuthFuture, AuthProvider, AuthenticatedUser};
 use ras_identity_core::{IdentityError, IdentityProvider, UserPermissions};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use sha2::{Sha256, Sha384, Sha512};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use thiserror::Error;
@@ -15,7 +18,10 @@ use uuid::Uuid;
 #[derive(Debug, Error)]
 pub enum SessionError {
     #[error("JWT error: {0}")]
-    JwtError(#[from] jsonwebtoken::errors::Error),
+    JwtError(String),
+
+    #[error("JWT token expired")]
+    TokenExpired,
 
     #[error("Identity error: {0}")]
     IdentityError(#[from] IdentityError),
@@ -43,13 +49,34 @@ pub struct JwtClaims {
     pub metadata: Option<serde_json::Value>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum JwtAlgorithm {
+    #[serde(rename = "HS256")]
+    HS256,
+    #[serde(rename = "HS384")]
+    HS384,
+    #[serde(rename = "HS512")]
+    HS512,
+}
+
+impl JwtAlgorithm {
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "HS256" => Some(Self::HS256),
+            "HS384" => Some(Self::HS384),
+            "HS512" => Some(Self::HS512),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
     pub jwt_secret: String,
     pub jwt_ttl: Duration,
     pub refresh_enabled: bool,
     pub enforce_active_sessions: bool,
-    pub algorithm: Algorithm,
+    pub algorithm: JwtAlgorithm,
 }
 
 impl SessionConfig {
@@ -59,7 +86,7 @@ impl SessionConfig {
             jwt_ttl: Duration::hours(24),
             refresh_enabled: true,
             enforce_active_sessions: true,
-            algorithm: Algorithm::HS256,
+            algorithm: JwtAlgorithm::HS256,
         };
         config.validate()?;
         Ok(config)
@@ -104,6 +131,131 @@ fn validate_jwt_secret(secret: &str) -> Result<(), SessionError> {
     }
 
     Ok(())
+}
+
+#[derive(Serialize)]
+struct JwtHeader {
+    typ: &'static str,
+    alg: JwtAlgorithm,
+}
+
+#[derive(Deserialize)]
+struct DecodedJwtHeader {
+    alg: JwtAlgorithm,
+}
+
+fn jwt_error(message: impl Into<String>) -> SessionError {
+    SessionError::JwtError(message.into())
+}
+
+fn encode_jwt<T: Serialize>(
+    claims: &T,
+    secret: &str,
+    algorithm: JwtAlgorithm,
+) -> Result<String, SessionError> {
+    let header = JwtHeader {
+        typ: "JWT",
+        alg: algorithm,
+    };
+    let header = serde_json::to_vec(&header)
+        .map_err(|err| jwt_error(format!("failed to encode JWT header: {err}")))?;
+    let claims = serde_json::to_vec(claims)
+        .map_err(|err| jwt_error(format!("failed to encode JWT claims: {err}")))?;
+
+    let signing_input = format!(
+        "{}.{}",
+        URL_SAFE_NO_PAD.encode(header),
+        URL_SAFE_NO_PAD.encode(claims)
+    );
+    let signature = sign_jwt(&signing_input, secret.as_bytes(), algorithm)?;
+
+    Ok(format!(
+        "{}.{}",
+        signing_input,
+        URL_SAFE_NO_PAD.encode(signature)
+    ))
+}
+
+fn decode_jwt<T: DeserializeOwned>(
+    token: &str,
+    secret: &str,
+    expected_algorithm: JwtAlgorithm,
+) -> Result<T, SessionError> {
+    let mut parts = token.split('.');
+    let encoded_header = parts
+        .next()
+        .ok_or_else(|| jwt_error("missing JWT header"))?;
+    let encoded_claims = parts
+        .next()
+        .ok_or_else(|| jwt_error("missing JWT claims"))?;
+    let encoded_signature = parts
+        .next()
+        .ok_or_else(|| jwt_error("missing JWT signature"))?;
+
+    if parts.next().is_some() {
+        return Err(jwt_error("JWT has too many segments"));
+    }
+
+    let header = URL_SAFE_NO_PAD
+        .decode(encoded_header)
+        .map_err(|err| jwt_error(format!("invalid JWT header encoding: {err}")))?;
+    let header: DecodedJwtHeader = serde_json::from_slice(&header)
+        .map_err(|err| jwt_error(format!("invalid JWT header: {err}")))?;
+
+    if header.alg != expected_algorithm {
+        return Err(jwt_error("unexpected JWT algorithm"));
+    }
+
+    let signature = URL_SAFE_NO_PAD
+        .decode(encoded_signature)
+        .map_err(|err| jwt_error(format!("invalid JWT signature encoding: {err}")))?;
+    let signing_input = format!("{encoded_header}.{encoded_claims}");
+    let expected_signature = sign_jwt(&signing_input, secret.as_bytes(), expected_algorithm)?;
+
+    if !signatures_match(&expected_signature, &signature) {
+        return Err(jwt_error("invalid JWT signature"));
+    }
+
+    let claims = URL_SAFE_NO_PAD
+        .decode(encoded_claims)
+        .map_err(|err| jwt_error(format!("invalid JWT claims encoding: {err}")))?;
+    serde_json::from_slice(&claims).map_err(|err| jwt_error(format!("invalid JWT claims: {err}")))
+}
+
+fn sign_jwt(
+    signing_input: &str,
+    secret: &[u8],
+    algorithm: JwtAlgorithm,
+) -> Result<Vec<u8>, SessionError> {
+    match algorithm {
+        JwtAlgorithm::HS256 => {
+            let mut mac = Hmac::<Sha256>::new_from_slice(secret)
+                .map_err(|err| jwt_error(format!("invalid JWT secret: {err}")))?;
+            mac.update(signing_input.as_bytes());
+            Ok(mac.finalize().into_bytes().to_vec())
+        }
+        JwtAlgorithm::HS384 => {
+            let mut mac = Hmac::<Sha384>::new_from_slice(secret)
+                .map_err(|err| jwt_error(format!("invalid JWT secret: {err}")))?;
+            mac.update(signing_input.as_bytes());
+            Ok(mac.finalize().into_bytes().to_vec())
+        }
+        JwtAlgorithm::HS512 => {
+            let mut mac = Hmac::<Sha512>::new_from_slice(secret)
+                .map_err(|err| jwt_error(format!("invalid JWT secret: {err}")))?;
+            mac.update(signing_input.as_bytes());
+            Ok(mac.finalize().into_bytes().to_vec())
+        }
+    }
+}
+
+fn signatures_match(expected: &[u8], actual: &[u8]) -> bool {
+    let mut diff = expected.len() ^ actual.len();
+    for i in 0..expected.len().max(actual.len()) {
+        diff |= expected.get(i).copied().unwrap_or_default() as usize
+            ^ actual.get(i).copied().unwrap_or_default() as usize;
+    }
+    diff == 0
 }
 
 pub struct SessionService {
@@ -180,11 +332,7 @@ impl SessionService {
             sessions.insert(jti.clone(), claims.clone());
         }
 
-        let token = encode(
-            &Header::new(self.config.algorithm),
-            &claims,
-            &EncodingKey::from_secret(self.config.jwt_secret.as_bytes()),
-        )?;
+        let token = encode_jwt(&claims, &self.config.jwt_secret, self.config.algorithm)?;
 
         Ok(token)
     }
@@ -194,24 +342,21 @@ impl SessionService {
             self.cleanup_expired_sessions().await;
         }
 
-        let mut validation = Validation::new(self.config.algorithm);
-        validation.set_required_spec_claims(&["exp"]);
-        validation.validate_exp = true;
+        let claims =
+            decode_jwt::<JwtClaims>(token, &self.config.jwt_secret, self.config.algorithm)?;
 
-        let token_data = decode::<JwtClaims>(
-            token,
-            &DecodingKey::from_secret(self.config.jwt_secret.as_bytes()),
-            &validation,
-        )?;
+        if claims.exp <= Utc::now().timestamp() {
+            return Err(SessionError::TokenExpired);
+        }
 
         if self.config.enforce_active_sessions {
             let sessions = self.active_sessions.read().await;
-            if !sessions.contains_key(&token_data.claims.jti) {
+            if !sessions.contains_key(&claims.jti) {
                 return Err(SessionError::SessionNotFound);
             }
         }
 
-        Ok(token_data.claims)
+        Ok(claims)
     }
 
     pub async fn end_session(&self, jti: &str) -> Option<JwtClaims> {
@@ -248,13 +393,7 @@ impl AuthProvider for JwtAuthProvider {
                     .verify_session(&token)
                     .await
                     .map_err(|e| match e {
-                        SessionError::JwtError(jwt_err) => {
-                            if jwt_err.to_string().contains("expired") {
-                                AuthError::TokenExpired
-                            } else {
-                                AuthError::InvalidToken
-                            }
-                        }
+                        SessionError::TokenExpired => AuthError::TokenExpired,
                         _ => AuthError::InvalidToken,
                     })?;
 
@@ -274,6 +413,20 @@ mod tests {
     use ras_identity_local::LocalUserProvider;
 
     const TEST_SECRET: &str = "test-secret-that-is-long-enough-for-hs256";
+
+    async fn local_provider_with_user(username: &str, password: &str) -> LocalUserProvider {
+        let provider = LocalUserProvider::new();
+        provider
+            .add_user(
+                username.to_string(),
+                password.to_string(),
+                Some(format!("{username}@example.com")),
+                Some(format!("{username} User")),
+            )
+            .await
+            .unwrap();
+        provider
+    }
 
     #[tokio::test]
     async fn test_session_lifecycle() {
@@ -395,8 +548,7 @@ mod tests {
         let config = SessionConfig::new(TEST_SECRET).unwrap();
         let service = SessionService::new(config).unwrap();
 
-        let token = encode(
-            &Header::new(Algorithm::HS256),
+        let token = encode_jwt(
             &serde_json::json!({
                 "sub": "user",
                 "exp": "not-a-number",
@@ -405,10 +557,106 @@ mod tests {
                 "provider_id": "local",
                 "permissions": [],
             }),
-            &EncodingKey::from_secret(TEST_SECRET.as_bytes()),
+            TEST_SECRET,
+            JwtAlgorithm::HS256,
         )
         .unwrap();
 
         assert!(service.verify_session(&token).await.is_err());
+    }
+
+    #[test]
+    fn session_config_rejects_non_positive_ttl() {
+        let mut config = SessionConfig::new(TEST_SECRET).unwrap();
+        config.jwt_ttl = Duration::zero();
+
+        let error = config.validate().expect_err("zero ttl should fail");
+
+        assert!(
+            matches!(error, SessionError::InvalidConfig(message) if message == "jwt_ttl must be positive")
+        );
+    }
+
+    #[tokio::test]
+    async fn begin_session_reports_unknown_identity_provider() {
+        let config = SessionConfig::new(TEST_SECRET).unwrap();
+        let service = SessionService::new(config).unwrap();
+
+        let error = service
+            .begin_session("missing", serde_json::json!({}))
+            .await
+            .expect_err("unknown provider should fail");
+
+        assert!(
+            matches!(error, SessionError::IdentityError(IdentityError::ProviderNotFound(provider)) if provider == "missing")
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_session_can_skip_active_session_store_when_configured() {
+        let mut config = SessionConfig::new(TEST_SECRET).unwrap();
+        config.enforce_active_sessions = false;
+        let service = SessionService::new(config).unwrap();
+        service
+            .register_provider(Box::new(
+                local_provider_with_user("stateless", "password123").await,
+            ))
+            .await;
+
+        let token = service
+            .begin_session(
+                "local",
+                serde_json::json!({
+                    "username": "stateless",
+                    "password": "password123"
+                }),
+            )
+            .await
+            .unwrap();
+
+        let claims = service.verify_session(&token).await.unwrap();
+        assert_eq!(claims.sub, "stateless");
+        assert!(
+            service
+                .active_sessions
+                .read()
+                .await
+                .get(&claims.jti)
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn jwt_auth_provider_maps_verified_claims_to_authenticated_user() {
+        let config = SessionConfig::new(TEST_SECRET).unwrap();
+        let permissions = Arc::new(StaticPermissions::new(vec!["chat:read".to_string()]));
+        let service = Arc::new(
+            SessionService::new(config)
+                .unwrap()
+                .with_permissions(permissions),
+        );
+        service
+            .register_provider(Box::new(
+                local_provider_with_user("alice", "password123").await,
+            ))
+            .await;
+
+        let token = service
+            .begin_session(
+                "local",
+                serde_json::json!({
+                    "username": "alice",
+                    "password": "password123"
+                }),
+            )
+            .await
+            .unwrap();
+        let auth_provider = JwtAuthProvider::new(service);
+
+        let user = auth_provider.authenticate(token).await.unwrap();
+
+        assert_eq!(user.user_id, "alice");
+        assert!(user.permissions.contains("chat:read"));
+        assert!(user.metadata.is_none());
     }
 }

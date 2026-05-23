@@ -8,16 +8,16 @@ Cross-platform WebSocket client for bidirectional JSON-RPC communication that wo
 - **JWT Authentication**: Support for JWT tokens via headers or connection parameters
 - **Bidirectional Communication**: Send JSON-RPC requests and receive responses, plus handle server notifications
 - **Subscription Management**: Subscribe to topics and receive targeted notifications
-- **Connection Lifecycle**: Automatic reconnection with configurable backoff strategies
+- **Connection Lifecycle**: Explicit connect/disconnect, connection status, and lifecycle events
 - **Builder Pattern**: Ergonomic client configuration
 - **Type Safety**: Leverages the type system for safe JSON-RPC communication
 
 ## Platform Support
 
 ### Native (x86_64, ARM, etc.)
-- Uses `tokio-tungstenite` for high-performance WebSocket communication
+- Uses `tokio-tungstenite` for async WebSocket communication
 - Full async/await support with Tokio runtime
-- Supports all standard WebSocket features
+- Supports the WebSocket features used by the RAS bidirectional client runtime
 
 ### WASM (Browser)
 - Uses `web-sys` WebSocket API for browser compatibility
@@ -28,30 +28,38 @@ Cross-platform WebSocket client for bidirectional JSON-RPC communication that wo
 
 Add to your `Cargo.toml`:
 
+For native clients:
+
 ```toml
 [dependencies]
-ras-jsonrpc-bidirectional-client = { path = "../path/to/crate" }
+ras-jsonrpc-bidirectional-client = "0.1.0"
 
-# For native targets
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1.0", features = ["full"] }
+```
 
-# For WASM targets  
+For browser WASM clients:
+
+```toml
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen-futures = "0.4"
+ras-jsonrpc-bidirectional-client = {
+    version = "0.1.0",
+    default-features = false,
+    features = ["wasm"],
+}
 ```
 
 ### Basic Usage
 
 ```rust
-use ras_jsonrpc_bidirectional_client::{Client, ClientBuilder};
+use ras_jsonrpc_bidirectional_client::ClientBuilder;
 use serde_json::json;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create and connect client
     let client = ClientBuilder::new("ws://localhost:8080/ws")
-        .with_jwt_token("your_jwt_token".to_string())
+        .with_jwt_token("demo-token".to_string())
         .with_auto_connect(true)
         .build()
         .await?;
@@ -86,7 +94,7 @@ client.subscribe("chat_room_123", Arc::new(|method, params| {
 ### Connection Events
 
 ```rust
-// Handle connection lifecycle events
+// Handle connection lifecycle events emitted by the client
 client.on_connection_event("main", Arc::new(|event| {
     match event {
         ConnectionEvent::Connected { connection_id } => {
@@ -94,9 +102,6 @@ client.on_connection_event("main", Arc::new(|event| {
         }
         ConnectionEvent::Disconnected { reason } => {
             println!("Disconnected: {:?}", reason);
-        }
-        ConnectionEvent::Reconnecting { attempt } => {
-            println!("Reconnecting, attempt: {}", attempt);
         }
         _ => {}
     }
@@ -106,23 +111,15 @@ client.on_connection_event("main", Arc::new(|event| {
 ### Advanced Configuration
 
 ```rust
-use ras_jsonrpc_bidirectional_client::{ClientBuilder, ReconnectConfig};
+use ras_jsonrpc_bidirectional_client::ClientBuilder;
 use std::time::Duration;
 
-let reconnect_config = ReconnectConfig::builder()
-    .max_attempts(5)
-    .initial_delay(Duration::from_secs(1))
-    .max_delay(Duration::from_secs(60))
-    .backoff_multiplier(2.0)
-    .build();
-
 let client = ClientBuilder::new("wss://api.example.com/ws")
-    .with_jwt_token("your_token".to_string())
+    .with_jwt_token("demo-token".to_string())
     .with_jwt_in_header(true)
     .with_header("User-Agent", "MyApp/1.0")
     .with_request_timeout(Duration::from_secs(30))
     .with_connection_timeout(Duration::from_secs(10))
-    .with_reconnect_config(reconnect_config)
     .with_heartbeat_interval(Some(Duration::from_secs(30)))
     .build()
     .await?;
@@ -135,7 +132,7 @@ The client supports multiple authentication methods:
 ### JWT in Authorization Header
 ```rust
 let client = ClientBuilder::new("ws://localhost:8080/ws")
-    .with_jwt_token("your_jwt_token".to_string())
+    .with_jwt_token("demo-token".to_string())
     .with_jwt_in_header(true)  // Default
     .build()
     .await?;
@@ -144,7 +141,7 @@ let client = ClientBuilder::new("ws://localhost:8080/ws")
 ### JWT as Connection Parameter
 ```rust
 let client = ClientBuilder::new("ws://localhost:8080/ws")
-    .with_jwt_token("your_jwt_token".to_string())
+    .with_jwt_token("demo-token".to_string())
     .with_jwt_in_header(false)
     .build()
     .await?;
@@ -153,7 +150,7 @@ let client = ClientBuilder::new("ws://localhost:8080/ws")
 ### Custom Headers
 ```rust
 let client = ClientBuilder::new("ws://localhost:8080/ws")
-    .with_header("X-API-Key", "your_api_key")
+    .with_header("X-API-Key", "demo-api-key")
     .with_header("X-Client-Version", "1.0.0")
     .build()
     .await?;
@@ -161,7 +158,7 @@ let client = ClientBuilder::new("ws://localhost:8080/ws")
 
 ## Error Handling
 
-The client provides comprehensive error handling for various scenarios:
+The client exposes typed errors for connection, authentication, timeout, and protocol failures:
 
 ```rust
 use ras_jsonrpc_bidirectional_client::ClientError;
@@ -203,13 +200,15 @@ if client.is_connected().await {
 client.disconnect().await?;
 ```
 
-### Automatic Reconnection
-The client supports automatic reconnection with configurable strategies:
+### Reconnecting After Failure
+The client does not spawn a background reconnect loop. If a request returns
+`ClientError::NotConnected` or `client.state().await` is `ClientState::Failed`,
+run your own retry loop and call `connect()` again. `ReconnectConfig` provides
+backoff and maximum-attempt helpers for callers that want a shared retry policy:
 
 - **Exponential backoff**: Delays increase exponentially between attempts
 - **Jitter**: Random variation to prevent thundering herd
 - **Maximum attempts**: Limit reconnection attempts
-- **Connection events**: Get notified of reconnection attempts
 
 ## WASM Considerations
 
@@ -222,28 +221,47 @@ When using in WASM environments:
 
 ```toml
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-ras-jsonrpc-bidirectional-client = { path = "...", features = ["wasm"] }
+ras-jsonrpc-bidirectional-client = {
+    version = "0.1.0",
+    default-features = false,
+    features = ["wasm"],
+}
 ```
 
 ## Testing
 
-The crate includes comprehensive tests for both platforms:
+The native implementation is covered by the regular Rust test suite. The WASM
+feature can be checked with the `wasm32-unknown-unknown` target:
 
 ```bash
 # Test native implementation
-cargo test
+cargo test -p ras-jsonrpc-bidirectional-client --locked
 
-# Test WASM implementation (requires wasm-pack)
-wasm-pack test --node
+# Check WASM feature build
+cargo check -p ras-jsonrpc-bidirectional-client --locked \
+  --target wasm32-unknown-unknown \
+  --no-default-features \
+  --features wasm
 
-# Test specific features
-cargo test --features native
-cargo test --features wasm
+# Check native feature build explicitly
+cargo check -p ras-jsonrpc-bidirectional-client --locked \
+  --features native
+```
+
+## Checks
+
+```bash
+cargo test -p ras-jsonrpc-bidirectional-client --locked
+cargo clippy -p ras-jsonrpc-bidirectional-client --all-targets --features native --locked -- -D warnings
+cargo check -p ras-jsonrpc-bidirectional-client --locked \
+  --target wasm32-unknown-unknown \
+  --no-default-features \
+  --features wasm
 ```
 
 ## Examples
 
-See the `examples/` directory for complete working examples:
+See the `examples/` directory for usage examples:
 
 - **Basic client**: Simple request/response
 - **Subscription example**: Topic-based notifications
@@ -253,4 +271,5 @@ See the `examples/` directory for complete working examples:
 
 ## License
 
-Licensed under either of Apache License, Version 2.0 or MIT license at your option.
+This project is licensed under either MIT or Apache-2.0. See
+[LICENSE-MIT](../../../../LICENSE-MIT) and [LICENSE-APACHE](../../../../LICENSE-APACHE).

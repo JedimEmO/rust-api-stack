@@ -258,3 +258,114 @@ jsonrpc_bidirectional_service!({
     server_to_client_calls: [
     ]
 });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn cat_avatar_serializes_with_snake_case_wire_values() {
+        let avatar = CatAvatar {
+            breed: CatBreed::MaineCoon,
+            color: CatColor::Blue,
+            expression: CatExpression::Playful,
+        };
+
+        assert_eq!(
+            serde_json::to_value(avatar).unwrap(),
+            json!({
+                "breed": "maine_coon",
+                "color": "blue",
+                "expression": "playful"
+            })
+        );
+    }
+
+    #[test]
+    fn announcement_level_serializes_with_lowercase_wire_values() {
+        let request = BroadcastAnnouncementRequest {
+            message: "maintenance window".to_string(),
+            level: AnnouncementLevel::Warning,
+        };
+
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            json!({
+                "message": "maintenance window",
+                "level": "warning"
+            })
+        );
+    }
+
+    #[test]
+    fn user_profile_serializes_optional_display_name_and_avatar() {
+        let profile = UserProfile {
+            username: "alice".to_string(),
+            display_name: None,
+            avatar: CatAvatar {
+                breed: CatBreed::Tuxedo,
+                color: CatColor::Black,
+                expression: CatExpression::Curious,
+            },
+            created_at: "2026-05-23T12:00:00Z".to_string(),
+            last_seen: "2026-05-23T12:30:00Z".to_string(),
+        };
+
+        assert_eq!(
+            serde_json::to_value(profile).unwrap(),
+            json!({
+                "username": "alice",
+                "display_name": null,
+                "avatar": {
+                    "breed": "tuxedo",
+                    "color": "black",
+                    "expression": "curious"
+                },
+                "created_at": "2026-05-23T12:00:00Z",
+                "last_seen": "2026-05-23T12:30:00Z"
+            })
+        );
+    }
+
+    #[test]
+    fn join_room_response_preserves_existing_user_order() {
+        let response = JoinRoomResponse {
+            room_id: "general".to_string(),
+            user_count: 2,
+            existing_users: vec!["alice".to_string(), "bob".to_string()],
+        };
+
+        assert_eq!(
+            serde_json::to_value(response).unwrap(),
+            json!({
+                "room_id": "general",
+                "user_count": 2,
+                "existing_users": ["alice", "bob"]
+            })
+        );
+    }
+
+    #[cfg(feature = "client")]
+    #[test]
+    fn generated_notification_enum_preserves_typed_payload_shape() {
+        let notification = ChatServiceServerToClientNotification::SystemAnnouncement(
+            SystemAnnouncementNotification {
+                message: "deployed".to_string(),
+                level: AnnouncementLevel::Info,
+                timestamp: "2026-05-23T12:00:00Z".to_string(),
+            },
+        );
+
+        assert_eq!(
+            serde_json::to_value(notification).unwrap(),
+            json!({
+                "SystemAnnouncement": {
+                    "message": "deployed",
+                    "level": "info",
+                    "timestamp": "2026-05-23T12:00:00Z"
+                }
+            })
+        );
+    }
+}

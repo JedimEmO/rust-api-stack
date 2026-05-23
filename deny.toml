@@ -1,53 +1,19 @@
-# deny.toml - Cargo deny configuration for supply chain security
-# https://embarkstudios.github.io/cargo-deny/
-
-# This section is considered when running `cargo deny check advisories`
 [advisories]
-# The path where the advisory database is cloned/fetched into
 db-path = "~/.cargo/advisory-db"
-# The url(s) of the advisory databases to use
 db-urls = ["https://github.com/rustsec/advisory-db"]
-# The lint level for security vulnerabilities
-vulnerability = "deny"
-# The lint level for unmaintained crates
-unmaintained = "warn"
-# The lint level for crates with security notices
-notice = "warn"
-# The lint level for crates that have been yanked from their source registry
+unmaintained = "workspace"
 yanked = "deny"
-# A list of advisory IDs to ignore
-ignore = [
-    # Example: "RUSTSEC-2020-0001",
-]
+ignore = []
 
-# This section is considered when running `cargo deny check bans`
 [bans]
-# Lint level for when multiple versions of the same crate are detected
 multiple-versions = "warn"
-# Lint level for when a crate marked as 'deny' is detected
-deny = [
-    # Example: { name = "openssl" }, # Use rustls instead
-]
-# Skip certain crates when checking for duplicates
-skip = [
-    # Example: { name = "winapi" }, # Commonly has multiple versions
-]
-# Similarly named crates that are allowed to coexist
-skip-tree = [
-    # Example: { name = "windows-sys", version = "0.42" },
-]
-# Features to disable to avoid certain dependencies
+deny = []
+skip = []
+skip-tree = []
 features = []
-# Allow specific duplicate versions
-allow = [
-    # Example: { name = "anyhow", version = "1.0" },
-]
+allow = []
 
-# This section is considered when running `cargo deny check licenses`
 [licenses]
-# The lint level for crates which do not have a detectable license
-unlicensed = "deny"
-# List of allowed licenses
 allow = [
     "MIT",
     "Apache-2.0",
@@ -55,44 +21,19 @@ allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
-    "Unicode-DFS-2016",
+    "Unicode-3.0",
     "CC0-1.0",
     "MPL-2.0", # Mozilla Public License, used by some crypto libraries
     "Zlib",
 ]
-# List of denied licenses
-deny = [
-    "GPL-2.0",
-    "GPL-3.0",
-    "AGPL-3.0",
-    "LGPL-2.0",
-    "LGPL-2.1",
-    "LGPL-3.0",
-]
-# Lint level for licenses considered copyleft
-copyleft = "warn"
-# Lint level for licenses with confidence scores below the threshold
 confidence-threshold = 0.8
-# Allow 1 or more licenses on a per-crate basis
-exceptions = [
-    # Example: { allow = ["ISC", "MIT", "OpenSSL"], name = "openssl" },
-]
+exceptions = []
 
-# This section is considered when running `cargo deny check sources`
 [sources]
-# Lint level for what to happen when a crate from a crate registry that is not in the allow list is encountered
 unknown-registry = "warn"
-# Lint level for what to happen when a crate from a git repository that is not in the allow list is encountered
 unknown-git = "warn"
-# 1 or more crates.io alternative registries to allow
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# 1 or more git repositories to allow
-allow-git = [
-    # Example: "https://github.com/rust-lang/cargo",
-]
+allow-git = []
 
 [sources.allow-org]
-# GitHub organizations to allow git sources from
-github = [
-    # Example: "rust-lang",
-]
+github = []

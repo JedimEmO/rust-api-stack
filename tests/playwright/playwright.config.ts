@@ -25,13 +25,13 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: `PLAYWRIGHT_REST_ADDR=127.0.0.1:${restPort} cargo run -p playwright-rest-fixture`,
+      command: `PLAYWRIGHT_REST_ADDR=127.0.0.1:${restPort} cargo run --locked -p playwright-rest-fixture`,
       url: `http://127.0.0.1:${restPort}/api/v1/docs/openapi.json`,
       reuseExistingServer: !process.env.CI,
       timeout: 240_000
     },
     {
-      command: `PLAYWRIGHT_JSONRPC_ADDR=127.0.0.1:${jsonrpcPort} cargo run -p playwright-jsonrpc-fixture`,
+      command: `PLAYWRIGHT_JSONRPC_ADDR=127.0.0.1:${jsonrpcPort} cargo run --locked -p playwright-jsonrpc-fixture`,
       url: `http://127.0.0.1:${jsonrpcPort}/rpc/explorer/openrpc.json`,
       reuseExistingServer: !process.env.CI,
       timeout: 240_000

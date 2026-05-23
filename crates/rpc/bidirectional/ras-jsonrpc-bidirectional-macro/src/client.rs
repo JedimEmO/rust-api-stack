@@ -97,8 +97,9 @@ pub fn generate_client_code(
                 F: Fn(#request_type) -> Fut + Send + Sync + 'static,
                 Fut: std::future::Future<Output = Result<#response_type, String>> + Send + 'static,
             {
+                let callback = std::sync::Arc::new(handler);
                 let handler = std::sync::Arc::new(move |request: ras_jsonrpc_types::JsonRpcRequest| {
-                    let handler = handler.clone();
+                    let callback = callback.clone();
                     Box::pin(async move {
                         // Parse request parameters
                         let params: #request_type = if let Some(params) = request.params {
@@ -124,7 +125,7 @@ pub fn generate_client_code(
                         };
 
                         // Call handler
-                        match handler(params).await {
+                        match callback(params).await {
                             Ok(result) => {
                                 match serde_json::to_value(result) {
                                     Ok(result_value) => ras_jsonrpc_types::JsonRpcResponse::success(result_value, request.id),

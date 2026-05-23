@@ -224,8 +224,18 @@ mod tests {
     }
 
     #[test]
+    fn rest_error_new_has_stable_display_and_no_source() {
+        let err = RestError::new(429, "too many requests");
+
+        assert_eq!(err.status, 429);
+        assert_eq!(err.message, "too many requests");
+        assert!(std::error::Error::source(&err).is_none());
+        assert_eq!(err.to_string(), "HTTP 429: too many requests");
+    }
+
+    #[test]
     fn into_rest_error_blanket_impl() {
-        let err = std::io::Error::new(std::io::ErrorKind::Other, "io");
+        let err = std::io::Error::other("io");
         let rest = err.into_rest_error();
         assert_eq!(rest.status, 500);
         assert_eq!(rest.message, "Internal server error");
@@ -240,18 +250,32 @@ mod tests {
         assert_eq!(resp.status, 200);
         assert_eq!(resp.body, 7);
 
-        let err: Result<i32, std::io::Error> =
-            Err(std::io::Error::new(std::io::ErrorKind::Other, "x"));
+        let err: Result<i32, std::io::Error> = Err(std::io::Error::other("x"));
         let mapped: RestResult<i32> = err.internal_server_error();
         let e = mapped.unwrap_err();
         assert_eq!(e.status, 500);
 
         // rest_error variant lets callers customize.
-        let err: Result<i32, std::io::Error> =
-            Err(std::io::Error::new(std::io::ErrorKind::Other, "x"));
+        let err: Result<i32, std::io::Error> = Err(std::io::Error::other("x"));
         let mapped: RestResult<i32> = err.rest_error(418, "teapot");
         let e = mapped.unwrap_err();
         assert_eq!(e.status, 418);
         assert_eq!(e.message, "teapot");
+    }
+
+    #[test]
+    fn rest_result_ext_custom_error_preserves_internal_source() {
+        let err: Result<i32, std::io::Error> = Err(std::io::Error::other("database down"));
+
+        let mapped = err.rest_error(503, "service unavailable").unwrap_err();
+
+        assert_eq!(mapped.status, 503);
+        assert_eq!(mapped.message, "service unavailable");
+        assert_eq!(
+            std::error::Error::source(&mapped)
+                .expect("source")
+                .to_string(),
+            "database down"
+        );
     }
 }

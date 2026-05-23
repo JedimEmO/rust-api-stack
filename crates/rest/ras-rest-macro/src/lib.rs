@@ -17,29 +17,28 @@ mod static_hosting;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```rust
 /// use ras_rest_macro::rest_service;
 /// use serde::{Deserialize, Serialize};
 /// use schemars::JsonSchema;
-/// use axum::response::IntoResponse;
 ///
-/// #[derive(Serialize, Deserialize, JsonSchema)]
+/// #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 /// struct UsersResponse {
 ///     users: Vec<()>,
 /// }
 ///
-/// #[derive(Serialize, Deserialize, JsonSchema)]
+/// #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 /// struct CreateUserRequest {
 ///     name: String,
 /// }
 ///
-/// #[derive(Serialize, Deserialize, JsonSchema)]
+/// #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 /// struct UserResponse {
 ///     id: String,
 ///     name: String,
 /// }
 ///
-/// #[derive(Serialize, Deserialize, JsonSchema)]
+/// #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 /// struct UpdateUserRequest {
 ///     name: String,
 /// }
@@ -59,6 +58,8 @@ mod static_hosting;
 ///         DELETE WITH_PERMISSIONS(["admin"]) users/{id: String}() -> (),
 ///     ]
 /// });
+///
+/// # fn main() {}
 /// ```
 #[proc_macro]
 pub fn rest_service(input: TokenStream) -> TokenStream {
@@ -716,8 +717,6 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
         }
     });
 
-    // No more individual handler fields - we'll store the service implementation instead
-
     let request_part_structs = generate_rest_request_part_structs(&service_def);
 
     let mut query_structs: Vec<proc_macro2::TokenStream> = Vec::new();
@@ -1092,7 +1091,6 @@ fn generate_query_struct(
 
     quote! {
         #[derive(serde::Deserialize)]
-        #[allow(dead_code)]
         pub(super) struct #struct_name {
             #(#fields),*
         }

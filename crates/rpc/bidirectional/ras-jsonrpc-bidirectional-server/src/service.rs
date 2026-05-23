@@ -2,7 +2,9 @@
 
 use crate::{
     ConnectionContext, DefaultConnectionManager, MessageHandler, MessageRouter, ServerError,
-    ServerResult, WebSocketHandler, WebSocketUpgrade, connection::ChannelMessageSender,
+    ServerResult, WebSocketHandler, WebSocketUpgrade,
+    connection::ChannelMessageSender,
+    handler::{AxumWebSocketIo, WebSocketIo},
 };
 use axum::{
     extract::{State, ws::WebSocketUpgrade as AxumWebSocketUpgrade},
@@ -83,56 +85,78 @@ pub trait WebSocketService: Clone + Send + Sync + 'static {
     ) -> impl std::future::Future<Output = ServerResult<()>> + Send {
         let service = self.clone();
         async move {
-            let connection_id = ConnectionId::new();
-            info!("New WebSocket connection: {}", connection_id);
-
-            // Create message channel for this connection
-            let channel_capacity = service.message_channel_capacity().max(1);
-            let (message_tx, message_rx) = mpsc::channel(channel_capacity);
-            let sender = ChannelMessageSender::new(connection_id, message_tx);
-
-            // Create connection info and add to manager
-            let mut info = ConnectionInfo::new(connection_id);
-            if let Some(user) = user.clone() {
-                info.set_user(user);
-            }
-
-            // Create connection context
-            let context = Arc::new(ConnectionContext::new(connection_id, sender.clone()));
-            if let Some(user) = user {
-                context.set_user(user).await;
-            }
-
-            // Add connection to manager with the real sender
-            service
-                .connection_manager()
-                .add_connection_with_sender(info, Box::new(sender.clone()))
-                .await
-                .map_err(ServerError::ConnectionError)?;
-
-            // Create and run WebSocket handler
-            let handler = WebSocketHandler::new(
-                service.handler(),
-                context.clone(),
-                message_rx,
-                service.max_message_size(),
-            );
-
-            // Handle the connection (this will block until connection closes)
-            let result = handler.run(socket).await;
-
-            // Remove connection from manager
-            if let Err(e) = service
-                .connection_manager()
-                .remove_connection(connection_id)
-                .await
-            {
-                error!("Failed to remove connection {}: {}", connection_id, e);
-            }
-
-            result
+            let mut socket = AxumWebSocketIo::new(socket);
+            run_connection_with_io(service, &mut socket, user).await
         }
     }
+
+    /// Handle an individual WebSocket connection over an injected socket implementation.
+    ///
+    /// This runs the same service lifecycle as the Axum upgrade path while letting tests and
+    /// alternate transports exercise the connection without binding a real socket.
+    fn handle_connection_with_io<'a, S>(
+        &'a self,
+        socket: &'a mut S,
+        user: Option<ras_auth_core::AuthenticatedUser>,
+    ) -> impl std::future::Future<Output = ServerResult<()>> + Send + 'a
+    where
+        S: WebSocketIo + ?Sized + 'a,
+    {
+        let service = self.clone();
+        async move { run_connection_with_io(service, socket, user).await }
+    }
+}
+
+async fn run_connection_with_io<Svc, S>(
+    service: Svc,
+    socket: &mut S,
+    user: Option<ras_auth_core::AuthenticatedUser>,
+) -> ServerResult<()>
+where
+    Svc: WebSocketService,
+    S: WebSocketIo + ?Sized,
+{
+    let connection_id = ConnectionId::new();
+    info!("New WebSocket connection: {}", connection_id);
+
+    let channel_capacity = service.message_channel_capacity().max(1);
+    let (message_tx, message_rx) = mpsc::channel(channel_capacity);
+    let sender = ChannelMessageSender::new(connection_id, message_tx);
+
+    let mut info = ConnectionInfo::new(connection_id);
+    if let Some(user) = user.clone() {
+        info.set_user(user);
+    }
+
+    let context = Arc::new(ConnectionContext::new(connection_id, sender.clone()));
+    if let Some(user) = user {
+        context.set_user(user).await;
+    }
+
+    service
+        .connection_manager()
+        .add_connection_with_sender(info, Box::new(sender.clone()))
+        .await
+        .map_err(ServerError::ConnectionError)?;
+
+    let handler = WebSocketHandler::new(
+        service.handler(),
+        context.clone(),
+        message_rx,
+        service.max_message_size(),
+    );
+
+    let result = handler.run_with_io(socket).await;
+
+    if let Err(e) = service
+        .connection_manager()
+        .remove_connection(connection_id)
+        .await
+    {
+        error!("Failed to remove connection {}: {}", connection_id, e);
+    }
+
+    result
 }
 
 /// Builder for creating WebSocket services
@@ -284,8 +308,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::handler::{WebSocketIo, WebSocketIoMessage};
+    use async_trait::async_trait;
     use ras_auth_core::{AuthError, AuthenticatedUser};
-    use std::collections::HashSet;
+    use ras_jsonrpc_bidirectional_types::BidirectionalMessage;
+    use serde_json::json;
+    use std::collections::{HashSet, VecDeque};
 
     // Mock auth provider for testing
     #[derive(Clone)]
@@ -304,6 +332,47 @@ mod tests {
                     Err(AuthError::InvalidToken)
                 }
             })
+        }
+    }
+
+    fn test_user() -> AuthenticatedUser {
+        AuthenticatedUser {
+            user_id: "test_user".to_string(),
+            permissions: HashSet::new(),
+            metadata: None,
+        }
+    }
+
+    struct InMemorySocket {
+        incoming: VecDeque<WebSocketIoMessage>,
+        outgoing: Vec<WebSocketIoMessage>,
+    }
+
+    impl InMemorySocket {
+        fn closing(incoming: impl IntoIterator<Item = WebSocketIoMessage>) -> Self {
+            Self {
+                incoming: incoming.into_iter().collect(),
+                outgoing: Vec::new(),
+            }
+        }
+
+        fn outgoing_messages(&self) -> impl Iterator<Item = BidirectionalMessage> + '_ {
+            self.outgoing.iter().filter_map(|message| match message {
+                WebSocketIoMessage::Text(text) => serde_json::from_str(text).ok(),
+                _ => None,
+            })
+        }
+    }
+
+    #[async_trait]
+    impl WebSocketIo for InMemorySocket {
+        async fn send(&mut self, message: WebSocketIoMessage) -> ServerResult<()> {
+            self.outgoing.push(message);
+            Ok(())
+        }
+
+        async fn recv(&mut self) -> Option<ServerResult<WebSocketIoMessage>> {
+            self.incoming.pop_front().map(Ok)
         }
     }
 
@@ -331,5 +400,59 @@ mod tests {
         let service = builder.build();
 
         assert!(service.require_auth());
+    }
+
+    #[tokio::test]
+    async fn handle_connection_with_io_round_trips_and_cleans_up_without_socket() {
+        let mut router = MessageRouter::new();
+        router.register_value("whoami", |_req, context| async move {
+            let user = context.get_user().await.expect("authenticated user");
+            Ok::<_, ServerError>(json!({ "user_id": user.user_id }))
+        });
+
+        let manager = Arc::new(DefaultConnectionManager::new());
+        let builder = WebSocketServiceBuilder::builder()
+            .handler(Arc::new(router))
+            .auth_provider(Arc::new(MockAuthProvider))
+            .message_channel_capacity(2)
+            .max_message_size(16 * 1024)
+            .build();
+        let service = builder.build_with_manager(manager.clone());
+
+        let request =
+            ras_jsonrpc_types::JsonRpcRequest::new("whoami".to_string(), None, Some(json!(1)));
+        let mut socket = InMemorySocket::closing([WebSocketIoMessage::Text(
+            serde_json::to_string(&request).unwrap(),
+        )]);
+
+        service
+            .handle_connection_with_io(&mut socket, Some(test_user()))
+            .await
+            .unwrap();
+
+        assert_eq!(manager.connection_count(), 0);
+
+        let messages = socket.outgoing_messages().collect::<Vec<_>>();
+        assert!(matches!(
+            messages.first(),
+            Some(BidirectionalMessage::ConnectionEstablished { .. })
+        ));
+        assert!(matches!(
+            messages.last(),
+            Some(BidirectionalMessage::ConnectionClosed { .. })
+        ));
+
+        let response = messages
+            .iter()
+            .find_map(|message| match message {
+                BidirectionalMessage::Response(response) => Some(response),
+                _ => None,
+            })
+            .expect("JSON-RPC response");
+        assert_eq!(response.id, Some(json!(1)));
+        assert_eq!(
+            response.result.as_ref().expect("result"),
+            &json!({ "user_id": "test_user" })
+        );
     }
 }

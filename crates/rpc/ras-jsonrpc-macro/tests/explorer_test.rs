@@ -44,36 +44,27 @@ mod tests {
 
         // The router should have routes for /explorer and /explorer/openrpc.json
         let app = Router::new().merge(explorer_routes);
-
-        // Create test server
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-
-        // Spawn the server
-        tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
+        let server = axum_test::TestServer::builder()
+            .mock_transport()
+            .build(app)
+            .unwrap();
 
         // Test that the explorer page is accessible
-        let response = reqwest::get(format!("http://{}/explorer", addr))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), 200);
+        let response = server.get("/explorer").await;
+        response.assert_status_ok();
 
-        let content = response.text().await.unwrap();
+        let content = response.text();
         assert!(content.contains("\"UserService\""));
-        assert!(content.contains("id=\"jwt-token\""));
+        assert!(content.contains("id=\"bearer-token\""));
         assert!(content.contains("id=\"saved-list\""));
         assert!(content.contains("id=\"history-list\""));
         assert!(content.contains("\"jsonrpc\""));
 
         // Test that the OpenRPC document is accessible
-        let response = reqwest::get(format!("http://{}/explorer/openrpc.json", addr))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), 200);
+        let response = server.get("/explorer/openrpc.json").await;
+        response.assert_status_ok();
 
-        let openrpc_doc: serde_json::Value = response.json().await.unwrap();
+        let openrpc_doc: serde_json::Value = response.json();
         assert_eq!(openrpc_doc["info"]["title"], "UserService JSON-RPC API");
         assert!(openrpc_doc["methods"].is_array());
     }
@@ -99,6 +90,48 @@ mod tests {
         }
 
         custom_path_service::test_routes();
+    }
+
+    #[tokio::test]
+    async fn explorer_custom_path_is_normalized_and_nested_under_base_url() {
+        mod normalized_path_service {
+            use ras_jsonrpc_macro::jsonrpc_service;
+            use serde::{Deserialize, Serialize};
+
+            #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+            pub struct PingRequest;
+
+            #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+            pub struct PingResponse;
+
+            jsonrpc_service!({
+                service_name: NormalizedService,
+                openrpc: true,
+                explorer: { path: "api/docs/" },
+                methods: [
+                    UNAUTHORIZED ping(PingRequest) -> PingResponse,
+                ]
+            });
+
+            pub fn routes(base_url: &str) -> axum::Router {
+                normalizedservice_explorer_routes(base_url)
+            }
+        }
+
+        let app = normalized_path_service::routes("/rpc/");
+        let server = axum_test::TestServer::builder()
+            .mock_transport()
+            .build(app)
+            .unwrap();
+
+        let docs_response = server.get("/rpc/api/docs").await;
+        docs_response.assert_status_ok();
+        assert!(docs_response.text().contains("\"NormalizedService\""));
+
+        let spec_response = server.get("/rpc/api/docs/openrpc.json").await;
+        spec_response.assert_status_ok();
+        let spec: serde_json::Value = spec_response.json();
+        assert_eq!(spec["info"]["title"], "NormalizedService JSON-RPC API");
     }
 
     #[test]

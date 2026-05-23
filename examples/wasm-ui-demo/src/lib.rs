@@ -19,10 +19,6 @@ use basic_jsonrpc_api::{
     SignInResponse, Task, TaskListResponse, TaskPriority, UpdateTaskRequest,
 };
 
-// Global allocator for smaller WASM size
-#[global_allocator]
-static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
-
 // Define styles using dominator's class! macro
 static STYLES: Lazy<String> = Lazy::new(|| {
     class! {
@@ -133,7 +129,7 @@ impl App {
         let location = window.location();
         let protocol = location.protocol().unwrap();
         let host = location.host().unwrap();
-        let api_url = format!("{}//{}/api/rpc", protocol, host);
+        let api_url = rpc_endpoint_url(&protocol, &host);
 
         // Initialize the RPC client
         let client = MyServiceClientBuilder::new()
@@ -246,20 +242,14 @@ impl App {
         let description = app.new_task_description.get_cloned();
         let priority = app.new_task_priority.get_cloned();
 
-        if title.is_empty() {
+        let Some(request) = create_task_request(title, description, priority) else {
             return;
-        }
+        };
 
         spawn_local(clone!(app => async move {
             if let Some(token) = app.auth_token.get_cloned() {
                 let mut client = app.client.clone();
                 client.set_bearer_token(Some(token));
-
-                let request = CreateTaskRequest {
-                    title,
-                    description,
-                    priority,
-                };
 
                 if let Ok(task) = client.create_task(request).await {
                     app.tasks.lock_mut().push_cloned(task);
@@ -285,15 +275,7 @@ impl App {
                     .position(|t| t.id == task_id);
 
                 if let Some(index) = task_index {
-                    let completed = !app.tasks.lock_ref()[index].completed;
-
-                    let request = UpdateTaskRequest {
-                        id: task_id,
-                        title: None,
-                        description: None,
-                        completed: Some(completed),
-                        priority: None,
-                    };
+                    let request = task_completion_update(&app.tasks.lock_ref()[index]);
 
                     if let Ok(updated_task) = client.update_task(request).await {
                         app.tasks.lock_mut().set_cloned(index, updated_task);
@@ -316,10 +298,10 @@ impl App {
                     app.tasks.lock_mut().retain(|t| t.id != task_id);
 
                     // Clear selection if the deleted task was selected
-                    if let Some(selected) = app.selected_task.get_cloned() {
-                        if selected.id == task_id {
-                            app.selected_task.set(None);
-                        }
+                    if let Some(selected) = app.selected_task.get_cloned()
+                        && selected.id == task_id
+                    {
+                        app.selected_task.set(None);
                     }
 
                     // Reload stats
@@ -328,6 +310,48 @@ impl App {
             }
         }));
     }
+}
+
+fn rpc_endpoint_url(protocol: &str, host: &str) -> String {
+    format!("{}//{}/rpc", protocol, host)
+}
+
+fn create_task_request(
+    title: String,
+    description: String,
+    priority: TaskPriority,
+) -> Option<CreateTaskRequest> {
+    if title.is_empty() {
+        return None;
+    }
+
+    Some(CreateTaskRequest {
+        title,
+        description,
+        priority,
+    })
+}
+
+fn task_completion_update(task: &Task) -> UpdateTaskRequest {
+    UpdateTaskRequest {
+        id: task.id.clone(),
+        title: None,
+        description: None,
+        completed: Some(!task.completed),
+        priority: None,
+    }
+}
+
+fn task_id_preview(id: &str) -> &str {
+    safe_prefix(id, 8)
+}
+
+fn timestamp_date(timestamp: &str) -> &str {
+    safe_prefix(timestamp, 10)
+}
+
+fn safe_prefix(value: &str, max_bytes: usize) -> &str {
+    value.get(..max_bytes).unwrap_or(value)
 }
 
 fn render_login_form(app: Arc<App>) -> Dom {
@@ -534,7 +558,7 @@ fn render_stats_card(stats: &DashboardStats) -> Dom {
                                     }),
                                     html!("div", {
                                         .apply(|b| dwclass!(b, "text-picton-blue-300"))
-                                        .text("📋")
+                                        .text("All")
                                         .style("font-size", "1.5rem")
                                     }),
                                 ])
@@ -568,7 +592,7 @@ fn render_stats_card(stats: &DashboardStats) -> Dom {
                                     }),
                                     html!("div", {
                                         .apply(|b| dwclass!(b, "text-apple-300"))
-                                        .text("✅")
+                                        .text("Done")
                                         .style("font-size", "1.5rem")
                                     }),
                                 ])
@@ -636,7 +660,7 @@ fn render_stats_card(stats: &DashboardStats) -> Dom {
                                     }),
                                     html!("div", {
                                         .apply(|b| dwclass!(b, "text-red-300"))
-                                        .text("🔥")
+                                        .text("High")
                                         .style("font-size", "1.5rem")
                                     }),
                                 ])
@@ -825,14 +849,14 @@ fn render_task_form(app: Arc<App>) -> Dom {
 
 fn render_task_item(app: Arc<App>, task: Task) -> Dom {
     let task_id = task.id.clone();
-    let (_priority_color, _priority_bg, priority_icon) = match task.priority {
-        TaskPriority::High => ("text-red-400", "bg-red-900 bg-opacity-20", "🔥"),
+    let (_priority_color, _priority_bg, priority_mark) = match task.priority {
+        TaskPriority::High => ("text-red-400", "bg-red-900 bg-opacity-20", "H"),
         TaskPriority::Medium => (
             "text-candlelight-400",
             "bg-candlelight-900 bg-opacity-20",
-            "⚡",
+            "M",
         ),
-        TaskPriority::Low => ("text-apple-400", "bg-apple-900 bg-opacity-20", "💚"),
+        TaskPriority::Low => ("text-apple-400", "bg-apple-900 bg-opacity-20", "L"),
     };
 
     html!("div", {
@@ -896,7 +920,7 @@ fn render_task_item(app: Arc<App>, task: Task) -> Dom {
                                     .style("align-items", "center")
                                     .children(&mut [
                                         html!("span", {
-                                            .text(priority_icon)
+                                            .text(priority_mark)
                                         }),
                                         html!("span", {
                                             .class(match task.priority {
@@ -929,10 +953,10 @@ fn render_task_item(app: Arc<App>, task: Task) -> Dom {
                                     .style("align-items", "center")
                                     .children(&mut [
                                         html!("span", {
-                                            .text("📅")
+                                            .text("Created")
                                         }),
                                         html!("span", {
-                                            .text(&format!("{}", &task.created_at[..10]))
+                                            .text(timestamp_date(&task.created_at))
                                         }),
                                     ])
                                 }),
@@ -995,9 +1019,9 @@ fn render_task_list(app: Arc<App>) -> Dom {
                 .visible_signal(app.tasks.signal_vec_cloned().len().map(|len| len == 0))
                 .children(&mut [
                     html!("div", {
-                        .apply(|b| dwclass!(b, "text-6xl"))
+                        .apply(|b| dwclass!(b, "text-2xl font-semibold text-bunker-300"))
                         .style("margin-bottom", "1rem")
-                        .text("📝")
+                        .text("No Tasks")
                     }),
                     html!("p", {
                         .apply(|b| dwclass!(b, "text-bunker-400 text-lg"))
@@ -1167,7 +1191,7 @@ fn render_dashboard(app: Arc<App>) -> Dom {
                                                                             html!("div", {
                                                                                 .apply(|b| dwclass!(b, "text-sm text-bunker-300 font-mono"))
                                                                                 .style("margin-top", "0.25rem")
-                                                                                .text(&t.id[..8])
+                                                                                .text(task_id_preview(&t.id))
                                                                                 .attr("title", &t.id)
                                                                             }),
                                                                         ])
@@ -1209,7 +1233,7 @@ fn render_dashboard(app: Arc<App>) -> Dom {
                                                                             html!("div", {
                                                                                 .apply(|b| dwclass!(b, "text-sm text-bunker-300"))
                                                                                 .style("margin-top", "0.25rem")
-                                                                                .text(&t.created_at[..10])
+                                                                                .text(timestamp_date(&t.created_at))
                                                                             }),
                                                                         ])
                                                                     }),
@@ -1227,7 +1251,7 @@ fn render_dashboard(app: Arc<App>) -> Dom {
                                                                             html!("div", {
                                                                                 .apply(|b| dwclass!(b, "text-sm text-bunker-300"))
                                                                                 .style("margin-top", "0.25rem")
-                                                                                .text(&t.updated_at[..10])
+                                                                                .text(timestamp_date(&t.updated_at))
                                                                             }),
                                                                         ])
                                                                     }),
@@ -1259,6 +1283,86 @@ fn render(app: Arc<App>) -> Dom {
             }
         })))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task(completed: bool) -> Task {
+        Task {
+            id: "task-1".to_string(),
+            title: "Review generated client".to_string(),
+            description: "Keep the browser example using typed requests".to_string(),
+            completed,
+            priority: TaskPriority::High,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn rpc_endpoint_url_uses_same_origin_rpc_path() {
+        assert_eq!(
+            rpc_endpoint_url("https:", "app.example.test"),
+            "https://app.example.test/rpc"
+        );
+        assert_eq!(
+            rpc_endpoint_url("http:", "localhost:8080"),
+            "http://localhost:8080/rpc"
+        );
+    }
+
+    #[test]
+    fn create_task_request_preserves_typed_form_values() {
+        let request = create_task_request(
+            "Ship docs".to_string(),
+            "Update the example README".to_string(),
+            TaskPriority::High,
+        )
+        .expect("non-empty title should build request");
+
+        assert_eq!(request.title, "Ship docs");
+        assert_eq!(request.description, "Update the example README");
+        assert!(matches!(request.priority, TaskPriority::High));
+    }
+
+    #[test]
+    fn create_task_request_rejects_empty_title() {
+        assert!(
+            create_task_request(String::new(), "ignored".to_string(), TaskPriority::Low).is_none()
+        );
+    }
+
+    #[test]
+    fn task_completion_update_only_toggles_completion() {
+        let update = task_completion_update(&task(false));
+
+        assert_eq!(update.id, "task-1");
+        assert_eq!(update.title, None);
+        assert_eq!(update.description, None);
+        assert_eq!(update.completed, Some(true));
+        assert!(update.priority.is_none());
+
+        assert_eq!(task_completion_update(&task(true)).completed, Some(false));
+    }
+
+    #[test]
+    fn task_id_preview_uses_short_safe_display_id() {
+        assert_eq!(task_id_preview("1234567890"), "12345678");
+        assert_eq!(task_id_preview("short"), "short");
+    }
+
+    #[test]
+    fn timestamp_date_uses_date_prefix_when_timestamp_is_long_enough() {
+        assert_eq!(timestamp_date("2026-01-01T00:00:00Z"), "2026-01-01");
+        assert_eq!(timestamp_date("bad"), "bad");
+    }
+
+    #[test]
+    fn safe_prefix_returns_original_when_byte_boundary_would_split_character() {
+        assert_eq!(safe_prefix("abcé", 4), "abcé");
+    }
 }
 
 #[wasm_bindgen(start)]

@@ -1,12 +1,11 @@
 //! Error types for OpenRPC specification validation and processing.
 
-use thiserror::Error;
+use std::fmt;
 
 /// Errors that can occur when working with OpenRPC specifications.
-#[derive(Error, Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum OpenRpcError {
     /// Validation error when OpenRPC specification constraints are violated
-    #[error("Validation error: {message}")]
     ValidationError {
         /// Human-readable error message
         message: String,
@@ -15,14 +14,12 @@ pub enum OpenRpcError {
     },
 
     /// Error when parsing or serializing JSON
-    #[error("JSON error: {message}")]
     JsonError {
         /// JSON parsing/serialization error message
         message: String,
     },
 
     /// Error when resolving references ($ref)
-    #[error("Reference resolution error: {message}")]
     ReferenceError {
         /// Reference resolution error message
         message: String,
@@ -31,14 +28,12 @@ pub enum OpenRpcError {
     },
 
     /// Error when a required field is missing
-    #[error("Missing required field: {field_name}")]
     MissingField {
         /// Name of the missing required field
         field_name: String,
     },
 
     /// Error when a field has an invalid value
-    #[error("Invalid field value for '{field_name}': {message}")]
     InvalidField {
         /// Name of the field with invalid value
         field_name: String,
@@ -47,7 +42,6 @@ pub enum OpenRpcError {
     },
 
     /// Error when an object has duplicate keys that should be unique
-    #[error("Duplicate key '{key}' found in {context}")]
     DuplicateKey {
         /// The duplicate key name
         key: String,
@@ -56,35 +50,30 @@ pub enum OpenRpcError {
     },
 
     /// Error when URL format is invalid
-    #[error("Invalid URL format: {url}")]
     InvalidUrl {
         /// The invalid URL string
         url: String,
     },
 
     /// Error when email format is invalid
-    #[error("Invalid email format: {email}")]
     InvalidEmail {
         /// The invalid email string
         email: String,
     },
 
     /// Error when regex pattern is invalid
-    #[error("Invalid regex pattern: {pattern}")]
     InvalidRegex {
         /// The invalid regex pattern
         pattern: String,
     },
 
     /// Error when OpenRPC version is unsupported
-    #[error("Unsupported OpenRPC version: {version}")]
     UnsupportedVersion {
         /// The unsupported version string
         version: String,
     },
 
     /// Error when JSON Schema Draft 7 constraints are violated
-    #[error("JSON Schema validation error: {message}")]
     SchemaError {
         /// Schema validation error message
         message: String,
@@ -92,6 +81,54 @@ pub enum OpenRpcError {
         schema_path: Option<String>,
     },
 }
+
+impl fmt::Display for OpenRpcError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ValidationError {
+                message,
+                field_path: Some(field_path),
+            } => write!(f, "Validation error at {field_path}: {message}"),
+            Self::ValidationError {
+                message,
+                field_path: None,
+            } => write!(f, "Validation error: {message}"),
+            Self::JsonError { message } => write!(f, "JSON error: {message}"),
+            Self::ReferenceError { message, .. } => {
+                write!(f, "Reference resolution error: {message}")
+            }
+            Self::MissingField { field_name } => {
+                write!(f, "Missing required field: {field_name}")
+            }
+            Self::InvalidField {
+                field_name,
+                message,
+            } => write!(f, "Invalid field value for '{field_name}': {message}"),
+            Self::DuplicateKey { key, context } => {
+                write!(f, "Duplicate key '{key}' found in {context}")
+            }
+            Self::InvalidUrl { url } => write!(f, "Invalid URL format: {url}"),
+            Self::InvalidEmail { email } => write!(f, "Invalid email format: {email}"),
+            Self::InvalidRegex { pattern } => write!(f, "Invalid regex pattern: {pattern}"),
+            Self::UnsupportedVersion { version } => {
+                write!(f, "Unsupported OpenRPC version: {version}")
+            }
+            Self::SchemaError {
+                message,
+                schema_path: Some(schema_path),
+            } => write!(
+                f,
+                "JSON Schema validation error at {schema_path}: {message}"
+            ),
+            Self::SchemaError {
+                message,
+                schema_path: None,
+            } => write!(f, "JSON Schema validation error: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for OpenRpcError {}
 
 impl OpenRpcError {
     /// Create a new validation error
@@ -222,8 +259,76 @@ mod tests {
         let err = OpenRpcError::validation("test validation error");
         assert_eq!(err.to_string(), "Validation error: test validation error");
 
+        let err = OpenRpcError::validation_with_path("nested failure", "methods[0].params[1]");
+        assert_eq!(
+            err.to_string(),
+            "Validation error at methods[0].params[1]: nested failure"
+        );
+
+        let err = OpenRpcError::schema_with_path("expected string", "properties.name");
+        assert_eq!(
+            err.to_string(),
+            "JSON Schema validation error at properties.name: expected string"
+        );
+
         let err = OpenRpcError::missing_field("required_field");
         assert_eq!(err.to_string(), "Missing required field: required_field");
+    }
+
+    #[test]
+    fn display_messages_cover_all_error_variants() {
+        let cases = [
+            (
+                OpenRpcError::json("unexpected token"),
+                "JSON error: unexpected token",
+            ),
+            (
+                OpenRpcError::reference("not found", "#/components/schemas/Missing"),
+                "Reference resolution error: not found",
+            ),
+            (
+                OpenRpcError::invalid_field("name", "must not be blank"),
+                "Invalid field value for 'name': must not be blank",
+            ),
+            (
+                OpenRpcError::duplicate_key("id", "method parameters"),
+                "Duplicate key 'id' found in method parameters",
+            ),
+            (
+                OpenRpcError::invalid_url("not-a-url"),
+                "Invalid URL format: not-a-url",
+            ),
+            (
+                OpenRpcError::invalid_email("not-an-email"),
+                "Invalid email format: not-an-email",
+            ),
+            (OpenRpcError::invalid_regex("["), "Invalid regex pattern: ["),
+            (
+                OpenRpcError::unsupported_version("2.0.0"),
+                "Unsupported OpenRPC version: 2.0.0",
+            ),
+            (
+                OpenRpcError::schema("invalid schema"),
+                "JSON Schema validation error: invalid schema",
+            ),
+        ];
+
+        for (error, expected) in cases {
+            assert_eq!(error.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn reference_error_keeps_reference_for_callers() {
+        let error = OpenRpcError::reference("not found", "#/components/schemas/Missing");
+
+        assert_eq!(
+            error,
+            OpenRpcError::ReferenceError {
+                message: "not found".to_string(),
+                reference: "#/components/schemas/Missing".to_string(),
+            }
+        );
     }
 
     #[test]

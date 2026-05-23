@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OAuth2 Success - Google OAuth2 Example</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>✅</text></svg>">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.75em%22 font-size=%2250%22>OK</text></svg>">
     <style>
         :root {
             --primary-color: #4285f4;
@@ -361,7 +361,7 @@
     <div class="background-overlay"></div>
     <div class="container">
         <div class="success-card">
-            <div class="success-icon">🎉</div>
+            <div class="success-icon">OK</div>
             <h1>Authentication Successful!</h1>
             <p>You have successfully authenticated with Google OAuth2. Your JWT token is ready for use.</p>
             
@@ -386,9 +386,9 @@
         </div>
 
         <div class="token-section">
-            <h3>🔑 Your JWT Token</h3>
+            <h3>Your JWT Token</h3>
             <div class="token-info">
-                <strong>✅ Success:</strong> Your JWT token has been generated and is ready to use for API requests.
+                <strong>Success:</strong> Your JWT token has been generated and is ready to use for API requests.
             </div>
             
             <div class="token-display" id="tokenDisplay">
@@ -397,41 +397,41 @@
             </div>
             
             <div class="token-warnings">
-                <strong>⚠️ Security Note:</strong> Keep this token secure and do not share it publicly. 
-                It provides access to your authenticated session and API endpoints.
+                <strong>Security Note:</strong> Keep this token secure and do not share it publicly.
+                It provides access to your authenticated session and API endpoints. This demo keeps it in session storage only when you choose to continue.
             </div>
             
             <div style="margin-top: 20px;">
                 <button class="button success" onclick="storeAndRedirect()">
-                    💾 Save Token & Explore API
+                    Use Token & Explore API
                 </button>
                 <button class="button secondary" onclick="testToken()">
-                    🧪 Test Token
+                    Test Token
                 </button>
             </div>
         </div>
 
         <div class="info-cards animate-fade-in">
             <div class="info-card">
-                <h3>🚀 Next Steps</h3>
+                <h3>Next Steps</h3>
                 <p>Use your JWT token to make authenticated requests to the JSON-RPC API. The token contains your user information and permissions for role-based access control.</p>
             </div>
             
             <div class="info-card">
-                <h3>📚 API Documentation</h3>
+                <h3>API Documentation</h3>
                 <p>Explore the interactive API documentation to test endpoints directly in your browser. The documentation includes examples and permission requirements for each endpoint.</p>
             </div>
             
             <div class="info-card">
-                <h3>🔐 Permission System</h3>
+                <h3>Permission System</h3>
                 <p>Your permissions are automatically assigned based on your Google account attributes. Admin users from certain domains receive elevated permissions for advanced features.</p>
             </div>
         </div>
 
         <div class="actions">
-            <a href="/api-docs" class="button">📖 Interactive API Docs</a>
-            <a href="/examples/google-oauth-example/server/static" class="button secondary">🏠 Back to Home</a>
-            <button class="button secondary" onclick="showTokenInfo()">ℹ️ Token Details</button>
+            <button class="button" onclick="storeAndRedirect()">Interactive API Docs</button>
+            <a href="/" class="button secondary">Back to Home</a>
+            <button class="button secondary" onclick="showTokenInfo()">Token Details</button>
         </div>
     </div>
 
@@ -486,7 +486,7 @@
 
         function storeAndRedirect() {
             if (jwtToken) {
-                localStorage.setItem('jwt_token', jwtToken);
+                sessionStorage.setItem('jwt_token', jwtToken);
                 window.location.href = '/api-docs';
             }
         }
@@ -499,7 +499,7 @@
 
             const button = event.target;
             const originalText = button.textContent;
-            button.textContent = '🔄 Testing...';
+            button.textContent = 'Testing...';
             button.disabled = true;
 
             try {
@@ -520,14 +520,14 @@
                 const result = await response.json();
                 
                 if (response.ok && !result.error) {
-                    button.textContent = '✅ Token Valid';
+                    button.textContent = 'Token Valid';
                     button.style.background = 'var(--secondary-color)';
                     console.log('Token test successful:', result);
                 } else {
                     throw new Error(result.error?.message || 'Token test failed');
                 }
             } catch (error) {
-                button.textContent = '❌ Token Invalid';
+                button.textContent = 'Token Invalid';
                 button.style.background = 'var(--danger-color)';
                 console.error('Token test failed:', error);
                 alert(`Token test failed: ${error.message}`);

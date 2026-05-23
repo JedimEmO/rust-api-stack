@@ -2,7 +2,13 @@
 name = "basic-jsonrpc-api"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
+description = "Shared JSON-RPC API contract for the Rust Agent Stack basic example"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-agent-stack"
+homepage = "https://github.com/JedimEmO/rust-agent-stack"
 publish = false
+readme = "README.md"
 
 [features]
 default = ["server"]
@@ -10,11 +16,11 @@ server = ["ras-jsonrpc-macro/server", "axum", "ras-jsonrpc-core"]
 client = ["ras-jsonrpc-macro/client", "reqwest"]
 
 [dependencies]
-ras-jsonrpc-macro = { path = "../../../crates/rpc/ras-jsonrpc-macro" }
-ras-jsonrpc-core = { path = "../../../crates/rpc/ras-jsonrpc-core", optional = true }
-ras-jsonrpc-types = { path = "../../../crates/rpc/ras-jsonrpc-types" }
+ras-jsonrpc-macro = { path = "../../../crates/rpc/ras-jsonrpc-macro", version = "0.2.0" }
+ras-jsonrpc-core = { path = "../../../crates/rpc/ras-jsonrpc-core", version = "0.1.2", optional = true }
+ras-jsonrpc-types = { path = "../../../crates/rpc/ras-jsonrpc-types", version = "0.1.1" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-schemars.workspace = true
-axum = { workspace = true, optional = true}
-reqwest = { workspace = true, optional = true}
+schemars = { workspace = true }
+axum = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }

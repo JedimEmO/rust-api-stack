@@ -1,6 +1,6 @@
 # RAS Identity System Usage Guide
 
-This guide provides everything you need to add authentication and authorization to your RAS stack application using the identity crates.
+This guide covers the common setup for adding authentication and authorization to a RAS stack application using the identity crates.
 
 ## Overview
 
@@ -31,42 +31,44 @@ The RAS identity system provides a flexible, secure authentication framework wit
 ```toml
 [dependencies]
 # Core authentication traits
-ras-auth-core = { path = "../crates/core/ras-auth-core" }
-ras-identity-core = { path = "../crates/core/ras-identity-core" }
+ras-auth-core = "0.1.0"
+ras-identity-core = "0.1.1"
 
 # Session management (required)
-ras-identity-session = { path = "../crates/identity/ras-identity-session" }
+ras-identity-session = "0.1.1"
 
 # Identity providers (choose what you need)
-ras-identity-local = { path = "../crates/identity/ras-identity-local" }
-ras-identity-oauth2 = { path = "../crates/identity/ras-identity-oauth2" }
+ras-identity-local = "0.2.0"
+ras-identity-oauth2 = "0.1.2"
 
 # For JSON-RPC services
-ras-jsonrpc-core = { path = "../crates/rpc/ras-jsonrpc-core" }
+ras-jsonrpc-core = "0.1.2"
 ```
 
 ### 2. Basic Setup with Local Authentication
 
 ```rust
-use ras_identity_session::{SessionService, SessionConfig, JwtAuthProvider};
+use ras_identity_session::{JwtAuthProvider, SessionConfig, SessionService};
 use ras_identity_local::LocalUserProvider;
 use ras_auth_core::AuthProvider;
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Create session service with default config
-    let session_service = SessionService::new(SessionConfig::default());
+    // Create session service with an example-length secret. Real services
+    // should load a random secret from environment or secret storage.
+    let session_config = SessionConfig::new("use-at-least-32-bytes-of-random-secret")?;
+    let session_service = SessionService::new(session_config)?;
     
     // Create and configure local user provider
     let local_provider = LocalUserProvider::new();
     
     // Add some users
     local_provider.add_user(
-        "admin",
-        "secure_password123",
-        Some("admin@example.com"),
-        Some("Administrator")
+        "admin".to_string(),
+        "secure_password123".to_string(),
+        Some("admin@example.com".to_string()),
+        Some("Administrator".to_string())
     ).await?;
     
     // Register the provider with session service
@@ -87,6 +89,7 @@ async fn main() -> anyhow::Result<()> {
 The local user provider handles username/password authentication with secure password hashing:
 
 ```rust
+use ras_identity_core::IdentityProvider;
 use ras_identity_local::LocalUserProvider;
 use serde_json::json;
 
@@ -94,9 +97,11 @@ use serde_json::json;
 let provider = LocalUserProvider::new();
 
 // Add users
-provider.add_user("alice", "password123", 
-    Some("alice@example.com"), 
-    Some("Alice Smith")
+provider.add_user(
+    "alice".to_string(),
+    "password123".to_string(),
+    Some("alice@example.com".to_string()),
+    Some("Alice Smith".to_string()),
 ).await?;
 
 // Authenticate
@@ -111,8 +116,8 @@ println!("Authenticated: {}", identity.display_name.unwrap_or_default());
 
 **Security Features:**
 - Argon2 password hashing
-- Timing attack resistance
-- Username enumeration prevention
+- Timing attack mitigation for missing users
+- Uniform invalid-credentials errors
 - Rate limiting (5 concurrent attempts)
 
 ### OAuth2 Provider
@@ -120,26 +125,32 @@ println!("Authenticated: {}", identity.display_name.unwrap_or_default());
 The OAuth2 provider supports external authentication providers like Google:
 
 ```rust
-use ras_identity_oauth2::{OAuth2Provider, OAuth2Config, ProviderConfig};
-use oauth2::{ClientId, ClientSecret, AuthUrl, TokenUrl};
+use ras_identity_core::{IdentityError, IdentityProvider};
+use ras_identity_oauth2::{
+    InMemoryStateStore, OAuth2Config, OAuth2Provider, OAuth2ProviderConfig, OAuth2Response,
+};
+use std::{collections::HashMap, sync::Arc};
 
 // Configure OAuth2 provider
-let google_config = ProviderConfig {
-    client_id: ClientId::new("your-client-id".to_string()),
-    client_secret: ClientSecret::new("your-client-secret".to_string()),
-    auth_url: AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string())?,
-    token_url: TokenUrl::new("https://oauth2.googleapis.com/token".to_string())?,
-    user_info_url: "https://www.googleapis.com/oauth2/v2/userinfo".to_string(),
-    redirect_url: "http://localhost:3000/auth/callback".to_string(),
+let google_config = OAuth2ProviderConfig {
+    provider_id: "google".to_string(),
+    client_id: std::env::var("GOOGLE_CLIENT_ID")
+        .expect("GOOGLE_CLIENT_ID must be set"),
+    client_secret: std::env::var("GOOGLE_CLIENT_SECRET")
+        .expect("GOOGLE_CLIENT_SECRET must be set"),
+    authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
+    token_endpoint: "https://oauth2.googleapis.com/token".to_string(),
+    userinfo_endpoint: Some("https://www.googleapis.com/oauth2/v2/userinfo".to_string()),
+    redirect_uri: "http://localhost:3000/auth/callback".to_string(),
     scopes: vec!["openid".to_string(), "email".to_string(), "profile".to_string()],
-    user_info_mapping: Default::default(), // Uses standard mapping
+    auth_params: HashMap::new(),
+    use_pkce: true,
+    user_info_mapping: None,
 };
 
-let config = OAuth2Config {
-    providers: vec![("google".to_string(), google_config)].into_iter().collect(),
-};
-
-let oauth_provider = OAuth2Provider::new(config);
+let config = OAuth2Config::new().add_provider(google_config);
+let state_store = Arc::new(InMemoryStateStore::new());
+let oauth_provider = OAuth2Provider::new(config, state_store);
 ```
 
 **OAuth2 Flow:**
@@ -151,13 +162,16 @@ let start_payload = json!({
     "provider_id": "google"
 });
 
-match provider.verify(start_payload).await {
-    Err(IdentityError::OAuth2(OAuth2Response::AuthorizationUrl { url, state })) => {
-        // Redirect user to authorization URL
-        println!("Redirect to: {}", url);
-        // Store state for CSRF protection
+match oauth_provider.verify(start_payload).await {
+    Err(IdentityError::ProviderError(response_json)) => {
+        let response: OAuth2Response = serde_json::from_str(&response_json)?;
+        if let OAuth2Response::AuthorizationUrl { url, state } = response {
+            // Redirect user to authorization URL and keep state for the callback.
+            println!("Redirect to: {url}, state: {state}");
+        }
     }
-    _ => panic!("Unexpected response"),
+    Ok(_) => eprintln!("OAuth2 start flow completed without a redirect"),
+    Err(err) => eprintln!("OAuth2 start flow failed: {err}"),
 }
 ```
 
@@ -170,27 +184,27 @@ let callback_payload = json!({
     "state": "stored_csrf_state"
 });
 
-let identity = provider.verify(callback_payload).await?;
+let identity = oauth_provider.verify(callback_payload).await?;
 ```
 
 ## Session Management
 
-The `SessionService` orchestrates the complete authentication flow:
+The `SessionService` orchestrates the login-to-session flow:
 
 ```rust
-use ras_identity_session::{SessionService, SessionConfig};
-use std::time::Duration;
+use chrono::Duration;
+use ras_identity_session::{JwtAlgorithm, SessionConfig, SessionService};
 
 // Configure session service
 let config = SessionConfig {
-    jwt_secret: "your-secret-key".to_string(),
-    jwt_ttl: Duration::from_secs(3600), // 1 hour
-    jwt_algorithm: "HS256".to_string(),
+    jwt_secret: "use-at-least-32-bytes-of-random-secret".to_string(),
+    jwt_ttl: Duration::hours(1),
     refresh_enabled: false,
-    refresh_ttl: None,
+    enforce_active_sessions: true,
+    algorithm: JwtAlgorithm::HS256,
 };
 
-let session_service = SessionService::new(config);
+let session_service = SessionService::new(config)?;
 
 // Register multiple providers
 session_service.register_provider(Box::new(local_provider)).await;
@@ -210,12 +224,12 @@ let jwt_token = session_service.begin_session("local", auth_payload).await?;
 println!("JWT Token: {}", jwt_token);
 
 // Verify session
-let authenticated_user = session_service.verify_session(&jwt_token).await?;
-println!("User ID: {}", authenticated_user.user_id);
-println!("Permissions: {:?}", authenticated_user.permissions);
+let claims = session_service.verify_session(&jwt_token).await?;
+println!("Subject: {}", claims.sub);
+println!("Permissions: {:?}", claims.permissions);
 
 // End session (logout)
-session_service.end_session(&jwt_token).await?;
+session_service.end_session(&claims.jti).await;
 ```
 
 ## Permission Management
@@ -223,8 +237,9 @@ session_service.end_session(&jwt_token).await?;
 Implement custom permission logic using the `UserPermissions` trait:
 
 ```rust
-use ras_identity_core::{UserPermissions, VerifiedIdentity};
 use async_trait::async_trait;
+use ras_identity_core::{IdentityResult, UserPermissions, VerifiedIdentity};
+use std::sync::Arc;
 
 struct RoleBasedPermissions {
     // Your permission logic
@@ -232,21 +247,21 @@ struct RoleBasedPermissions {
 
 #[async_trait]
 impl UserPermissions for RoleBasedPermissions {
-    async fn get_permissions(&self, identity: &VerifiedIdentity) -> Vec<String> {
+    async fn get_permissions(&self, identity: &VerifiedIdentity) -> IdentityResult<Vec<String>> {
         // Example: Grant permissions based on email domain
         match &identity.email {
             Some(email) if email.ends_with("@admin.com") => {
-                vec!["admin".to_string(), "user".to_string()]
+                Ok(vec!["admin".to_string(), "user".to_string()])
             }
-            Some(_) => vec!["user".to_string()],
-            None => vec![],
+            Some(_) => Ok(vec!["user".to_string()]),
+            None => Ok(vec![]),
         }
     }
 }
 
-// Use with session service
-let permissions = Arc::new(RoleBasedPermissions {});
-session_service.with_permissions(permissions);
+// Configure the session service before sharing it with handlers.
+let mut session_service = SessionService::new(session_config)?;
+session_service.set_permissions_provider(Arc::new(RoleBasedPermissions {}));
 ```
 
 ## Integration with Services
@@ -330,14 +345,13 @@ rest_service!({
 });
 ```
 
-## Complete Example
+## Service Composition Example
 
-Here's a complete example showing a typical setup:
+Here is a typical setup sketch showing how the identity pieces fit together with generated service routes. The request/response DTOs and handler bodies are application-specific.
 
 ```rust
-use ras_identity_session::{SessionService, SessionConfig, JwtAuthProvider};
+use ras_identity_session::{JwtAlgorithm, JwtAuthProvider, SessionConfig, SessionService};
 use ras_identity_local::LocalUserProvider;
-use ras_identity_oauth2::{OAuth2Provider, OAuth2Config, ProviderConfig};
 use ras_jsonrpc_macro::jsonrpc_service;
 use axum::{Router, routing::get};
 use std::sync::Arc;
@@ -358,39 +372,54 @@ jsonrpc_service!({
 async fn main() -> anyhow::Result<()> {
     // 1. Set up session service
     let session_config = SessionConfig {
-        jwt_secret: std::env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string()),
-        jwt_ttl: std::time::Duration::from_secs(3600),
-        jwt_algorithm: "HS256".to_string(),
+        jwt_secret: std::env::var("JWT_SECRET")
+            .expect("JWT_SECRET must be at least 32 bytes"),
+        jwt_ttl: chrono::Duration::hours(1),
         refresh_enabled: false,
-        refresh_ttl: None,
+        enforce_active_sessions: true,
+        algorithm: JwtAlgorithm::HS256,
     };
-    
-    let session_service = Arc::new(SessionService::new(session_config));
-    
-    // 2. Set up local authentication
-    let local_provider = LocalUserProvider::new();
-    local_provider.add_user("user", "password", Some("user@example.com"), Some("User")).await?;
-    local_provider.add_user("admin", "admin123", Some("admin@example.com"), Some("Admin")).await?;
-    
-    session_service.register_provider(Box::new(local_provider)).await;
-    
-    // 3. Set up permissions
-    use ras_identity_core::{UserPermissions, VerifiedIdentity};
+
+    // 2. Set up permissions
     use async_trait::async_trait;
-    
+    use ras_identity_core::{IdentityResult, UserPermissions, VerifiedIdentity};
+
     struct SimplePermissions;
-    
+
     #[async_trait]
     impl UserPermissions for SimplePermissions {
-        async fn get_permissions(&self, identity: &VerifiedIdentity) -> Vec<String> {
+        async fn get_permissions(&self, identity: &VerifiedIdentity) -> IdentityResult<Vec<String>> {
             match identity.subject.as_str() {
-                "admin" => vec!["user".to_string(), "admin".to_string()],
-                _ => vec!["user".to_string()],
+                "admin" => Ok(vec!["user".to_string(), "admin".to_string()]),
+                _ => Ok(vec!["user".to_string()]),
             }
         }
     }
-    
-    session_service.with_permissions(Arc::new(SimplePermissions));
+
+    let mut session_service = SessionService::new(session_config)?;
+    session_service.set_permissions_provider(Arc::new(SimplePermissions));
+    let session_service = Arc::new(session_service);
+
+    // 3. Set up local authentication
+    let local_provider = LocalUserProvider::new();
+    local_provider
+        .add_user(
+            "user".to_string(),
+            "password123".to_string(),
+            Some("user@example.com".to_string()),
+            Some("User".to_string()),
+        )
+        .await?;
+    local_provider
+        .add_user(
+            "admin".to_string(),
+            "admin12345".to_string(),
+            Some("admin@example.com".to_string()),
+            Some("Admin".to_string()),
+        )
+        .await?;
+
+    session_service.register_provider(Box::new(local_provider)).await;
     
     // 4. Create authentication endpoints
     let auth_router = Router::new()
@@ -414,9 +443,8 @@ async fn main() -> anyhow::Result<()> {
         .with_state(session_service);
     
     // 7. Start server
-    axum::Server::bind(&"0.0.0.0:3000".parse()?)
-        .serve(app.into_make_service())
-        .await?;
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
+    axum::serve(listener, app).await?;
     
     Ok(())
 }
@@ -436,31 +464,31 @@ async fn main() -> anyhow::Result<()> {
 
 ```rust
 // Use environment variables for sensitive config
-let config = SessionConfig {
-    jwt_secret: std::env::var("JWT_SECRET")
-        .expect("JWT_SECRET must be set"),
-    jwt_ttl: Duration::from_secs(
-        std::env::var("JWT_TTL_SECONDS")
-            .unwrap_or_else(|_| "3600".to_string())
-            .parse()?
-    ),
-    // ...
-};
+let mut config = SessionConfig::new(
+    std::env::var("JWT_SECRET").expect("JWT_SECRET must be set"),
+)?;
+config.jwt_ttl = chrono::Duration::seconds(
+    std::env::var("JWT_TTL_SECONDS")
+        .unwrap_or_else(|_| "3600".to_string())
+        .parse()?,
+);
+config.refresh_enabled = false;
 ```
 
 ### 3. Error Handling
 
 ```rust
 use ras_identity_core::IdentityError;
+use ras_identity_session::SessionError;
 
 match session_service.begin_session("local", payload).await {
     Ok(token) => {
         // Success
     }
-    Err(IdentityError::InvalidCredentials) => {
+    Err(SessionError::IdentityError(IdentityError::InvalidCredentials)) => {
         // Wrong username/password
     }
-    Err(IdentityError::ProviderNotFound(_)) => {
+    Err(SessionError::IdentityError(IdentityError::ProviderNotFound(_))) => {
         // Provider not registered
     }
     Err(e) => {
@@ -480,9 +508,14 @@ mod tests {
     async fn test_authentication_flow() {
         // Set up test providers
         let provider = LocalUserProvider::new();
-        provider.add_user("test", "test123", None, None).await.unwrap();
-        
-        let session_service = SessionService::new(SessionConfig::default());
+        provider
+            .add_user("test".to_string(), "test123".to_string(), None, None)
+            .await
+            .unwrap();
+
+        let session_config =
+            SessionConfig::new("test-secret-key-that-is-at-least-32-bytes").unwrap();
+        let session_service = SessionService::new(session_config).unwrap();
         session_service.register_provider(Box::new(provider)).await;
         
         // Test authentication
@@ -492,8 +525,8 @@ mod tests {
         })).await.unwrap();
         
         // Verify token
-        let user = session_service.verify_session(&token).await.unwrap();
-        assert_eq!(user.user_id, "test");
+        let claims = session_service.verify_session(&token).await.unwrap();
+        assert_eq!(claims.sub, "test");
     }
 }
 ```
@@ -508,7 +541,7 @@ mod tests {
 
 2. **JWT validation failures**
    - Verify the JWT secret is consistent across services
-   - Check token hasn't expired (default TTL is 1 hour)
+   - Check token hasn't expired; `SessionConfig::new` defaults to 24 hours, while the examples above configure one hour explicitly
    - Ensure the token is passed in the correct format
 
 3. **Permission denied errors**
@@ -528,7 +561,7 @@ mod tests {
 Implement the `IdentityProvider` trait for custom authentication:
 
 ```rust
-use ras_identity_core::{IdentityProvider, VerifiedIdentity, IdentityError};
+use ras_identity_core::{IdentityError, IdentityProvider, IdentityResult, VerifiedIdentity};
 use async_trait::async_trait;
 
 struct LdapProvider {
@@ -537,13 +570,23 @@ struct LdapProvider {
 
 #[async_trait]
 impl IdentityProvider for LdapProvider {
-    fn id(&self) -> &str {
+    fn provider_id(&self) -> &str {
         "ldap"
     }
-    
-    async fn verify(&self, payload: serde_json::Value) -> Result<VerifiedIdentity, IdentityError> {
-        // Implement LDAP authentication
-        todo!()
+
+    async fn verify(&self, payload: serde_json::Value) -> IdentityResult<VerifiedIdentity> {
+        let username = payload
+            .get("username")
+            .and_then(|value| value.as_str())
+            .ok_or(IdentityError::InvalidPayload)?;
+
+        Ok(VerifiedIdentity {
+            provider_id: self.provider_id().to_string(),
+            subject: username.to_string(),
+            email: None,
+            display_name: Some(username.to_string()),
+            metadata: None,
+        })
     }
 }
 ```
@@ -554,7 +597,8 @@ Implement immediate session revocation:
 
 ```rust
 // End specific session
-session_service.end_session(&jwt_token).await?;
+let claims = session_service.verify_session(&jwt_token).await?;
+session_service.end_session(&claims.jti).await;
 
 // End all sessions for a user
 // (Requires custom implementation tracking user->session mapping)
@@ -562,24 +606,21 @@ session_service.end_session(&jwt_token).await?;
 
 ### Refresh Tokens
 
-Enable refresh tokens for long-lived sessions:
+`SessionConfig::refresh_enabled` is reserved for applications that add their own refresh-token storage and rotation. The current `SessionService` issues and verifies access JWTs; long-lived refresh tokens should be implemented as an application-level flow with server-side persistence and token rotation.
 
 ```rust
-let config = SessionConfig {
-    refresh_enabled: true,
-    refresh_ttl: Some(Duration::from_days(30)),
-    // ...
-};
-
-// Use refresh token to get new access token
-let new_token = session_service.refresh_session(&refresh_token).await?;
+let mut config = SessionConfig::new("use-at-least-32-bytes-of-random-secret")?;
+config.refresh_enabled = false;
 ```
 
 ## Conclusion
 
-The RAS identity system provides a robust foundation for authentication in your applications. Start with basic local authentication and progressively add OAuth2 providers and custom permission logic as needed. The modular design ensures you can adapt the system to your specific requirements while maintaining security best practices.
+The RAS identity crates provide local authentication, OAuth2 callbacks, JWT
+sessions, and permission lookup traits that can be composed for application
+authentication flows. Start with basic local authentication, then add OAuth2
+providers and custom permission logic as needed.
 
 For more examples, check out:
-- `/examples/google-oauth-example/` - Complete OAuth2 integration
-- `/examples/basic-jsonrpc-service/` - JSON-RPC with authentication
-- `/examples/bidirectional-chat/` - WebSocket authentication
+- [`examples/oauth2-demo`](../examples/oauth2-demo/) - OAuth2 integration demo
+- [`examples/basic-jsonrpc`](../examples/basic-jsonrpc/) - JSON-RPC with authentication
+- [`examples/bidirectional-chat`](../examples/bidirectional-chat/) - WebSocket authentication

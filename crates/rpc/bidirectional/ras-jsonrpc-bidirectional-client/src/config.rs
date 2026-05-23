@@ -5,9 +5,10 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 /// Authentication configuration for the client
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum AuthConfig {
     /// No authentication
+    #[default]
     None,
     /// JWT token sent in Authorization header
     JwtHeader { token: String },
@@ -19,16 +20,10 @@ pub enum AuthConfig {
     CustomParams { params: HashMap<String, String> },
 }
 
-impl Default for AuthConfig {
-    fn default() -> Self {
-        Self::None
-    }
-}
-
-/// Reconnection configuration
+/// Reconnection retry-policy configuration.
 #[derive(Debug, Clone, Builder)]
 pub struct ReconnectConfig {
-    /// Whether to enable automatic reconnection
+    /// Whether retry attempts are enabled for caller-managed reconnect loops
     #[builder(default = true)]
     pub enabled: bool,
 
@@ -81,7 +76,7 @@ impl ReconnectConfig {
 
         // Add jitter
         let jitter_amount = delay_secs * self.jitter;
-        let jittered_delay = delay_secs + (rand::random::<f64>() - 0.5) * 2.0 * jitter_amount;
+        let jittered_delay = delay_secs + (random_unit() - 0.5) * 2.0 * jitter_amount;
         let jittered_delay = jittered_delay.max(0.0);
 
         // Ensure the final delay doesn't exceed max_delay
@@ -233,6 +228,16 @@ impl ClientConfig {
 
         Ok(())
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn random_unit() -> f64 {
+    rand::random::<f64>()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn random_unit() -> f64 {
+    js_sys::Math::random()
 }
 
 #[cfg(test)]

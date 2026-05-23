@@ -69,6 +69,15 @@ impl RequestContext {
         }
     }
 
+    /// Create a new WebSocket request context
+    pub fn websocket(method: impl Into<String>) -> Self {
+        Self {
+            method: method.into(),
+            protocol: Protocol::WebSocket,
+            metadata: HashMap::new(),
+        }
+    }
+
     /// Add metadata to the context
     pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.metadata.insert(key.into(), value.into());

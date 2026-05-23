@@ -42,7 +42,7 @@ test.describe('REST API explorer', () => {
     await expect(page.locator('#operation-description pre code')).toContainText('{"status":"ok"}');
     await expect(page.locator('#operation-description a').filter({ hasText: 'REST docs' })).toHaveAttribute(
       'href',
-      'https://example.com/rest'
+      'https://github.com/JedimEmO/rust-agent-stack/blob/main/documentation/ras-rest-macro.md'
     );
     const descriptionText = await page.locator('#operation-description').evaluate((el) => el.textContent ?? '');
     expect(descriptionText).toContain('Alpha line\nBeta line');
@@ -103,7 +103,7 @@ test.describe('REST API explorer', () => {
     await send(page);
     await expect(page.locator('#response-status')).toContainText('401');
 
-    await page.locator('#jwt-token').fill('admin-token');
+    await page.locator('#bearer-token').fill('admin-token');
     await page.locator('#save-token').click();
     await expect(page.locator('#auth-state')).toContainText('Token set');
     await send(page);
@@ -120,7 +120,7 @@ test.describe('REST API explorer', () => {
   test('shows permission denied responses for insufficient token permissions', async ({ page }) => {
     await selectOperation(page, 'POST', '/widgets');
     await page.locator('#body-editor').fill(JSON.stringify({ name: 'Denied Widget', owner: 'playwright' }, null, 2));
-    await page.locator('#jwt-token').fill('user-token');
+    await page.locator('#bearer-token').fill('user-token');
     await page.locator('#save-token').click();
     await expect(page.locator('#auth-state')).toContainText('Token set');
 
@@ -131,7 +131,7 @@ test.describe('REST API explorer', () => {
 
   test('saves requests, restores history, and keeps tokens out of localStorage', async ({ page }) => {
     await selectOperation(page, 'POST', '/widgets');
-    await page.locator('#jwt-token').fill('admin-token');
+    await page.locator('#bearer-token').fill('admin-token');
     await page.locator('#save-token').click();
     await page.locator('#body-editor').fill(JSON.stringify({ name: 'Saved Body', owner: 'saved-owner' }, null, 2));
 

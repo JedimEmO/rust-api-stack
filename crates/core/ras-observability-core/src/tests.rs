@@ -43,6 +43,14 @@ fn test_request_context_jsonrpc() {
 }
 
 #[test]
+fn test_request_context_websocket() {
+    let ctx = RequestContext::websocket("sendMessage");
+    assert_eq!(ctx.method, "sendMessage");
+    assert_eq!(ctx.protocol, Protocol::WebSocket);
+    assert!(ctx.metadata.is_empty());
+}
+
+#[test]
 fn test_request_context_with_metadata() {
     let ctx = RequestContext::rest("POST", "/api/users")
         .with_metadata("request_id", "123")
@@ -247,7 +255,7 @@ fn test_service_metrics_trait() {
     // Test request completed
     metrics.increment_requests_completed(&context, true);
     assert_eq!(metrics.requests_completed.try_lock().unwrap().len(), 1);
-    assert_eq!(metrics.requests_completed.try_lock().unwrap()[0].2, true);
+    assert!(metrics.requests_completed.try_lock().unwrap()[0].2);
 
     // Test method duration
     let duration = Duration::from_secs(1);

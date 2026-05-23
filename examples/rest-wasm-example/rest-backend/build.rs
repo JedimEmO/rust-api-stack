@@ -6,9 +6,7 @@ fn main() {
     // Import and call the OpenAPI generation function from the API crate
     // This will generate the OpenAPI spec at compile time
     match rest_api::generate_userservice_openapi_to_file() {
-        Ok(()) => {
-            println!("cargo:warning=OpenAPI specification generated successfully at compile time!");
-        }
+        Ok(()) => {}
         Err(e) => {
             println!(
                 "cargo:warning=Failed to generate OpenAPI specification: {}",

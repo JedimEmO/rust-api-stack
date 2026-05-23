@@ -43,9 +43,14 @@ pub fn file_service(input: TokenStream) -> TokenStream {
             #schema_checks
         };
 
-        // Generate OpenAPI function at module level
         #[cfg(not(target_arch = "wasm32"))]
-        #openapi_code
+        mod openapi_impl {
+            use super::*;
+            #openapi_code
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        pub use openapi_impl::*;
 
         #client_code
     };

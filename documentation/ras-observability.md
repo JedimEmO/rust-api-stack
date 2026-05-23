@@ -1,32 +1,35 @@
 # RAS Observability Guide
 
-This guide provides everything you need to add observability to your RAS stack applications using the built-in OpenTelemetry-based observability system.
+This guide covers the common setup for adding observability to RAS stack applications using the built-in OpenTelemetry-based observability crates.
 
 ## Overview
 
-The RAS observability system provides production-ready metrics and monitoring for your applications with:
-- Zero-configuration setup with sensible defaults
+The RAS observability system provides operational metrics and monitoring for your applications with:
+- Convenience setup with sensible defaults
 - Support for REST, JSON-RPC, and WebSocket protocols
 - OpenTelemetry metrics with Prometheus export
 - Built-in cardinality protection
-- Seamless integration with RAS service macros
+- Integration with RAS service macros
 
 ## Quick Start
 
-Add observability to your service in one line:
+Set up observability with the convenience builder and merge the metrics router
+into your Axum application:
 
 ```rust
+use axum::{Router, routing::get};
 use ras_observability_otel::standard_setup;
+
+async fn handler() -> &'static str {
+    "ok"
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize observability with your service name
     let otel = standard_setup("my-service")?;
     
-    // Your service now has:
-    // - Prometheus metrics endpoint at /metrics
-    // - Request and duration tracking
-    // - Standard service metrics
+    // The setup provides a Prometheus registry, trackers, and a metrics router.
     
     // Add the metrics endpoint to your router
     let app = Router::new()
@@ -43,7 +46,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Metrics Exposed
 
-The observability system automatically exposes the following metrics:
+When the trackers are wired into service builders, or metrics are recorded
+manually, the Prometheus endpoint exposes the following metrics:
 
 ### Counters
 - **`requests_started_total`** - Total number of requests initiated
@@ -52,23 +56,25 @@ The observability system automatically exposes the following metrics:
   - Labels: `method`, `protocol`, `success` (true/false)
 
 ### Histograms
-- **`method_duration_seconds`** - Method execution time in seconds
+- **`method_duration_milliseconds`** - Method execution time in milliseconds
   - Labels: `method`, `protocol`
-  - Buckets: 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0 seconds
+  - Histogram bucket boundaries are reported in milliseconds by the Prometheus exporter
 
 ### Labels
 Labels are kept minimal to avoid cardinality explosion:
 - **`method`** - The method being called (e.g., "GET /users", "createUser")
-- **`protocol`** - One of: "rest", "jsonrpc", "websocket"
+- **`protocol`** - One of: "REST", "JSON-RPC", "WebSocket"
 - **`success`** - "true" or "false" (only on completion counter)
 
 ## Integration with RAS Services
 
 ### JSON-RPC Service Integration
 
-The RAS JSON-RPC macro supports automatic observability integration:
+The RAS JSON-RPC macro exposes observability hooks on the generated service builder:
 
 ```rust
+use axum::Router;
+use ras_observability_core::{MethodDurationTracker, RequestContext, UsageTracker};
 use ras_observability_otel::OtelSetupBuilder;
 use ras_jsonrpc_macro::jsonrpc_service;
 
@@ -77,8 +83,6 @@ jsonrpc_service!({
     service_name: MyService,
     methods: [
         UNAUTHORIZED health(()) -> String,
-        WITH_PERMISSIONS(["user"]) create_user(CreateUserRequest) -> User,
-        WITH_PERMISSIONS(["admin"]) delete_user(DeleteUserRequest) -> bool,
     ]
 });
 
@@ -88,22 +92,6 @@ struct MyServiceImpl;
 impl MyServiceTrait for MyServiceImpl {
     async fn health(&self, _params: ()) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         Ok("healthy".to_string())
-    }
-
-    async fn create_user(
-        &self,
-        _user: &ras_jsonrpc_core::AuthenticatedUser,
-        req: CreateUserRequest,
-    ) -> Result<User, Box<dyn std::error::Error + Send + Sync>> {
-        // Your implementation
-    }
-
-    async fn delete_user(
-        &self,
-        _user: &ras_jsonrpc_core::AuthenticatedUser,
-        req: DeleteUserRequest,
-    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        // Your implementation
     }
 }
 
@@ -162,8 +150,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 For REST services using the RAS REST macro:
 
 ```rust
+use ras_observability_core::{MethodDurationTracker, RequestContext, UsageTracker};
 use ras_observability_otel::OtelSetupBuilder;
+use ras_rest_core::{RestResponse, RestResult};
 use ras_rest_macro::rest_service;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+struct HealthResponse {
+    status: String,
+}
 
 // Define your REST service
 rest_service!({
@@ -171,12 +168,19 @@ rest_service!({
     base_path: "/api/v1",
     endpoints: [
         GET UNAUTHORIZED health() -> HealthResponse,
-        GET WITH_PERMISSIONS(["user"]) users/{id: UserId}() -> User,
-        DELETE WITH_PERMISSIONS(["admin"]) users/{id: UserId}() -> DeleteResponse,
     ]
 });
 
-// Implementation...
+struct UserServiceImpl;
+
+#[async_trait::async_trait]
+impl UserServiceTrait for UserServiceImpl {
+    async fn get_health(&self) -> RestResult<HealthResponse> {
+        Ok(RestResponse::ok(HealthResponse {
+            status: "healthy".to_string(),
+        }))
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -184,7 +188,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let otel = OtelSetupBuilder::new("my-rest-service").build()?;
     
     // Build your service with observability hooks
-    let app = UserServiceBuilder::new(service_impl)
+    let app = UserServiceBuilder::new(UserServiceImpl)
         .with_usage_tracker({
             let usage_tracker = otel.usage_tracker();
             move |headers, user, method, path| {
@@ -230,32 +234,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 For bidirectional WebSocket services:
 
 ```rust
-use ras_observability_otel::OtelSetupBuilder;
-use ras_observability_core::{RequestContext, Protocol};
+use axum::http::HeaderMap;
+use ras_auth_core::AuthenticatedUser;
+use ras_observability_core::{MethodDurationTracker, RequestContext, UsageTracker};
+use ras_observability_otel::OtelSetup;
+use std::{sync::Arc, time::Duration};
 
-// In your WebSocket connection handler
-async fn handle_connection(
-    socket: WebSocket,
+async fn record_websocket_activity(
     otel: Arc<OtelSetup>,
+    headers: &HeaderMap,
+    user: Option<&AuthenticatedUser>,
+    connection_id: &str,
+    method: &str,
+    duration: Duration,
 ) {
-    // Track WebSocket connection
-    let context = RequestContext::websocket();
+    let context = RequestContext::websocket("connect")
+        .with_metadata("connection_id", connection_id);
     otel.usage_tracker()
-        .track_request(&headers, user.as_ref(), &context)
+        .track_request(headers, user, &context)
         .await;
     
-    // Handle messages...
-    
-    // Track individual WebSocket method calls
-    let method_context = RequestContext::websocket()
-        .with_metadata("method", "sendMessage");
-    
-    let start = Instant::now();
-    // Process message...
-    let duration = start.elapsed();
-    
+    let method_context = RequestContext::websocket(method.to_string())
+        .with_metadata("connection_id", connection_id);
     otel.method_duration_tracker()
-        .track_duration(&method_context, user.as_ref(), duration)
+        .track_duration(&method_context, user, duration)
         .await;
 }
 ```
@@ -265,8 +267,8 @@ async fn handle_connection(
 For custom metrics or manual tracking outside of the service macros:
 
 ```rust
+use ras_observability_core::{RequestContext, ServiceMetrics};
 use ras_observability_otel::standard_setup;
-use ras_observability_core::RequestContext;
 use std::time::{Duration, Instant};
 
 let otel = standard_setup("my-service")?;
@@ -277,11 +279,8 @@ let context = RequestContext::rest("POST", "/api/v1/process");
 metrics.increment_requests_started(&context);
 
 let start = Instant::now();
-// Do some work...
-let success = match do_work().await {
-    Ok(_) => true,
-    Err(_) => false,
-};
+tokio::time::sleep(Duration::from_millis(25)).await;
+let success = true;
 
 // Track completion
 metrics.increment_requests_completed(&context, success);
@@ -314,7 +313,7 @@ let otel = OtelSetupBuilder::new("my-service")
 Use metadata for request-specific information that shouldn't be in metrics:
 
 ```rust
-use ras_observability_core::RequestContext;
+use ras_observability_core::{RequestContext, UsageTracker};
 
 let context = RequestContext::rest("POST", "/api/orders")
     .with_metadata("request_id", request_id)
@@ -359,7 +358,7 @@ receivers:
 
 exporters:
   otlp:
-    endpoint: "your-otlp-backend:4317"
+    endpoint: "tempo:4317"
 
 service:
   pipelines:
@@ -376,12 +375,15 @@ Protect the metrics endpoint in production:
 use axum::middleware;
 use tower_http::auth::RequireAuthorizationLayer;
 
+let metrics_token = std::env::var("METRICS_BEARER_TOKEN")
+    .expect("METRICS_BEARER_TOKEN must be set");
+
 let app = Router::new()
     .merge(api_routes)
     .nest(
         "/metrics",
         otel.metrics_router()
-            .layer(RequireAuthorizationLayer::bearer("your-metrics-token"))
+            .layer(RequireAuthorizationLayer::bearer(metrics_token.as_str()))
     );
 ```
 
@@ -399,7 +401,7 @@ sum(rate(requests_completed_total[5m]))
 
 # P95 latency by method
 histogram_quantile(0.95, 
-  sum(rate(method_duration_seconds_bucket[5m])) by (method, le)
+  sum(rate(method_duration_milliseconds_bucket[5m])) by (method, le)
 )
 
 # Error rate by protocol
@@ -408,7 +410,7 @@ sum(rate(requests_completed_total{success="false"}[5m])) by (protocol)
 
 ## Best Practices
 
-1. **Use standard context types**: Always use `RequestContext::rest()`, `RequestContext::jsonrpc()`, or `RequestContext::websocket()` for consistency.
+1. **Use standard context types**: Always use `RequestContext::rest(method, path)`, `RequestContext::jsonrpc(method)`, or `RequestContext::websocket(method)` for consistency.
 
 2. **Avoid custom labels**: Keep user-specific or high-cardinality data in structured logs, not metrics.
 
@@ -444,9 +446,9 @@ The system tracks authenticated vs anonymous requests. Ensure your `AuthProvider
 
 ## Examples
 
-Complete working examples are available in the repository:
-- `examples/basic-jsonrpc-service` - JSON-RPC service with metrics
-- `examples/rest-service-example` - REST API with Prometheus metrics
+Runnable examples are available in the repository:
+- `examples/basic-jsonrpc/service` - JSON-RPC service with metrics
+- `examples/rest-wasm-example/rest-backend` - REST API with generated OpenAPI docs
 - `crates/observability/ras-observability-otel/examples/` - Standalone examples
 
 ## Dependencies
@@ -455,8 +457,8 @@ Add these to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-ras-observability-core = { path = "../crates/core/ras-observability-core" }
-ras-observability-otel = { path = "../crates/observability/ras-observability-otel" }
+ras-observability-core = "0.1.0"
+ras-observability-otel = "0.1.0"
 ```
 
-The observability system is designed to be lightweight with minimal dependencies while providing production-ready metrics for your RAS stack applications.
+The observability system is designed to be lightweight with minimal dependencies while providing useful runtime metrics for your RAS stack applications.

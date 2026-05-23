@@ -448,8 +448,8 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
                 None => static_hosting::StaticHostingConfig::default(),
             };
 
-            // Extract base path from server code (we'll need to pass this to explorer)
-            // For now, use the default empty string since JSON-RPC typically uses a single endpoint
+            // JSON-RPC services in this macro expose the explorer next to a single endpoint.
+            // The static host generator still accepts a base path for future reuse.
             static_hosting::generate_static_hosting_code(
                 &explorer_config,
                 &service_def.service_name,

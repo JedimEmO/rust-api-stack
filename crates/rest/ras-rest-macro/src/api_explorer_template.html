@@ -462,8 +462,8 @@
                     <input id="base-url" type="text" spellcheck="false">
                 </div>
                 <div class="field">
-                    <label for="jwt-token">Bearer token</label>
-                    <input id="jwt-token" type="password" autocomplete="off" placeholder="Token for this session">
+                    <label for="bearer-token">Bearer token</label>
+                    <input id="bearer-token" type="password" autocomplete="off" placeholder="Token for this session">
                 </div>
                 <div class="row">
                     <button id="save-token" class="primary">Apply token</button>
@@ -1383,14 +1383,14 @@
                 renderEnvironments();
             });
             $("save-token").addEventListener("click", () => {
-                state.token = $("jwt-token").value.trim();
+                state.token = $("bearer-token").value.trim();
                 storageSet("bearer-token", state.token);
                 $("auth-state").textContent = state.token ? "Token set" : "No token";
                 showToast(state.token ? "Token applied for this session" : "Token cleared");
             });
             $("clear-token").addEventListener("click", () => {
                 state.token = "";
-                $("jwt-token").value = "";
+                $("bearer-token").value = "";
                 sessionStorage.removeItem(`${storagePrefix}:bearer-token`);
                 $("auth-state").textContent = "No token";
             });
@@ -1429,7 +1429,7 @@
             state.saved = storageGet("saved", {});
             state.history = storageGet("history", []);
             state.token = storageGet("bearer-token", "");
-            $("jwt-token").value = state.token;
+            $("bearer-token").value = state.token;
             $("auth-state").textContent = state.token ? "Token set" : "No token";
             bindEvents();
             renderEnvironments();

@@ -1,12 +1,15 @@
-//! End-to-end test: generated reqwest client → axum router → trait impl →
-//! response → client. Covers GET, POST with body, path params, query params,
-//! and auth-related rejection paths.
+//! End-to-end test: in-memory axum-test request -> axum router -> trait impl
+//! -> response. Covers GET, POST with body, path params, query params, and
+//! auth-related rejection paths.
 
+use axum::http::StatusCode;
 use ras_auth_core::AuthenticatedUser;
 use ras_rest_core::{RestError, RestResponse, RestResult};
 use ras_rest_macro::rest_service;
-use ras_test_helpers::{MockAuthProvider, spawn_http};
 use serde::{Deserialize, Serialize};
+
+mod support;
+use support::{MockAuthProvider, mock_http_server};
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 struct Item {
@@ -262,34 +265,30 @@ fn router() -> axum::Router {
         .build()
 }
 
-fn client(base: &str) -> DemoClient {
-    DemoClient::builder(base).build().expect("client build")
+fn server() -> axum_test::TestServer {
+    mock_http_server(router())
 }
 
 #[tokio::test]
 async fn unauth_get_round_trips() {
-    let server = spawn_http(router());
-    let base = server.server_address().unwrap().to_string();
-    let resp = client(&base).get_items().await.expect("get_items ok");
+    let response = server().get("/api/items").await;
+    response.assert_status_ok();
+    let resp: ItemsResponse = response.json();
+
     assert_eq!(resp.items.len(), 1);
     assert_eq!(resp.items[0].name, "alpha");
 }
 
 #[tokio::test]
 async fn legacy_rest_version_round_trips_through_canonical_handler() {
-    let server = spawn_http(router());
-    let base = server.server_address().unwrap().to_string();
-
-    let resp = client(&base)
-        .post_v1_items_by_id_rename(
-            7,
-            Some(true),
-            RenameItemV1 {
-                name: "renamed".to_string(),
-            },
-        )
-        .await
-        .expect("legacy rename ok");
+    let response = server()
+        .post("/api/v1/items/7/rename?notify=true")
+        .json(&RenameItemV1 {
+            name: "renamed".to_string(),
+        })
+        .await;
+    response.assert_status_ok();
+    let resp: RenamedItemV1 = response.json();
 
     assert_eq!(
         resp,
@@ -301,20 +300,15 @@ async fn legacy_rest_version_round_trips_through_canonical_handler() {
 
 #[tokio::test]
 async fn canonical_rest_version_uses_v2_path_and_types() {
-    let server = spawn_http(router());
-    let base = server.server_address().unwrap().to_string();
-
-    let resp = client(&base)
-        .post_v2_items_by_id_rename(
-            8,
-            false,
-            RenameItemV2 {
-                display_name: "canonical".to_string(),
-                notify: true,
-            },
-        )
-        .await
-        .expect("canonical rename ok");
+    let response = server()
+        .post("/api/v2/items/8/rename?notify=false")
+        .json(&RenameItemV2 {
+            display_name: "canonical".to_string(),
+            notify: true,
+        })
+        .await;
+    response.assert_status_ok();
+    let resp: RenamedItemV2 = response.json();
 
     assert_eq!(
         resp,
@@ -328,57 +322,45 @@ async fn canonical_rest_version_uses_v2_path_and_types() {
 
 #[tokio::test]
 async fn auth_get_with_path_param_succeeds_with_user_token() {
-    let server = spawn_http(router());
-    let base = server.server_address().unwrap().to_string();
-    let mut c = client(&base);
-    c.set_bearer_token(Some("user-token".to_string()));
+    let response = server()
+        .get("/api/items/7")
+        .authorization_bearer("user-token")
+        .await;
+    response.assert_status_ok();
+    let item: Item = response.json();
 
-    let item = c.get_items_by_id(7).await.expect("get_items_by_id ok");
     assert_eq!(item.id, 7);
     assert_eq!(item.name, "item-7");
 }
 
 #[tokio::test]
 async fn auth_get_rejected_without_token() {
-    let server = spawn_http(router());
-    let base = server.server_address().unwrap().to_string();
-    // No bearer token set on client.
-    let err = client(&base)
-        .get_items_by_id(1)
-        .await
-        .expect_err("must be rejected");
-    let s = err.to_string();
-    assert!(s.contains("401") || s.contains("Unauthorized"), "got: {s}");
+    let response = server().get("/api/items/1").await;
+    response.assert_status(StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
 async fn auth_post_rejected_with_insufficient_perms() {
-    let server = spawn_http(router());
-    let base = server.server_address().unwrap().to_string();
-    let mut c = client(&base);
-    c.set_bearer_token(Some("user-token".to_string())); // not admin
-
-    let err = c
-        .post_items(CreateItem {
+    let response = server()
+        .post("/api/items")
+        .authorization_bearer("user-token")
+        .json(&CreateItem {
             name: "x".to_string(),
         })
-        .await
-        .expect_err("user-token can't POST items");
-    let s = err.to_string();
-    assert!(s.contains("403") || s.contains("Forbidden"), "got: {s}");
+        .await;
+    response.assert_status(StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
 async fn auth_post_with_admin_succeeds_and_user_id_propagates() {
-    let server = spawn_http(router());
-    let base = server.server_address().unwrap().to_string();
-    let mut c = client(&base);
-    c.set_bearer_token(Some("admin-token".to_string()));
+    let response = server()
+        .post("/api/items")
+        .authorization_bearer("admin-token")
+        .json(&CreateItem { name: "foo".into() })
+        .await;
+    response.assert_status(StatusCode::CREATED);
+    let item: Item = response.json();
 
-    let item = c
-        .post_items(CreateItem { name: "foo".into() })
-        .await
-        .expect("post_items ok");
     assert_eq!(item.name, "foo");
     // admin-1 is 7 chars long.
     assert_eq!(item.id, 7);
@@ -386,130 +368,110 @@ async fn auth_post_with_admin_succeeds_and_user_id_propagates() {
 
 #[tokio::test]
 async fn query_params_required_and_optional_serialize_correctly() {
-    let server = spawn_http(router());
-    let base = server.server_address().unwrap().to_string();
+    let server = server();
 
-    // Optional `limit` provided, required `q` and `exact` set.
-    let resp = client(&base)
-        .get_search("hi".to_string(), Some(3), true)
-        .await
-        .expect("search ok");
+    let response = server.get("/api/search?q=hi&limit=3&exact=true").await;
+    response.assert_status_ok();
+    let resp: ItemsResponse = response.json();
     assert_eq!(resp.items.len(), 3);
     assert_eq!(resp.items[0].name, "exact:hi-0");
     assert_eq!(resp.items[2].name, "exact:hi-2");
 
-    // Optional `limit` omitted (None) → handler default of 2 applies, and the
-    // bool flips the prefix.
-    let resp = client(&base)
-        .get_search("zz".to_string(), None, false)
-        .await
-        .expect("search ok");
+    let response = server.get("/api/search?q=zz&exact=false").await;
+    response.assert_status_ok();
+    let resp: ItemsResponse = response.json();
     assert_eq!(resp.items.len(), 2);
     assert_eq!(resp.items[0].name, "fuzzy:zz-0");
 }
 
 #[tokio::test]
 async fn vec_query_params_serialize_as_repeated_keys() {
-    let server = spawn_http(router());
-    let base = server.server_address().unwrap().to_string();
+    let server = server();
 
-    let resp = client(&base)
-        .get_filter(
-            vec!["red".to_string(), "blue".to_string()],
-            Some(vec!["featured".to_string()]),
-        )
-        .await
-        .expect("filter with repeated keys");
+    let response = server
+        .get("/api/filter?tags=red&tags=blue&optional_tags=featured")
+        .await;
+    response.assert_status_ok();
+    let resp: ItemsResponse = response.json();
     let names: Vec<_> = resp.items.into_iter().map(|item| item.name).collect();
     assert_eq!(names, vec!["tag:red", "tag:blue", "optional:featured"]);
 
-    let resp = client(&base)
-        .get_filter(vec!["solo".to_string()], None)
-        .await
-        .expect("filter without optional tags");
+    let response = server.get("/api/filter?tags=solo").await;
+    response.assert_status_ok();
+    let resp: ItemsResponse = response.json();
     let names: Vec<_> = resp.items.into_iter().map(|item| item.name).collect();
     assert_eq!(names, vec!["tag:solo"]);
 }
 
 #[tokio::test]
 async fn enum_query_params_use_serde_renames_without_display() {
-    let server = spawn_http(router());
-    let base = server.server_address().unwrap().to_string();
+    let server = server();
 
-    let resp = client(&base)
-        .get_sorted(SortOrder::Asc)
-        .await
-        .expect("sort asc");
+    let response = server.get("/api/sorted?order=asc").await;
+    response.assert_status_ok();
+    let resp: ItemsResponse = response.json();
     assert_eq!(resp.items[0].name, "order:asc");
 
-    let resp = client(&base)
-        .get_sorted(SortOrder::Desc)
-        .await
-        .expect("sort desc");
+    let response = server.get("/api/sorted?order=desc").await;
+    response.assert_status_ok();
+    let resp: ItemsResponse = response.json();
     assert_eq!(resp.items[0].name, "order:desc");
 }
 
 #[tokio::test]
 async fn query_params_with_body_and_auth() {
-    let server = spawn_http(router());
-    let base = server.server_address().unwrap().to_string();
-    let mut c = client(&base);
-    c.set_bearer_token(Some("admin-token".to_string()));
+    let server = server();
 
-    let item = c
-        .post_items_batch(
-            true,
-            CreateItem {
-                name: "alpha".into(),
-            },
-        )
-        .await
-        .expect("post_items_batch ok");
+    let response = server
+        .post("/api/items/batch?notify=true")
+        .authorization_bearer("admin-token")
+        .json(&CreateItem {
+            name: "alpha".into(),
+        })
+        .await;
+    response.assert_status(StatusCode::CREATED);
+    let item: Item = response.json();
     assert_eq!(item.name, "alpha(notified)");
 
-    let item = c
-        .post_items_batch(
-            false,
-            CreateItem {
-                name: "beta".into(),
-            },
-        )
-        .await
-        .expect("post_items_batch ok");
+    let response = server
+        .post("/api/items/batch?notify=false")
+        .authorization_bearer("admin-token")
+        .json(&CreateItem {
+            name: "beta".into(),
+        })
+        .await;
+    response.assert_status(StatusCode::CREATED);
+    let item: Item = response.json();
     assert_eq!(item.name, "beta(silent)");
 }
 
 #[tokio::test]
 async fn query_params_with_path_param() {
-    let server = spawn_http(router());
-    let base = server.server_address().unwrap().to_string();
-    let mut c = client(&base);
-    c.set_bearer_token(Some("user-token".to_string()));
+    let server = server();
 
-    let resp = c
-        .get_items_by_id_related(42, Some("featured".into()))
-        .await
-        .expect("related with tag");
+    let response = server
+        .get("/api/items/42/related?tag=featured")
+        .authorization_bearer("user-token")
+        .await;
+    response.assert_status_ok();
+    let resp: ItemsResponse = response.json();
     assert_eq!(resp.items[0].id, 42);
     assert_eq!(resp.items[0].name, "related/featured");
 
-    let resp = c
-        .get_items_by_id_related(42, None)
-        .await
-        .expect("related without tag");
+    let response = server
+        .get("/api/items/42/related")
+        .authorization_bearer("user-token")
+        .await;
+    response.assert_status_ok();
+    let resp: ItemsResponse = response.json();
     assert_eq!(resp.items[0].name, "related/none");
 }
 
 #[tokio::test]
 async fn handler_error_surfaces_to_client() {
-    let server = spawn_http(router());
-    let base = server.server_address().unwrap().to_string();
-    let mut c = client(&base);
-    c.set_bearer_token(Some("user-token".to_string()));
-
-    let err = c
-        .get_items_by_id(404)
-        .await
-        .expect_err("404 sentinel must error");
-    assert!(err.to_string().contains("404"), "got: {err}");
+    let response = server()
+        .get("/api/items/404")
+        .authorization_bearer("user-token")
+        .await;
+    response.assert_status(StatusCode::NOT_FOUND);
 }

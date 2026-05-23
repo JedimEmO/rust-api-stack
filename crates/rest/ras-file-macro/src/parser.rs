@@ -85,9 +85,21 @@ impl Parse for FileServiceDefinition {
                         syn::braced!(openapi_content in content);
 
                         // Parse output: "path"
-                        let _ = openapi_content.parse::<Ident>()?; // "output"
+                        let key = openapi_content.parse::<Ident>()?;
+                        if key != "output" {
+                            return Err(Error::new(key.span(), "Expected openapi output field"));
+                        }
                         openapi_content.parse::<Token![:]>()?;
                         let path = openapi_content.parse::<LitStr>()?;
+                        if !openapi_content.is_empty() {
+                            openapi_content.parse::<Token![,]>()?;
+                        }
+                        if !openapi_content.is_empty() {
+                            return Err(Error::new(
+                                openapi_content.span(),
+                                "Unexpected field in openapi config",
+                            ));
+                        }
                         openapi = Some(OpenApiConfig::WithPath(path.value()));
                     }
                 }
@@ -174,12 +186,25 @@ impl Parse for Endpoint {
                             group_content.parse::<Token![,]>()?;
                         }
                     }
+                    if group.is_empty() {
+                        return Err(Error::new(
+                            group_content.span(),
+                            "Permission groups cannot be empty",
+                        ));
+                    }
                     permission_groups.push(group);
                 }
 
                 if !perms_content.is_empty() {
                     perms_content.parse::<Token![,]>()?;
                 }
+            }
+
+            if permission_groups.is_empty() {
+                return Err(Error::new(
+                    perms_content.span(),
+                    "WITH_PERMISSIONS requires at least one permission",
+                ));
             }
 
             AuthRequirement::WithPermissions(permission_groups)
@@ -269,4 +294,187 @@ mod kw {
     syn::custom_keyword!(DOWNLOAD);
     syn::custom_keyword!(UNAUTHORIZED);
     syn::custom_keyword!(WITH_PERMISSIONS);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quote::{ToTokens, quote};
+
+    fn parse_definition(tokens: proc_macro2::TokenStream) -> FileServiceDefinition {
+        syn::parse2(tokens).expect("definition should parse")
+    }
+
+    fn parse_endpoint(tokens: proc_macro2::TokenStream) -> Endpoint {
+        syn::parse2(tokens).expect("endpoint should parse")
+    }
+
+    fn parse_definition_error(tokens: proc_macro2::TokenStream) -> String {
+        syn::parse2::<FileServiceDefinition>(tokens)
+            .unwrap_err()
+            .to_string()
+    }
+
+    fn parse_endpoint_error(tokens: proc_macro2::TokenStream) -> String {
+        syn::parse2::<Endpoint>(tokens).unwrap_err().to_string()
+    }
+
+    fn type_tokens(ty: &Type) -> String {
+        ty.to_token_stream().to_string()
+    }
+
+    #[test]
+    fn definition_parses_body_limit_openapi_path_and_endpoint_variants() {
+        let definition = parse_definition(quote!({
+            service_name: FilesApi,
+            base_path: "/api/files",
+            body_limit: 1048576,
+            openapi: { output: "target/openapi/files.json", },
+            endpoints: [
+                UPLOAD WITH_PERMISSIONS(["files:write"]) upload() -> UploadResponse,
+                DOWNLOAD UNAUTHORIZED files/{bucket: String}/download/{id: u64}() -> axum::response::Response,
+            ],
+        }));
+
+        assert_eq!(definition.service_name.to_string(), "FilesApi");
+        assert_eq!(definition.base_path.value(), "/api/files");
+        assert_eq!(definition.body_limit, Some(1_048_576));
+        assert!(matches!(
+            definition.openapi,
+            Some(OpenApiConfig::WithPath(ref path)) if path == "target/openapi/files.json"
+        ));
+        assert_eq!(definition.endpoints.len(), 2);
+
+        let upload = &definition.endpoints[0];
+        assert!(matches!(upload.operation, Operation::Upload));
+        assert!(matches!(
+            upload.auth,
+            AuthRequirement::WithPermissions(ref groups) if groups == &vec![vec!["files:write".to_string()]]
+        ));
+        assert_eq!(upload.name.to_string(), "upload");
+        assert!(upload.path.is_none());
+        assert_eq!(
+            type_tokens(upload.response_type.as_ref().unwrap()),
+            "UploadResponse"
+        );
+
+        let download = &definition.endpoints[1];
+        assert!(matches!(download.operation, Operation::Download));
+        assert!(matches!(download.auth, AuthRequirement::Unauthorized));
+        assert_eq!(download.name.to_string(), "files_download");
+        assert_eq!(
+            download.path.as_ref().map(LitStr::value).as_deref(),
+            Some("files/{bucket}/download/{id}")
+        );
+        assert_eq!(download.path_params.len(), 2);
+        assert_eq!(download.path_params[0].name.to_string(), "bucket");
+        assert_eq!(type_tokens(&download.path_params[0].ty), "String");
+        assert_eq!(download.path_params[1].name.to_string(), "id");
+        assert_eq!(type_tokens(&download.path_params[1].ty), "u64");
+        assert_eq!(
+            type_tokens(download.response_type.as_ref().unwrap()),
+            "axum :: response :: Response"
+        );
+    }
+
+    #[test]
+    fn definition_parses_boolean_openapi_modes() {
+        let enabled = parse_definition(quote!({
+            service_name: FilesApi,
+            base_path: "/api/files",
+            openapi: true,
+            endpoints: [],
+        }));
+        assert!(matches!(enabled.openapi, Some(OpenApiConfig::Enabled)));
+
+        let disabled = parse_definition(quote!({
+            service_name: FilesApi,
+            base_path: "/api/files",
+            openapi: false,
+            endpoints: [],
+        }));
+        assert!(disabled.openapi.is_none());
+    }
+
+    #[test]
+    fn endpoint_parses_permission_singletons_and_groups() {
+        let endpoint = parse_endpoint(quote! {
+            UPLOAD WITH_PERMISSIONS(["read", ["write", "verified"]]) upload()
+        });
+
+        assert!(matches!(
+            endpoint.auth,
+            AuthRequirement::WithPermissions(ref groups)
+                if groups == &vec![
+                    vec!["read".to_string()],
+                    vec!["write".to_string(), "verified".to_string()],
+                ]
+        ));
+        assert!(endpoint.response_type.is_none());
+    }
+
+    #[test]
+    fn definition_rejects_missing_required_and_unknown_fields() {
+        let err = parse_definition_error(quote!({
+            base_path: "/api",
+            endpoints: [],
+        }));
+        assert!(err.contains("Missing service_name"));
+
+        let err = parse_definition_error(quote!({
+            service_name: FilesApi,
+            endpoints: [],
+        }));
+        assert!(err.contains("Missing base_path"));
+
+        let err = parse_definition_error(quote!({
+            service_name: FilesApi,
+            base_path: "/api",
+            unexpected: true,
+            endpoints: [],
+        }));
+        assert!(err.contains("Unknown field"));
+    }
+
+    #[test]
+    fn openapi_object_rejects_unknown_keys_and_leftover_fields() {
+        let err = parse_definition_error(quote!({
+            service_name: FilesApi,
+            base_path: "/api",
+            openapi: { path: "target/openapi.json" },
+            endpoints: [],
+        }));
+        assert!(err.contains("Expected openapi output field"));
+
+        let err = parse_definition_error(quote!({
+            service_name: FilesApi,
+            base_path: "/api",
+            openapi: { output: "target/openapi.json", extra: "ignored" },
+            endpoints: [],
+        }));
+        assert!(err.contains("Unexpected field in openapi config"));
+    }
+
+    #[test]
+    fn endpoint_rejects_missing_operation_auth_and_empty_permission_groups() {
+        let err = parse_endpoint_error(quote! {
+            STREAM UNAUTHORIZED upload()
+        });
+        assert!(err.contains("Expected UPLOAD or DOWNLOAD"));
+
+        let err = parse_endpoint_error(quote! {
+            UPLOAD upload()
+        });
+        assert!(err.contains("Expected UNAUTHORIZED or WITH_PERMISSIONS"));
+
+        let err = parse_endpoint_error(quote! {
+            UPLOAD WITH_PERMISSIONS([]) upload()
+        });
+        assert!(err.contains("requires at least one permission"));
+
+        let err = parse_endpoint_error(quote! {
+            UPLOAD WITH_PERMISSIONS([[]]) upload()
+        });
+        assert!(err.contains("Permission groups cannot be empty"));
+    }
 }

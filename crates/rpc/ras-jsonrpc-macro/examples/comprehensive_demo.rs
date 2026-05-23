@@ -1,4 +1,4 @@
-//! Comprehensive example showing all features of the jsonrpc_service macro
+//! Feature tour example for the jsonrpc_service macro
 //!
 //! This example demonstrates:
 //! - Service without OpenRPC
@@ -50,7 +50,7 @@ mod basic_service {
     });
 }
 
-// Service with OpenRPC enabled using default path (target/openrpc/{service_name}.json)
+// Service with OpenRPC enabled using default path (target/openrpc/{lowercase-service-name}.json)
 mod api_service {
     use super::*;
     use ras_jsonrpc_macro::jsonrpc_service;
@@ -237,7 +237,7 @@ impl documented_service::DocumentedServiceTrait for DocumentedServiceImpl {
 }
 
 fn main() {
-    println!("=== Comprehensive JSON-RPC Service Demo ===\n");
+    println!("=== JSON-RPC Service Feature Tour ===\n");
 
     // Test basic service (no OpenRPC)
     println!("1. Basic Service (no OpenRPC):");
@@ -245,8 +245,8 @@ fn main() {
         .base_url("/basic")
         .auth_provider(DemoAuthProvider);
     let _basic_router = basic_builder.build().expect("Failed to build BasicService");
-    println!("   ✓ BasicService compiled successfully");
-    println!("   ✓ No OpenRPC functions generated\n");
+    println!("   OK BasicService compiled successfully");
+    println!("   OK No OpenRPC functions generated\n");
 
     // Test API service with default OpenRPC
     println!("2. API Service (OpenRPC enabled, default path):");
@@ -257,8 +257,8 @@ fn main() {
 
     // Generate OpenRPC document
     let openrpc_doc = api_service::generate_apiservice_openrpc();
-    println!("   ✓ ApiService compiled successfully");
-    println!("   ✓ OpenRPC document generated:");
+    println!("   OK ApiService compiled successfully");
+    println!("   OK OpenRPC document generated:");
     println!("     - OpenRPC version: {}", openrpc_doc["openrpc"]);
     println!("     - API title: {}", openrpc_doc["info"]["title"]);
     println!(
@@ -268,8 +268,8 @@ fn main() {
 
     // Write to default path
     match api_service::generate_apiservice_openrpc_to_file() {
-        Ok(()) => println!("   ✓ Written to: target/openrpc/apiservice.json"),
-        Err(e) => println!("   ✗ Error writing file: {}", e),
+        Ok(()) => println!("   OK Written to: target/openrpc/apiservice.json"),
+        Err(e) => println!("   ERROR writing file: {}", e),
     }
     println!();
 
@@ -284,8 +284,8 @@ fn main() {
 
     // Generate OpenRPC document
     let doc_openrpc = documented_service::generate_documentedservice_openrpc();
-    println!("   ✓ DocumentedService compiled successfully");
-    println!("   ✓ OpenRPC document generated with custom path");
+    println!("   OK DocumentedService compiled successfully");
+    println!("   OK OpenRPC document generated with custom path");
     println!(
         "     - Methods count: {}",
         doc_openrpc["methods"].as_array().unwrap().len()
@@ -293,8 +293,8 @@ fn main() {
 
     // Write to custom path
     match documented_service::generate_documentedservice_openrpc_to_file() {
-        Ok(()) => println!("   ✓ Written to: docs/api/service.openrpc.json"),
-        Err(e) => println!("   ✗ Error writing file: {}", e),
+        Ok(()) => println!("   OK Written to: docs/api/service.openrpc.json"),
+        Err(e) => println!("   ERROR writing file: {}", e),
     }
     println!();
 

@@ -1,11 +1,15 @@
-//! End-to-end test that exercises the full chain:
-//!   generated reqwest client → axum router → handler → response → client.
+//! End-to-end test that exercises the full in-memory chain:
+//!   axum-test request -> axum router -> handler -> response.
 //!
 //! Covers: success path, missing-permission rejection, malformed input.
 
 use ras_jsonrpc_macro::jsonrpc_service;
-use ras_test_helpers::{MockAuthProvider, spawn_http};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
+mod support;
+use support::{MockAuthProvider, mock_http_server};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct EchoRequest {
@@ -149,24 +153,54 @@ fn router() -> axum::Router {
         .expect("build router")
 }
 
-fn client(url: String) -> DemoClient {
-    DemoClientBuilder::new()
-        .server_url(url)
-        .build()
-        .expect("client build")
+fn server() -> axum_test::TestServer {
+    mock_http_server(router())
+}
+
+async fn call_rpc<T>(
+    server: &axum_test::TestServer,
+    method: &str,
+    params: Value,
+    token: Option<&str>,
+) -> Result<T, Value>
+where
+    T: DeserializeOwned,
+{
+    let body = json!({
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": params,
+        "id": 1,
+    });
+
+    let mut request = server.post("/rpc").json(&body);
+    if let Some(token) = token {
+        request = request.authorization_bearer(token);
+    }
+
+    let payload: Value = request.await.json();
+
+    if let Some(error) = payload.get("error") {
+        Err(error.clone())
+    } else {
+        Ok(serde_json::from_value(payload["result"].clone()).expect("result should deserialize"))
+    }
 }
 
 #[tokio::test]
 async fn legacy_version_round_trips_through_canonical_handler() {
-    let server = spawn_http(router());
-    let url = server.server_url("/rpc").expect("server url").to_string();
+    let server = server();
 
-    let resp = client(url)
-        .rename_user_v1(RenameUserV1 {
+    let resp: RenameUserResponseV1 = call_rpc(
+        &server,
+        "rename_user.v1",
+        json!(RenameUserV1 {
             name: "Ada".to_string(),
-        })
-        .await
-        .expect("legacy rename ok");
+        }),
+        None,
+    )
+    .await
+    .expect("legacy rename ok");
 
     assert_eq!(
         resp,
@@ -178,16 +212,19 @@ async fn legacy_version_round_trips_through_canonical_handler() {
 
 #[tokio::test]
 async fn canonical_version_uses_declared_wire_method() {
-    let server = spawn_http(router());
-    let url = server.server_url("/rpc").expect("server url").to_string();
+    let server = server();
 
-    let resp = client(url)
-        .rename_user(RenameUserV2 {
+    let resp: RenameUserResponseV2 = call_rpc(
+        &server,
+        "rename_user.v2",
+        json!(RenameUserV2 {
             display_name: "Grace".to_string(),
             notify: true,
-        })
-        .await
-        .expect("canonical rename ok");
+        }),
+        None,
+    )
+    .await
+    .expect("canonical rename ok");
 
     assert_eq!(
         resp,
@@ -200,18 +237,18 @@ async fn canonical_version_uses_declared_wire_method() {
 
 #[tokio::test]
 async fn unauth_method_round_trips() {
-    let server = spawn_http(router());
-    let url = server.server_url("/rpc").expect("server url").to_string();
+    let server = server();
 
-    let mut c = client(url);
-    c.set_bearer_token(Option::<String>::None);
-
-    let resp = c
-        .ping(EchoRequest {
+    let resp: EchoResponse = call_rpc(
+        &server,
+        "ping",
+        json!(EchoRequest {
             msg: "hello".to_string(),
-        })
-        .await
-        .expect("ping ok");
+        }),
+        None,
+    )
+    .await
+    .expect("ping ok");
 
     assert_eq!(resp.msg, "hello");
     assert_eq!(resp.user_id, None);
@@ -219,14 +256,9 @@ async fn unauth_method_round_trips() {
 
 #[tokio::test]
 async fn permission_required_method_rejects_anonymous() {
-    let server = spawn_http(router());
-    let url = server.server_url("/rpc").unwrap().to_string();
+    let server = server();
 
-    let mut c = client(url);
-    c.set_bearer_token(Option::<String>::None);
-
-    let err = c
-        .add(AddRequest { a: 2, b: 3 })
+    let err = call_rpc::<AddResponse>(&server, "add", json!(AddRequest { a: 2, b: 3 }), None)
         .await
         .expect_err("anonymous add must be rejected");
 
@@ -239,16 +271,16 @@ async fn permission_required_method_rejects_anonymous() {
 
 #[tokio::test]
 async fn permission_required_method_rejects_wrong_perms() {
-    let server = spawn_http(router());
-    let url = server.server_url("/rpc").unwrap().to_string();
+    let server = server();
 
-    let mut c = client(url);
-    c.set_bearer_token(Some("readonly-token".to_string()));
-
-    let err = c
-        .add(AddRequest { a: 2, b: 3 })
-        .await
-        .expect_err("readonly user must not be allowed to call add");
+    let err = call_rpc::<AddResponse>(
+        &server,
+        "add",
+        json!(AddRequest { a: 2, b: 3 }),
+        Some("readonly-token"),
+    )
+    .await
+    .expect_err("readonly user must not be allowed to call add");
     let s = err.to_string();
     assert!(
         s.contains("permission") || s.contains("Permission") || s.contains("PERMISSION"),
@@ -258,30 +290,33 @@ async fn permission_required_method_rejects_wrong_perms() {
 
 #[tokio::test]
 async fn permission_required_method_succeeds_with_correct_perms() {
-    let server = spawn_http(router());
-    let url = server.server_url("/rpc").unwrap().to_string();
+    let server = server();
 
-    let mut c = client(url);
-    c.set_bearer_token(Some("user-token".to_string()));
-
-    let resp = c.add(AddRequest { a: 7, b: 35 }).await.expect("add ok");
+    let resp: AddResponse = call_rpc(
+        &server,
+        "add",
+        json!(AddRequest { a: 7, b: 35 }),
+        Some("user-token"),
+    )
+    .await
+    .expect("add ok");
     assert_eq!(resp.sum, 42);
 }
 
 #[tokio::test]
 async fn admin_method_succeeds_with_admin_token() {
-    let server = spawn_http(router());
-    let url = server.server_url("/rpc").unwrap().to_string();
+    let server = server();
 
-    let mut c = client(url);
-    c.set_bearer_token(Some("admin-token".to_string()));
-
-    let resp = c
-        .admin_only(EchoRequest {
+    let resp: EchoResponse = call_rpc(
+        &server,
+        "admin_only",
+        json!(EchoRequest {
             msg: "secret".to_string(),
-        })
-        .await
-        .expect("admin call ok");
+        }),
+        Some("admin-token"),
+    )
+    .await
+    .expect("admin call ok");
 
     assert_eq!(resp.msg, "secret");
     assert_eq!(resp.user_id.as_deref(), Some("admin-1"));
@@ -291,8 +326,7 @@ async fn admin_method_succeeds_with_admin_token() {
 async fn malformed_params_yield_jsonrpc_error() {
     // Bypass the typed client to send a malformed body and confirm the
     // server returns a JSON-RPC `invalid_params` error rather than a panic.
-    let server = spawn_http(router());
-    let url = server.server_url("/rpc").unwrap().to_string();
+    let server = server();
 
     let body = serde_json::json!({
         "jsonrpc": "2.0",
@@ -301,15 +335,7 @@ async fn malformed_params_yield_jsonrpc_error() {
         "id": 1,
     });
 
-    let resp: serde_json::Value = reqwest::Client::new()
-        .post(url)
-        .json(&body)
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let resp: serde_json::Value = server.post("/rpc").json(&body).await.json();
 
     assert!(
         resp.get("error").is_some(),
