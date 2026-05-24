@@ -420,8 +420,7 @@ impl Parse for MethodVersionDefinition {
 
 fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_macro2::TokenStream> {
     // Generate OpenRPC code if enabled in the macro input
-    let (openrpc_code, schema_checks) = if service_def.openrpc.is_some() {
-        let openrpc_config = service_def.openrpc.as_ref().unwrap();
+    let (openrpc_code, schema_checks) = if let Some(openrpc_config) = &service_def.openrpc {
         (
             openrpc::generate_openrpc_code(&service_def, openrpc_config),
             openrpc::generate_schema_impl_checks(&service_def),

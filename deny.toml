@@ -23,6 +23,7 @@ allow = [
     "ISC",
     "Unicode-3.0",
     "CC0-1.0",
+    "CDLA-Permissive-2.0", # Permissive data license used by webpki-roots
     "MPL-2.0", # Mozilla Public License, used by some crypto libraries
     "Zlib",
 ]
