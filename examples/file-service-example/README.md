@@ -29,7 +29,7 @@ curl http://localhost:3000/api/files/download/test123
 Authenticated upload:
 
 ```bash
-printf 'hello from rust-agent-stack\n' > /tmp/ras-upload.txt
+printf 'hello from rust-api-stack\n' > /tmp/ras-upload.txt
 curl -X POST \
   -H 'Authorization: Bearer user-token' \
   -F 'file=@/tmp/ras-upload.txt' \

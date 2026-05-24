@@ -42,7 +42,7 @@ test.describe('REST API explorer', () => {
     await expect(page.locator('#operation-description pre code')).toContainText('{"status":"ok"}');
     await expect(page.locator('#operation-description a').filter({ hasText: 'REST docs' })).toHaveAttribute(
       'href',
-      'https://github.com/JedimEmO/rust-agent-stack/blob/main/documentation/ras-rest-macro.md'
+      'https://github.com/JedimEmO/rust-api-stack/blob/main/documentation/ras-rest-macro.md'
     );
     const descriptionText = await page.locator('#operation-description').evaluate((el) => el.textContent ?? '');
     expect(descriptionText).toContain('Alpha line\nBeta line');

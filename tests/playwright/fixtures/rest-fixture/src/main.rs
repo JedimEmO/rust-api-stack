@@ -78,7 +78,7 @@ rest_service!({
         /// {"status":"ok"}
         /// ```
         ///
-        /// See [REST docs](https://github.com/JedimEmO/rust-agent-stack/blob/main/documentation/ras-rest-macro.md).
+        /// See [REST docs](https://github.com/JedimEmO/rust-api-stack/blob/main/documentation/ras-rest-macro.md).
         GET UNAUTHORIZED health() -> HealthResponse,
         GET UNAUTHORIZED widgets/{id: String}() -> Widget,
         GET UNAUTHORIZED search/widgets ? q: String & limit: Option<u32> () -> WidgetsResponse,

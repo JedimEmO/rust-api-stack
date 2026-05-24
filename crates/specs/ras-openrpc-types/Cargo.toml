@@ -7,8 +7,8 @@ description = "Rust types for the OpenRPC 1.3.2 specification with serde support
 keywords = ["openrpc", "json-rpc", "api", "specification", "types"]
 categories = ["api-bindings", "data-structures", "web-programming"]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/JedimEmO/rust-agent-stack"
-homepage = "https://github.com/JedimEmO/rust-agent-stack"
+repository = "https://github.com/JedimEmO/rust-api-stack"
+homepage = "https://github.com/JedimEmO/rust-api-stack"
 readme = "README.md"
 
 [dependencies]

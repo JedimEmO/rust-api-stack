@@ -23,8 +23,8 @@ Prerequisites:
 
 ```bash
 # Clone the repository
-git clone https://github.com/JedimEmO/rust-agent-stack.git
-cd rust-agent-stack
+git clone https://github.com/JedimEmO/rust-api-stack.git
+cd rust-api-stack
 
 # Build the entire workspace with the checked-in lockfile
 cargo build --locked

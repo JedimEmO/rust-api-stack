@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed - 2026-05-24
 - Specification types crate now uses the `ras-openrpc-types` package name and `ras_openrpc_types` import path.
+- Package metadata, clone instructions, and documentation links now point to the moved `rust-api-stack` repository.
 
 ### Fixed - 2026-05-23
 - `ras-identity-local`: Duplicate local user creation now fails with `LocalUserError::UserAlreadyExists` instead of silently overwriting credentials.

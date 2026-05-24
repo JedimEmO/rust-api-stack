@@ -35,7 +35,7 @@ test.describe('JSON-RPC API explorer', () => {
     await expect(page.locator('#operation-description pre code')).toContainText('{"message":"hello"}');
     await expect(page.locator('#operation-description a').filter({ hasText: 'Rust API Stack' })).toHaveAttribute(
       'href',
-      'https://github.com/JedimEmO/rust-agent-stack/blob/main/crates/rpc/ras-jsonrpc-macro/README.md'
+      'https://github.com/JedimEmO/rust-api-stack/blob/main/crates/rpc/ras-jsonrpc-macro/README.md'
     );
     const descriptionText = await page.locator('#operation-description').evaluate((el) => el.textContent ?? '');
     expect(descriptionText).toContain('Line one\nLine two');

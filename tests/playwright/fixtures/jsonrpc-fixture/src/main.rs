@@ -83,7 +83,7 @@ jsonrpc_service!({
         /// {"message":"hello"}
         /// ```
         ///
-        /// See [Rust API Stack](https://github.com/JedimEmO/rust-agent-stack/blob/main/crates/rpc/ras-jsonrpc-macro/README.md).
+        /// See [Rust API Stack](https://github.com/JedimEmO/rust-api-stack/blob/main/crates/rpc/ras-jsonrpc-macro/README.md).
         UNAUTHORIZED ping(PingRequest) -> PingResponse,
         UNAUTHORIZED no_params(()) -> String,
         UNAUTHORIZED rename_widget(RenameWidgetV2) -> RenameWidgetResponseV2 {
