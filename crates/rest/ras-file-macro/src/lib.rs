@@ -17,8 +17,7 @@ pub fn file_service(input: TokenStream) -> TokenStream {
     let client_code = client::generate_client(&definition);
 
     // Generate OpenAPI code if enabled
-    let (openapi_code, schema_checks) = if definition.openapi.is_some() {
-        let openapi_config = definition.openapi.as_ref().unwrap();
+    let (openapi_code, schema_checks) = if let Some(openapi_config) = &definition.openapi {
         (
             openapi::generate_openapi_code(&definition, openapi_config),
             openapi::generate_schema_impl_checks(&definition),
