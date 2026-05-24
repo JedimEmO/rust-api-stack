@@ -19,13 +19,13 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-openrpc-types = "0.1.1"
+ras-openrpc-types = "0.1.1"
 ```
 
 ## Example Usage
 
 ```rust
-use openrpc_types::{OpenRpc, Info, Method, ContentDescriptor, Schema};
+use ras_openrpc_types::{OpenRpc, Info, Method, ContentDescriptor, Schema};
 
 // Create an OpenRPC document
 let openrpc = OpenRpc::builder()
@@ -107,7 +107,7 @@ The crate provides validation helpers for:
 - **Reference validity** - Internal references point to valid components
 
 ```rust
-use openrpc_types::{Info, OpenRpc, validation::Validate};
+use ras_openrpc_types::{Info, OpenRpc, validation::Validate};
 
 let openrpc = OpenRpc::v1_3_2(
     Info::new("Validation Example API", "1.0.0"),
@@ -126,7 +126,7 @@ match openrpc.validate() {
 Schema objects model the JSON Schema Draft 7 shapes used by OpenRPC:
 
 ```rust
-use openrpc_types::Schema;
+use ras_openrpc_types::Schema;
 
 let user_schema = Schema::object()
     .with_property("id", Schema::string().with_format("uuid"))
@@ -143,7 +143,7 @@ let user_schema = Schema::object()
 All major types support ergonomic builder patterns using the `bon` crate:
 
 ```rust
-use openrpc_types::{Method, ContentDescriptor, Schema, ParameterStructure};
+use ras_openrpc_types::{Method, ContentDescriptor, Schema, ParameterStructure};
 
 let method = Method::builder()
     .name("createUser")
@@ -169,7 +169,7 @@ let method = Method::builder()
 Error types provide detailed information about validation failures:
 
 ```rust
-use openrpc_types::{OpenRpcError, OpenRpcResult};
+use ras_openrpc_types::{OpenRpcError, OpenRpcResult};
 
 fn validate_document(openrpc: &OpenRpc) -> OpenRpcResult<()> {
     openrpc.validate()
@@ -191,14 +191,14 @@ fn validate_document(openrpc: &OpenRpc) -> OpenRpcResult<()> {
 
 ```toml
 [dependencies]
-openrpc-types = { version = "0.1.1", features = ["json-schema"] }
+ras-openrpc-types = { version = "0.1.1", features = ["json-schema"] }
 ```
 
 ## Checks
 
 ```bash
-cargo test -p openrpc-types --locked
-cargo clippy -p openrpc-types --all-targets --all-features --locked -- -D warnings
+cargo test -p ras-openrpc-types --locked
+cargo clippy -p ras-openrpc-types --all-targets --all-features --locked -- -D warnings
 ```
 
 ## License

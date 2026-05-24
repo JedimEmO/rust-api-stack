@@ -15,7 +15,7 @@
 //! # Example
 //!
 //! ```rust
-//! use openrpc_types::{OpenRpc, Info, Method, ContentDescriptor, Schema, MethodOrReference, ContentDescriptorOrReference, ContentDescriptorSchema};
+//! use ras_openrpc_types::{OpenRpc, Info, Method, ContentDescriptor, Schema, MethodOrReference, ContentDescriptorOrReference, ContentDescriptorSchema};
 //!
 //! let openrpc = OpenRpc::builder()
 //!     .openrpc("1.3.2".to_string())

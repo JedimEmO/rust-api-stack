@@ -1,6 +1,6 @@
-//! Basic usage example for openrpc-types
+//! Basic usage example for ras-openrpc-types
 
-use openrpc_types::{
+use ras_openrpc_types::{
     Components, ContentDescriptor, ContentDescriptorOrReference, Info, Method, OpenRpc,
     ParameterStructure, Schema, Validate,
 };

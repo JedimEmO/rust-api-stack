@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed - 2026-05-24
+- Specification types crate now uses the `ras-openrpc-types` package name and `ras_openrpc_types` import path.
+
 ### Fixed - 2026-05-23
 - `ras-identity-local`: Duplicate local user creation now fails with `LocalUserError::UserAlreadyExists` instead of silently overwriting credentials.
 - Bumped `ras-identity-local` from `0.1.1` to `0.2.0` because `LocalUserProvider::add_user` now returns the crate-specific `LocalUserError`.
@@ -12,7 +15,7 @@ All notable changes to this project will be documented in this file.
 - `documentation/ras-identity.md`: Identity examples now use the current `UserPermissions`, `SessionService`, JWT claims, session revocation, and Axum 0.8 server APIs.
 - `ras-identity-local`: README testing/security notes now distinguish default tests from optional timing-sensitive checks.
 - `ras-identity-session`: JWT signing now uses local HMAC-SHA implementations for HS256/HS384/HS512 instead of pulling in the broader `jsonwebtoken` RustCrypto/RSA dependency path.
-- `openrpc-types`: Restored the original `Extensions::insert`, `Extensions::with`, and `Extensions::from_map` signatures for compatibility; checked variants are now available as `try_insert`, `try_with`, and `try_from_map`.
+- `ras-openrpc-types`: Restored the original `Extensions::insert`, `Extensions::with`, and `Extensions::from_map` signatures for compatibility; checked variants are now available as `try_insert`, `try_with`, and `try_from_map`.
 - `ras-jsonrpc-macro`: Version labels such as `"1.0.0"` and `"v1-beta"` now generate sanitized client method suffixes instead of invalid Rust identifiers.
 - Supply-chain policy now passes on current `cargo-deny`; vulnerable `rand`, `time`, `tracing-subscriber`, `protobuf`, and related OpenTelemetry/Prometheus dependencies were updated, and unmaintained `wee_alloc` was removed from the WASM UI example.
 - `examples/bidirectional-chat`: Auth lifecycle tests now verify login after registration, duplicate registration rejection, and permission-bearing JWT claims.
@@ -21,7 +24,7 @@ All notable changes to this project will be documented in this file.
 - `examples/bidirectional-chat`: README commands now use the actual `bidirectional-chat-tui` package and current example credentials.
 - `examples/bidirectional-chat`: TUI README now states the correct Rust 1.88+ requirement for Rust 2024 edition crates.
 - `examples/file-service-wasm`: README now names the real `wasm-client` feature.
-- `openrpc-types` and `ras-jsonrpc-types`: README dependency snippets now match the current crate versions.
+- `ras-openrpc-types` and `ras-jsonrpc-types`: README dependency snippets now match the current crate versions.
 - REST and JSON-RPC macro documentation dependency snippets now match the workspace Axum, Tokio, and schemars versions.
 - `ras-rest-macro` and `ras-jsonrpc-macro`: HTTP integration tests now use in-memory `axum-test` mock transport instead of binding local TCP sockets.
 - `ras-jsonrpc-macro`: Generated-client compile/config coverage no longer attempts requests against an unused localhost port.
@@ -280,7 +283,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed - 2025-01-09
 - Fixed OpenRPC specification parsing to support extension fields and JSON Schema compatibility
-  - Removed deny_unknown_fields restrictions from Method and Schema structs in openrpc-types crate
+  - Removed deny_unknown_fields restrictions from Method and Schema structs in ras-openrpc-types crate
   - Added $schema field support to Schema struct for proper JSON Schema Draft 7 compatibility
   - Enables proper parsing of OpenRPC documents with x-authentication and x-permissions extensions
 
@@ -434,7 +437,7 @@ All notable changes to this project will be documented in this file.
   - All internal dependencies already properly configured with path + version
 
 ### Added - 2025-01-08
-- Complete OpenRPC 1.3.2 specification types crate (openrpc-types) with full type safety and validation
+- Complete OpenRPC 1.3.2 specification types crate (ras-openrpc-types) with full type safety and validation
   - Comprehensive implementation of all OpenRPC specification types with serde serialization support
   - Ergonomic builder patterns using bon crate for fluent API construction
   - Extensive validation system for OpenRPC documents, method names, error codes, and component references

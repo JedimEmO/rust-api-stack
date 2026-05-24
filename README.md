@@ -75,7 +75,7 @@ crates/
 ├── observability/           # Monitoring and metrics
 │   └── ras-observability-otel # OpenTelemetry implementation
 ├── specs/                   # Specification types
-│   └── openrpc-types        # OpenRPC 1.3.2 spec types
+│   └── ras-openrpc-types    # OpenRPC 1.3.2 spec types
 examples/                    # Example applications
 ├── basic-jsonrpc/           # JSON-RPC service demo
 ├── bidirectional-chat/      # Real-time chat system
