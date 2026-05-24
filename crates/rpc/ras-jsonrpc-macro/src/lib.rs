@@ -550,6 +550,7 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
 
     quote! {
         /// Generated service trait
+        #[allow(private_interfaces, private_bounds)]
         pub trait #service_trait_name: Send + Sync + 'static {
             #(#trait_methods)*
         }

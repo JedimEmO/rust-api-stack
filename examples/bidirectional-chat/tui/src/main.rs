@@ -285,40 +285,38 @@ async fn run_app(
                             let mut app = app_state.lock().await;
                             app.leave_room(&room_id);
                         }
-                        KeyCode::Enter => {
-                            if !app.input_buffer.is_empty() {
-                                let text = app.input_buffer.clone();
-                                app.input_buffer.clear();
+                        KeyCode::Enter if !app.input_buffer.is_empty() => {
+                            let text = app.input_buffer.clone();
+                            app.input_buffer.clear();
 
-                                // Check for slash commands
-                                if text.starts_with('/') {
-                                    let command = text.trim_start_matches('/').to_lowercase();
-                                    match command.as_str() {
-                                        "quit" | "exit" => {
-                                            drop(app);
-                                            let mut client = chat_client.lock().await;
-                                            let _ = client.disconnect().await;
-                                            return Ok(());
-                                        }
-                                        _ => {
-                                            app.error_message =
-                                                Some(format!("Unknown command: /{}", command));
-                                        }
+                            // Check for slash commands
+                            if text.starts_with('/') {
+                                let command = text.trim_start_matches('/').to_lowercase();
+                                match command.as_str() {
+                                    "quit" | "exit" => {
+                                        drop(app);
+                                        let mut client = chat_client.lock().await;
+                                        let _ = client.disconnect().await;
+                                        return Ok(());
                                     }
-                                } else {
-                                    // Stop typing when sending message
-                                    app.is_typing = false;
-                                    app.last_typing_time = None;
-                                    drop(app);
-
-                                    let client = chat_client.lock().await;
-                                    // Stop typing notification
-                                    let _ = client.stop_typing().await;
-
-                                    if let Err(e) = client.send_message(text).await {
-                                        app_state.lock().await.error_message =
-                                            Some(format!("Failed to send message: {}", e));
+                                    _ => {
+                                        app.error_message =
+                                            Some(format!("Unknown command: /{}", command));
                                     }
+                                }
+                            } else {
+                                // Stop typing when sending message
+                                app.is_typing = false;
+                                app.last_typing_time = None;
+                                drop(app);
+
+                                let client = chat_client.lock().await;
+                                // Stop typing notification
+                                let _ = client.stop_typing().await;
+
+                                if let Err(e) = client.send_message(text).await {
+                                    app_state.lock().await.error_message =
+                                        Some(format!("Failed to send message: {}", e));
                                 }
                             }
                         }

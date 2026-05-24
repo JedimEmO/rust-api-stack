@@ -761,6 +761,7 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
         #[cfg(feature = "server")]
         /// Generated service trait
         #[async_trait::async_trait]
+        #[allow(private_interfaces, private_bounds)]
         pub trait #service_trait_name: Send + Sync + 'static {
             #(#trait_methods)*
         }
