@@ -658,8 +658,7 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
     let base_path = &service_def.base_path;
 
     // Generate OpenAPI code if enabled in the macro input
-    let (openapi_code, schema_checks) = if service_def.openapi.is_some() {
-        let openapi_config = service_def.openapi.as_ref().unwrap();
+    let (openapi_code, schema_checks) = if let Some(openapi_config) = &service_def.openapi {
         (
             openapi::generate_openapi_code(&service_def, openapi_config),
             openapi::generate_schema_impl_checks(&service_def),
