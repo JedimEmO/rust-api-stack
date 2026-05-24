@@ -38,7 +38,7 @@ tokio = { workspace = true }
 reqwest = { workspace = true }
 tower = { workspace = true }
 rand = { workspace = true }
-ras-identity-session = { path = "../../identity/ras-identity-session", version = "0.1.1" }
+ras-identity-session = { path = "../../identity/ras-identity-session", version = "0.2.0" }
 ras-jsonrpc-core = { path = "../../rpc/ras-jsonrpc-core", version = "0.1.2" }
 futures = { workspace = true }
 chrono = { workspace = true }

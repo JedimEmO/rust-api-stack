@@ -26,7 +26,16 @@ impl Extensions {
     /// Insert an extension field.
     ///
     /// Extension keys must start with `x-`.
-    pub fn insert(
+    ///
+    /// Panics if the key is invalid. Use [`Extensions::try_insert`] when the
+    /// key comes from user input or another fallible source.
+    pub fn insert(&mut self, key: impl Into<String>, value: impl Into<Value>) -> &mut Self {
+        self.try_insert(key, value)
+            .expect("extension keys must start with 'x-'")
+    }
+
+    /// Insert an extension field, returning a validation error for invalid keys.
+    pub fn try_insert(
         &mut self,
         key: impl Into<String>,
         value: impl Into<Value>,
@@ -82,8 +91,23 @@ impl Extensions {
         self.0.extend(other.0);
     }
 
-    /// Create an Extensions map from a HashMap
-    pub fn from_map(map: HashMap<String, Value>) -> OpenRpcResult<Self> {
+    /// Create an Extensions map from a HashMap.
+    ///
+    /// Extension keys must start with `x-`.
+    pub fn from_map(map: HashMap<String, Value>) -> Result<Self, String> {
+        for key in map.keys() {
+            if let Err(err) = validate_extension_key(key) {
+                return Err(match err {
+                    OpenRpcError::ValidationError { message, .. } => message,
+                    other => other.to_string(),
+                });
+            }
+        }
+        Ok(Self(map))
+    }
+
+    /// Create an Extensions map from a HashMap, preserving typed errors.
+    pub fn try_from_map(map: HashMap<String, Value>) -> OpenRpcResult<Self> {
         for key in map.keys() {
             validate_extension_key(key)?;
         }
@@ -95,9 +119,22 @@ impl Extensions {
         self.0
     }
 
-    /// Builder pattern for adding extensions
-    pub fn with(mut self, key: impl Into<String>, value: impl Into<Value>) -> OpenRpcResult<Self> {
-        self.insert(key, value)?;
+    /// Builder pattern for adding extensions.
+    ///
+    /// Panics if the key is invalid. Use [`Extensions::try_with`] when the key
+    /// comes from user input or another fallible source.
+    pub fn with(mut self, key: impl Into<String>, value: impl Into<Value>) -> Self {
+        self.insert(key, value);
+        self
+    }
+
+    /// Builder pattern for adding extensions, returning validation errors.
+    pub fn try_with(
+        mut self,
+        key: impl Into<String>,
+        value: impl Into<Value>,
+    ) -> OpenRpcResult<Self> {
+        self.try_insert(key, value)?;
         Ok(self)
     }
 }
@@ -172,7 +209,7 @@ macro_rules! extensions {
     ($($key:expr => $value:expr),+ $(,)?) => {{
         let mut ext = $crate::Extensions::new();
         $(
-            ext.insert($key, $value).expect("extension keys must start with 'x-'");
+            ext.insert($key, $value);
         )+
         ext
     }};
@@ -186,8 +223,8 @@ mod tests {
     #[test]
     fn test_extensions_creation() {
         let mut ext = Extensions::new();
-        ext.insert("x-custom", "value").unwrap();
-        ext.insert("x-number", 42).unwrap();
+        ext.insert("x-custom", "value");
+        ext.insert("x-number", 42);
 
         assert_eq!(
             ext.get("x-custom"),
@@ -198,9 +235,16 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "extension keys must start with 'x-'")]
     fn test_invalid_extension_key() {
         let mut ext = Extensions::new();
-        let error = ext.insert("invalid-key", "value").unwrap_err();
+        ext.insert("invalid-key", "value");
+    }
+
+    #[test]
+    fn try_insert_returns_validation_error_for_invalid_keys() {
+        let mut ext = Extensions::new();
+        let error = ext.try_insert("invalid-key", "value").unwrap_err();
         assert!(matches!(error, OpenRpcError::ValidationError { .. }));
         assert!(ext.is_empty());
     }
@@ -208,7 +252,7 @@ mod tests {
     #[test]
     fn test_extensions_validation() {
         let mut ext = Extensions::new();
-        ext.insert("x-valid", "value").unwrap();
+        ext.insert("x-valid", "value");
         assert!(ext.validate().is_ok());
 
         // Manually create invalid extension (bypassing insert validation)
@@ -225,10 +269,10 @@ mod tests {
     #[test]
     fn test_extensions_merge() {
         let mut ext1 = Extensions::new();
-        ext1.insert("x-first", "value1").unwrap();
+        ext1.insert("x-first", "value1");
 
         let mut ext2 = Extensions::new();
-        ext2.insert("x-second", "value2").unwrap();
+        ext2.insert("x-second", "value2");
 
         ext1.merge(ext2);
 
@@ -241,9 +285,7 @@ mod tests {
     fn test_extensions_with_builder() {
         let ext = Extensions::new()
             .with("x-first", "value1")
-            .unwrap()
-            .with("x-second", 42)
-            .unwrap();
+            .with("x-second", 42);
 
         assert_eq!(ext.len(), 2);
         assert_eq!(
@@ -254,6 +296,18 @@ mod tests {
     }
 
     #[test]
+    fn test_extensions_try_with_builder() {
+        let ext = Extensions::new()
+            .try_with("x-first", "value1")
+            .unwrap()
+            .try_with("x-second", 42)
+            .unwrap();
+
+        assert_eq!(ext.len(), 2);
+        assert!(Extensions::new().try_with("invalid", "value").is_err());
+    }
+
+    #[test]
     fn test_extensions_from_map() {
         let map = HashMap::from([
             ("x-custom".to_string(), json!("value")),
@@ -261,18 +315,25 @@ mod tests {
         ]);
 
         let ext = Extensions::from_map(map.clone()).unwrap();
+        let checked_ext = Extensions::try_from_map(map.clone()).unwrap();
         assert_eq!(ext.len(), 2);
+        assert_eq!(checked_ext.len(), 2);
 
         // Test invalid map
         let invalid_map = HashMap::from([("invalid".to_string(), json!("value"))]);
-        assert!(Extensions::from_map(invalid_map).is_err());
+        assert_eq!(
+            Extensions::from_map(invalid_map).unwrap_err(),
+            "Extension key must start with 'x-': invalid"
+        );
+        let invalid_map = HashMap::from([("invalid".to_string(), json!("value"))]);
+        assert!(Extensions::try_from_map(invalid_map).is_err());
     }
 
     #[test]
     fn test_extensions_serialization() {
         let mut ext = Extensions::new();
-        ext.insert("x-custom", "value").unwrap();
-        ext.insert("x-number", 42).unwrap();
+        ext.insert("x-custom", "value");
+        ext.insert("x-number", 42);
 
         let json = serde_json::to_value(&ext).unwrap();
         let expected = json!({
@@ -304,8 +365,8 @@ mod tests {
     #[test]
     fn test_extensions_iterator() {
         let mut ext = Extensions::new();
-        ext.insert("x-first", "value1").unwrap();
-        ext.insert("x-second", "value2").unwrap();
+        ext.insert("x-first", "value1");
+        ext.insert("x-second", "value2");
 
         let mut count = 0;
         for (key, _value) in &ext {

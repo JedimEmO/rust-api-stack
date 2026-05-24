@@ -34,4 +34,4 @@ axum-test = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 # For the example
-ras-identity-session = { path = "../ras-identity-session", version = "0.1.1" }
+ras-identity-session = { path = "../ras-identity-session", version = "0.2.0" }

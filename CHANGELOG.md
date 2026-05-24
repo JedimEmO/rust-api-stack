@@ -8,9 +8,12 @@ All notable changes to this project will be documented in this file.
 - `ras-identity-local`: Duplicate local user creation now fails with `LocalUserError::UserAlreadyExists` instead of silently overwriting credentials.
 - Bumped `ras-identity-local` from `0.1.1` to `0.2.0` because `LocalUserProvider::add_user` now returns the crate-specific `LocalUserError`.
 - Bumped `ras-identity-oauth2` from `0.1.1` to `0.1.2` for the additive `UserInfoMapping` root re-export and updated OAuth2 docs.
+- Bumped `ras-identity-session` from `0.1.1` to `0.2.0` because replacing `jsonwebtoken` exposes the crate-local `JwtAlgorithm` and string-backed JWT errors in the public API.
 - `documentation/ras-identity.md`: Identity examples now use the current `UserPermissions`, `SessionService`, JWT claims, session revocation, and Axum 0.8 server APIs.
 - `ras-identity-local`: README testing/security notes now distinguish default tests from optional timing-sensitive checks.
 - `ras-identity-session`: JWT signing now uses local HMAC-SHA implementations for HS256/HS384/HS512 instead of pulling in the broader `jsonwebtoken` RustCrypto/RSA dependency path.
+- `openrpc-types`: Restored the original `Extensions::insert`, `Extensions::with`, and `Extensions::from_map` signatures for compatibility; checked variants are now available as `try_insert`, `try_with`, and `try_from_map`.
+- `ras-jsonrpc-macro`: Version labels such as `"1.0.0"` and `"v1-beta"` now generate sanitized client method suffixes instead of invalid Rust identifiers.
 - Supply-chain policy now passes on current `cargo-deny`; vulnerable `rand`, `time`, `tracing-subscriber`, `protobuf`, and related OpenTelemetry/Prometheus dependencies were updated, and unmaintained `wee_alloc` was removed from the WASM UI example.
 - `examples/bidirectional-chat`: Auth lifecycle tests now verify login after registration, duplicate registration rejection, and permission-bearing JWT claims.
 - `examples/bidirectional-chat`: Removed fake auth endpoint checks from `server_tests.rs`; auth endpoint coverage now lives in the in-memory lifecycle suite that wires the real identity/session stack.

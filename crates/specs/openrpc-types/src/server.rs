@@ -87,9 +87,7 @@ impl Server {
         key: impl Into<String>,
         value: impl Into<serde_json::Value>,
     ) -> Self {
-        self.extensions
-            .insert(key, value)
-            .expect("extension keys must start with 'x-'");
+        self.extensions.insert(key, value);
         self
     }
 
@@ -197,9 +195,7 @@ impl ServerVariable {
         key: impl Into<String>,
         value: impl Into<serde_json::Value>,
     ) -> Self {
-        self.extensions
-            .insert(key, value)
-            .expect("extension keys must start with 'x-'");
+        self.extensions.insert(key, value);
         self
     }
 }

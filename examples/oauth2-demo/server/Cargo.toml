@@ -20,7 +20,7 @@ ras-jsonrpc-types = { path = "../../../crates/rpc/ras-jsonrpc-types", version = 
 # Identity management
 ras-identity-core = { path = "../../../crates/core/ras-identity-core", version = "0.1.1" }
 ras-identity-oauth2 = { path = "../../../crates/identity/ras-identity-oauth2", version = "0.1.2" }
-ras-identity-session = { path = "../../../crates/identity/ras-identity-session", version = "0.1.1" }
+ras-identity-session = { path = "../../../crates/identity/ras-identity-session", version = "0.2.0" }
 
 # Web framework and utilities
 axum = { workspace = true }

@@ -35,7 +35,7 @@ ras-auth-core = "0.1.0"
 ras-identity-core = "0.1.1"
 
 # Session management (required)
-ras-identity-session = "0.1.1"
+ras-identity-session = "0.2.0"
 
 # Identity providers (choose what you need)
 ras-identity-local = "0.2.0"

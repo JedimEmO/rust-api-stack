@@ -86,10 +86,10 @@ jsonrpc_service!({
     methods: [
         UNAUTHORIZED ping(EchoRequest) -> EchoResponse,
         UNAUTHORIZED rename_user(RenameUserV2) -> RenameUserResponseV2 {
-            version: v2,
+            version: "2.0.0",
             wire: "rename_user.v2",
             versions: [
-                v1 {
+                "1.0.0" {
                     wire: "rename_user.v1",
                     request: RenameUserV1,
                     response: RenameUserResponseV1,
@@ -155,6 +155,13 @@ fn router() -> axum::Router {
 
 fn server() -> axum_test::TestServer {
     mock_http_server(router())
+}
+
+#[cfg(feature = "client")]
+#[test]
+fn versioned_client_method_names_sanitize_semver_labels() {
+    let _method = DemoClient::rename_user_v1_0_0;
+    let _method_with_timeout = DemoClient::rename_user_v1_0_0_with_timeout;
 }
 
 async fn call_rpc<T>(

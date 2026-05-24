@@ -323,7 +323,7 @@ jsonrpc_service!({
 });
 ```
 
-The generated server accepts both `rename_user.v2` and `rename_user.v1`. The generated Rust client exposes `rename_user(...)` for the canonical method and `rename_user_v1(...)` for the legacy method.
+The generated server accepts both `rename_user.v2` and `rename_user.v1`. The generated Rust client exposes `rename_user(...)` for the canonical method and `rename_user_v1(...)` for the legacy method. Version labels can be identifiers such as `v1` or string labels such as `"1.0.0"`; string labels are sanitized for Rust method suffixes, for example `rename_user_v1_0_0(...)`.
 
 ## Authentication Flow
 

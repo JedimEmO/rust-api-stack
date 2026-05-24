@@ -111,9 +111,7 @@ impl Example {
 
     /// Add an extension field
     pub fn with_extension(mut self, key: impl Into<String>, value: impl Into<Value>) -> Self {
-        self.extensions
-            .insert(key, value)
-            .expect("extension keys must start with 'x-'");
+        self.extensions.insert(key, value);
         self
     }
 }
@@ -216,9 +214,7 @@ impl ExamplePairing {
 
     /// Add an extension field
     pub fn with_extension(mut self, key: impl Into<String>, value: impl Into<Value>) -> Self {
-        self.extensions
-            .insert(key, value)
-            .expect("extension keys must start with 'x-'");
+        self.extensions.insert(key, value);
         self
     }
 

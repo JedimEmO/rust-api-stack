@@ -153,6 +153,36 @@ fn method_wire_name(method: &MethodDefinition) -> String {
         .unwrap_or_else(|| method.name.to_string())
 }
 
+fn snake_ident_segment(value: &str) -> String {
+    let mut out = String::new();
+    let mut pending_separator = false;
+
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            if pending_separator && !out.is_empty() {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+            pending_separator = false;
+        } else {
+            pending_separator = !out.is_empty();
+        }
+    }
+
+    if out.is_empty() {
+        "version".to_string()
+    } else if out.chars().next().is_some_and(|ch| ch.is_ascii_digit()) {
+        format!("v{out}")
+    } else {
+        out
+    }
+}
+
+fn versioned_method_ident(method_name: &syn::Ident, version: &str) -> syn::Ident {
+    let version = snake_ident_segment(version);
+    quote::format_ident!("{}_{}", method_name, version)
+}
+
 /// Generate client methods for the JSON-RPC service.
 fn generate_client_methods_for_method(method: &MethodDefinition) -> Vec<proc_macro2::TokenStream> {
     let mut methods = vec![generate_client_method(
@@ -163,7 +193,7 @@ fn generate_client_methods_for_method(method: &MethodDefinition) -> Vec<proc_mac
     )];
 
     methods.extend(method.versions.iter().map(|version| {
-        let method_name = quote::format_ident!("{}_{}", method.name, version.version);
+        let method_name = versioned_method_ident(&method.name, &version.version);
         generate_client_method(
             &method_name,
             version.wire_name.clone(),
@@ -186,7 +216,7 @@ fn generate_client_methods_with_timeout_for_method(
     )];
 
     methods.extend(method.versions.iter().map(|version| {
-        let method_name = quote::format_ident!("{}_{}", method.name, version.version);
+        let method_name = versioned_method_ident(&method.name, &version.version);
         generate_client_method_with_timeout(
             &method_name,
             version.wire_name.clone(),
@@ -231,5 +261,18 @@ fn generate_client_method_with_timeout(
         ) -> Result<#response_type, Box<dyn std::error::Error + Send + Sync>> {
             self.make_request(#method_str, params, Some(timeout)).await
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::snake_ident_segment;
+
+    #[test]
+    fn version_labels_become_snake_case_identifier_segments() {
+        assert_eq!(snake_ident_segment("v1"), "v1");
+        assert_eq!(snake_ident_segment("1.0.0"), "v1_0_0");
+        assert_eq!(snake_ident_segment("v1-beta"), "v1_beta");
+        assert_eq!(snake_ident_segment(""), "version");
     }
 }
