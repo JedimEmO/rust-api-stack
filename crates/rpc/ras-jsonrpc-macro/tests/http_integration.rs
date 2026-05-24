@@ -1,5 +1,7 @@
 use rand::Rng;
-use ras_jsonrpc_core::{AuthError, AuthFuture, AuthProvider, AuthenticatedUser};
+use ras_jsonrpc_core::{
+    AuthCookieConfig, AuthError, AuthFuture, AuthProvider, AuthenticatedUser, CsrfConfig,
+};
 use ras_jsonrpc_macro::jsonrpc_service;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -263,6 +265,23 @@ fn create_test_server() -> axum_test::TestServer {
         .unwrap()
 }
 
+fn create_cookie_test_server(csrf: bool) -> axum_test::TestServer {
+    let mut builder = TestServiceBuilder::new(TestServiceImpl)
+        .base_url("/rpc")
+        .auth_provider(TestAuthProvider::new())
+        .auth_cookie(AuthCookieConfig::default());
+
+    if csrf {
+        builder = builder.csrf_protection(CsrfConfig::default());
+    }
+
+    let app = builder.build().expect("Failed to build app");
+    axum_test::TestServer::builder()
+        .mock_transport()
+        .build(app)
+        .unwrap()
+}
+
 async fn make_jsonrpc_request(
     server: &axum_test::TestServer,
     method: &str,
@@ -328,6 +347,21 @@ async fn test_unauthorized_methods() {
 
     assert_eq!(response["result"], "This is public information");
 
+    let request_body = json!({
+        "jsonrpc": "2.0",
+        "method": "get_public_info",
+        "params": (),
+        "id": 1
+    });
+    let response = server
+        .post("/rpc")
+        .authorization_bearer("not-a-valid-token")
+        .json(&request_body)
+        .await;
+    assert_eq!(response.status_code().as_u16(), 401);
+    let response: Value = response.json();
+    assert_eq!(response["error"]["code"], -32001);
+
     // Test echo_complex
     let complex_data = json!({
         "data": [
@@ -390,6 +424,90 @@ async fn test_authentication_required_methods() {
     let result = &response["result"];
     assert_eq!(result["processed_count"], 3);
     assert_eq!(result["success"].as_bool(), Some(true));
+}
+
+#[tokio::test]
+async fn test_cookie_auth_coexists_with_bearer_tokens() {
+    let server = create_cookie_test_server(false);
+    let request_body = json!({
+        "jsonrpc": "2.0",
+        "method": "get_user_info",
+        "params": (),
+        "id": 1
+    });
+
+    let response: Value = server
+        .post("/rpc")
+        .add_header("Cookie", "__Host-ras-session=valid-user-token")
+        .json(&request_body)
+        .await
+        .json();
+
+    assert_eq!(response["result"]["name"], "User regular-user");
+
+    let response: Value = server
+        .post("/rpc")
+        .authorization_bearer("valid-admin-token")
+        .add_header("Cookie", "__Host-ras-session=valid-user-token")
+        .json(&request_body)
+        .await
+        .json();
+
+    assert_eq!(response["result"]["name"], "User admin-user");
+
+    let response = server
+        .post("/rpc")
+        .add_header("Authorization", "Basic invalid")
+        .add_header("Cookie", "__Host-ras-session=valid-user-token")
+        .json(&request_body)
+        .await;
+
+    assert_eq!(response.status_code().as_u16(), 401);
+    let response: Value = response.json();
+    assert_eq!(response["error"]["code"], -32001);
+}
+
+#[tokio::test]
+async fn test_cookie_auth_csrf_guard_for_jsonrpc_posts() {
+    let server = create_cookie_test_server(true);
+    let request_body = json!({
+        "jsonrpc": "2.0",
+        "method": "get_user_info",
+        "params": (),
+        "id": 1
+    });
+
+    let response = server
+        .post("/rpc")
+        .add_header("Cookie", "__Host-ras-session=valid-user-token")
+        .json(&request_body)
+        .await;
+
+    assert_eq!(response.status_code().as_u16(), 403);
+    let response: Value = response.json();
+    assert_eq!(response["error"]["code"], -32004);
+
+    let response = server
+        .post("/rpc")
+        .add_header(
+            "Cookie",
+            "__Host-ras-session=valid-user-token; __Host-ras-csrf=csrf-token",
+        )
+        .add_header("x-ras-csrf", "csrf-token")
+        .json(&request_body)
+        .await;
+
+    assert_eq!(response.status_code().as_u16(), 200);
+    let response: Value = response.json();
+    assert_eq!(response["result"]["name"], "User regular-user");
+
+    let response = server
+        .post("/rpc")
+        .authorization_bearer("valid-user-token")
+        .json(&request_body)
+        .await;
+
+    assert_eq!(response.status_code().as_u16(), 200);
 }
 
 #[tokio::test]

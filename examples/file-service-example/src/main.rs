@@ -169,8 +169,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Build the router
     let app = DocumentServiceBuilder::new(service)
         .auth_provider(auth)
-        .with_usage_tracker(|headers, method, path| {
-            println!("Request: {} {} - Headers: {:?}", method, path, headers);
+        .with_usage_tracker(|_headers, method, path| {
+            println!("Request: {} {}", method, path);
         })
         .with_duration_tracker(|method, path, duration| {
             println!("Request {} {} took {:?}", method, path, duration);

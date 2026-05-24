@@ -1,7 +1,9 @@
 use axum::http::Method;
 use axum_test::{TestResponse, TestServer};
 use rand::Rng;
-use ras_jsonrpc_core::{AuthError, AuthFuture, AuthProvider, AuthenticatedUser};
+use ras_jsonrpc_core::{
+    AuthCookieConfig, AuthError, AuthFuture, AuthProvider, AuthenticatedUser, CsrfConfig,
+};
 use ras_rest_core::{RestError, RestResponse};
 use ras_rest_macro::rest_service;
 use serde::{Deserialize, Serialize};
@@ -435,6 +437,19 @@ fn create_rest_test_server() -> TestServer {
     TestServer::builder().mock_transport().build(app).unwrap()
 }
 
+fn create_rest_cookie_test_server(csrf: bool) -> TestServer {
+    let mut builder = TestRestServiceBuilder::new(TestRestServiceImpl)
+        .auth_provider(TestRestAuthProvider::new())
+        .auth_cookie(AuthCookieConfig::default());
+
+    if csrf {
+        builder = builder.csrf_protection(CsrfConfig::default());
+    }
+
+    let app = builder.build();
+    TestServer::builder().mock_transport().build(app).unwrap()
+}
+
 async fn make_rest_request(
     server: &TestServer,
     method: Method,
@@ -553,6 +568,76 @@ async fn test_authentication_required_endpoints() {
     assert_eq!(post.id, Some(456));
     assert_eq!(post.user_id, 123);
     assert_eq!(post.title, "Protected Post");
+}
+
+#[tokio::test]
+async fn test_cookie_auth_coexists_with_bearer_tokens() {
+    let server = create_rest_cookie_test_server(false);
+
+    let response = server
+        .get("/api/v1/status")
+        .add_header("Cookie", "__Host-ras-session=user-token")
+        .await;
+
+    assert_eq!(response.status_code().as_u16(), 200);
+    let status: Value = response.json();
+    assert_eq!(status["user_id"], "regular-user");
+
+    let response = server
+        .get("/api/v1/status")
+        .authorization_bearer("admin-token")
+        .add_header("Cookie", "__Host-ras-session=user-token")
+        .await;
+
+    assert_eq!(response.status_code().as_u16(), 200);
+    let status: Value = response.json();
+    assert_eq!(status["user_id"], "admin-user");
+
+    let response = server
+        .get("/api/v1/status")
+        .add_header("Authorization", "Basic invalid")
+        .add_header("Cookie", "__Host-ras-session=user-token")
+        .await;
+
+    assert_eq!(response.status_code().as_u16(), 401);
+}
+
+#[tokio::test]
+async fn test_cookie_auth_csrf_guard_only_applies_to_cookie_unsafe_requests() {
+    let server = create_rest_cookie_test_server(true);
+    let create_user = json!({
+        "name": "Cookie User",
+        "email": "cookie@example.com",
+        "permissions": ["user"]
+    });
+
+    let response = server
+        .post("/api/v1/users")
+        .add_header("Cookie", "__Host-ras-session=admin-token")
+        .json(&create_user)
+        .await;
+
+    assert_eq!(response.status_code().as_u16(), 403);
+
+    let response = server
+        .post("/api/v1/users")
+        .add_header(
+            "Cookie",
+            "__Host-ras-session=admin-token; __Host-ras-csrf=csrf-token",
+        )
+        .add_header("x-ras-csrf", "csrf-token")
+        .json(&create_user)
+        .await;
+
+    assert_eq!(response.status_code().as_u16(), 201);
+
+    let response = server
+        .post("/api/v1/users")
+        .authorization_bearer("admin-token")
+        .json(&create_user)
+        .await;
+
+    assert_eq!(response.status_code().as_u16(), 201);
 }
 
 #[tokio::test]

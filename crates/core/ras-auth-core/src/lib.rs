@@ -1,11 +1,15 @@
 //! Authentication and authorization traits for JSON-RPC services.
 
+mod transport;
+
 use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+pub use transport::*;
 
 /// Errors that can occur during authentication or authorization.
 #[derive(Debug, Error, Clone, Serialize, Deserialize)]

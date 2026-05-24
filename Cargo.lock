@@ -2628,6 +2628,8 @@ dependencies = [
 name = "ras-auth-core"
 version = "0.1.0"
 dependencies = [
+ "cookie",
+ "http",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

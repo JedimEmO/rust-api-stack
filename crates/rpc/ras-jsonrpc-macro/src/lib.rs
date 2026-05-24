@@ -560,6 +560,7 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
             base_url: String,
             service: std::sync::Arc<T>,
             auth_provider: Option<Box<dyn ras_jsonrpc_core::AuthProvider>>,
+            auth_transport: ras_jsonrpc_core::AuthTransportConfig,
             usage_tracker: Option<Box<dyn Fn(&axum::http::HeaderMap, Option<&ras_jsonrpc_core::AuthenticatedUser>, &ras_jsonrpc_types::JsonRpcRequest) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync>>,
             method_duration_tracker: Option<Box<dyn Fn(&str, Option<&ras_jsonrpc_core::AuthenticatedUser>, std::time::Duration) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync>>,
         }
@@ -573,6 +574,7 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
                     base_url: "/rpc".to_string(),
                     service: std::sync::Arc::new(service),
                     auth_provider: None,
+                    auth_transport: ras_jsonrpc_core::AuthTransportConfig::default(),
                     usage_tracker: None,
                     method_duration_tracker: None,
                 }
@@ -587,6 +589,24 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
             /// Set the auth provider
             pub fn auth_provider<A: ras_jsonrpc_core::AuthProvider>(mut self, provider: A) -> Self {
                 self.auth_provider = Some(Box::new(provider));
+                self
+            }
+
+            /// Enable cookie authentication alongside bearer tokens.
+            pub fn auth_cookie(mut self, cookie: ras_jsonrpc_core::AuthCookieConfig) -> Self {
+                self.auth_transport.cookie = Some(cookie);
+                self
+            }
+
+            /// Replace the full auth transport configuration.
+            pub fn auth_transport(mut self, transport: ras_jsonrpc_core::AuthTransportConfig) -> Self {
+                self.auth_transport = transport;
+                self
+            }
+
+            /// Require CSRF validation for cookie-authenticated JSON-RPC requests.
+            pub fn csrf_protection(mut self, csrf: ras_jsonrpc_core::CsrfConfig) -> Self {
+                self.auth_transport.csrf = Some(csrf);
                 self
             }
 
@@ -618,6 +638,10 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
 
             /// Build the axum router for the JSON-RPC service
             pub fn build(self) -> Result<axum::Router, String> {
+                self.auth_transport
+                    .validate()
+                    .map_err(|err| err.to_string())?;
+
                 let base_url = self.base_url.clone();
                 let service = std::sync::Arc::new(self);
 
@@ -634,6 +658,7 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
                                 ras_jsonrpc_types::error_codes::AUTHENTICATION_REQUIRED => axum::http::StatusCode::UNAUTHORIZED,
                                 ras_jsonrpc_types::error_codes::INSUFFICIENT_PERMISSIONS => axum::http::StatusCode::FORBIDDEN,
                                 ras_jsonrpc_types::error_codes::TOKEN_EXPIRED => axum::http::StatusCode::UNAUTHORIZED,
+                                ras_jsonrpc_types::error_codes::CSRF_VALIDATION_FAILED => axum::http::StatusCode::FORBIDDEN,
                                 _ => axum::http::StatusCode::OK, // Other JSON-RPC errors still return 200 OK
                             }
                         } else {
@@ -675,13 +700,19 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
 
                 // Try to authenticate user if auth provider is available
                 let auth_result = if let Some(auth_provider) = &self.auth_provider {
-                    if let Some(token) = headers
-                        .get("Authorization")
-                        .and_then(|h| h.to_str().ok())
-                        .and_then(|s| s.strip_prefix("Bearer ")) {
-                        Some(auth_provider.authenticate(token.to_string()).await)
-                    } else {
-                        None
+                    match ras_jsonrpc_core::extract_auth_credential(&headers, &self.auth_transport) {
+                        Ok(credential) => {
+                            if let Err(_) = ras_jsonrpc_core::validate_csrf_for_credential("POST", &headers, &credential, &self.auth_transport) {
+                                return ras_jsonrpc_types::JsonRpcResponse::error(
+                                    ras_jsonrpc_types::JsonRpcError::csrf_validation_failed(),
+                                    request_id
+                                );
+                            }
+
+                            Some(auth_provider.authenticate(credential.token().to_string()).await)
+                        },
+                        Err(ras_jsonrpc_core::AuthTransportError::MissingCredentials) => None,
+                        Err(_) => Some(Err(ras_jsonrpc_core::AuthError::AuthenticationRequired)),
                     }
                 } else {
                     None
@@ -695,13 +726,21 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
                             request_id
                         );
                     }
-                    _ => None,
+                    Some(Err(_)) => {
+                        return ras_jsonrpc_types::JsonRpcResponse::error(
+                            ras_jsonrpc_types::JsonRpcError::authentication_required(),
+                            request_id
+                        );
+                    }
+                    None => None,
                 };
 
                 // Call usage tracker if configured
                 if let Some(tracker) = &self.usage_tracker {
                     let user_ref = authenticated_user.as_ref();
-                    tracker(&headers, user_ref, &request).await;
+                    let tracker_headers =
+                        ras_jsonrpc_core::redact_sensitive_headers_for_auth_transport(&headers, &self.auth_transport);
+                    tracker(&tracker_headers, user_ref, &request).await;
                 }
 
                 // Dispatch method

@@ -10,6 +10,8 @@ homepage = "https://github.com/JedimEmO/rust-api-stack"
 readme = "README.md"
 
 [dependencies]
+cookie = { workspace = true }
+http = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

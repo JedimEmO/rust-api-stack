@@ -81,6 +81,9 @@ pub mod error_codes {
 
     /// Token expired.
     pub const TOKEN_EXPIRED: i32 = -32003;
+
+    /// CSRF validation failed.
+    pub const CSRF_VALIDATION_FAILED: i32 = -32004;
 }
 
 impl JsonRpcRequest {
@@ -201,6 +204,15 @@ impl JsonRpcError {
             None,
         )
     }
+
+    /// Creates a CSRF validation error.
+    pub fn csrf_validation_failed() -> Self {
+        Self::new(
+            error_codes::CSRF_VALIDATION_FAILED,
+            "CSRF validation failed".to_string(),
+            None,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -255,6 +267,10 @@ mod tests {
         assert_eq!(
             JsonRpcError::token_expired().code,
             error_codes::TOKEN_EXPIRED
+        );
+        assert_eq!(
+            JsonRpcError::csrf_validation_failed().code,
+            error_codes::CSRF_VALIDATION_FAILED
         );
     }
 

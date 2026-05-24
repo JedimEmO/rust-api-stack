@@ -31,6 +31,7 @@ pub fn generate_server(definition: &FileServiceDefinition) -> TokenStream {
         pub struct #builder_name<S, A> {
             service: S,
             auth_provider: Option<A>,
+            auth_transport: ::ras_auth_core::AuthTransportConfig,
             usage_tracker: Option<Box<dyn Fn(&::axum::http::HeaderMap, &str, &str) + Send + Sync>>,
             duration_tracker: Option<Box<dyn Fn(&str, &str, std::time::Duration) + Send + Sync>>,
         }
@@ -44,6 +45,7 @@ pub fn generate_server(definition: &FileServiceDefinition) -> TokenStream {
                 Self {
                     service,
                     auth_provider: None,
+                    auth_transport: ::ras_auth_core::AuthTransportConfig::default(),
                     usage_tracker: None,
                     duration_tracker: None,
                 }
@@ -51,6 +53,21 @@ pub fn generate_server(definition: &FileServiceDefinition) -> TokenStream {
 
             pub fn auth_provider(mut self, provider: A) -> Self {
                 self.auth_provider = Some(provider);
+                self
+            }
+
+            pub fn auth_cookie(mut self, cookie: ::ras_auth_core::AuthCookieConfig) -> Self {
+                self.auth_transport.cookie = Some(cookie);
+                self
+            }
+
+            pub fn auth_transport(mut self, transport: ::ras_auth_core::AuthTransportConfig) -> Self {
+                self.auth_transport = transport;
+                self
+            }
+
+            pub fn csrf_protection(mut self, csrf: ::ras_auth_core::CsrfConfig) -> Self {
+                self.auth_transport.csrf = Some(csrf);
                 self
             }
 
@@ -73,8 +90,13 @@ pub fn generate_server(definition: &FileServiceDefinition) -> TokenStream {
             pub fn build(self) -> ::axum::Router {
                 use ::axum::routing::{get, post};
 
+                self.auth_transport
+                    .validate()
+                    .expect("invalid auth transport configuration");
+
                 let service = ::std::sync::Arc::new(self.service);
                 let auth_provider = self.auth_provider.map(::std::sync::Arc::new);
+                let auth_transport = self.auth_transport;
                 let usage_tracker = self.usage_tracker.map(::std::sync::Arc::new);
                 let duration_tracker = self.duration_tracker.map(::std::sync::Arc::new);
 
@@ -246,6 +268,7 @@ fn generate_handlers(
                         Option<::std::sync::Arc<A>>,
                         Option<::std::sync::Arc<Box<dyn Fn(&::axum::http::HeaderMap, &str, &str) + Send + Sync>>>,
                         Option<::std::sync::Arc<Box<dyn Fn(&str, &str, std::time::Duration) + Send + Sync>>>,
+                        ::ras_auth_core::AuthTransportConfig,
                     )>,
                     mut req: ::axum::http::Request<::axum::body::Body>,
                 ) -> impl ::axum::response::IntoResponse
@@ -261,7 +284,9 @@ fn generate_handlers(
 
                     // Track usage
                     if let Some(tracker) = &state.2 {
-                        tracker(&parts.headers, method, &path);
+                        let tracker_headers =
+                            ::ras_auth_core::redact_sensitive_headers_for_auth_transport(&parts.headers, &state.4);
+                        tracker(&tracker_headers, method, &path);
                     }
 
                     #auth_check
@@ -294,6 +319,7 @@ fn generate_handlers(
                         Option<::std::sync::Arc<A>>,
                         Option<::std::sync::Arc<Box<dyn Fn(&::axum::http::HeaderMap, &str, &str) + Send + Sync>>>,
                         Option<::std::sync::Arc<Box<dyn Fn(&str, &str, std::time::Duration) + Send + Sync>>>,
+                        ::ras_auth_core::AuthTransportConfig,
                     )>,
                     req: ::axum::http::Request<::axum::body::Body>,
                 ) -> impl ::axum::response::IntoResponse
@@ -309,7 +335,9 @@ fn generate_handlers(
 
                     // Track usage
                     if let Some(tracker) = &state.2 {
-                        tracker(&parts.headers, method, &path);
+                        let tracker_headers =
+                            ::ras_auth_core::redact_sensitive_headers_for_auth_transport(&parts.headers, &state.4);
+                        tracker(&tracker_headers, method, &path);
                     }
 
                     #auth_check
@@ -352,18 +380,20 @@ fn generate_auth_check(auth: &AuthRequirement) -> TokenStream {
                 ),
             };
 
-            let token = match parts.headers
-                .get(::axum::http::header::AUTHORIZATION)
-                .and_then(|h| h.to_str().ok())
-                .and_then(|h| h.strip_prefix("Bearer "))
-            {
-                Some(t) => t,
-                None => return <(::axum::http::StatusCode, &str) as ::axum::response::IntoResponse>::into_response(
+            let auth_credential = match ::ras_auth_core::extract_auth_credential(&parts.headers, &state.4) {
+                Ok(credential) => credential,
+                Err(_) => return <(::axum::http::StatusCode, &str) as ::axum::response::IntoResponse>::into_response(
                     (::axum::http::StatusCode::UNAUTHORIZED, "Missing or invalid authorization header")
                 ),
             };
 
-            let user = match auth_provider.authenticate(token.to_string()).await {
+            if let Err(_) = ::ras_auth_core::validate_csrf_for_credential(method, &parts.headers, &auth_credential, &state.4) {
+                return <(::axum::http::StatusCode, &str) as ::axum::response::IntoResponse>::into_response(
+                    (::axum::http::StatusCode::FORBIDDEN, "CSRF validation failed")
+                );
+            }
+
+            let user = match auth_provider.authenticate(auth_credential.token().to_string()).await {
                 Ok(u) => u,
                 Err(_) => return <(::axum::http::StatusCode, &str) as ::axum::response::IntoResponse>::into_response(
                     (::axum::http::StatusCode::UNAUTHORIZED, "Invalid authentication")
@@ -430,13 +460,13 @@ fn generate_router_construction(
             ::axum::Router::new()
                 #(#routes)*
                 .layer(::axum::extract::DefaultBodyLimit::max(#limit_usize))
-                .with_state((service, auth_provider, usage_tracker, duration_tracker))
+                .with_state((service, auth_provider, usage_tracker, duration_tracker, auth_transport))
         }
     } else {
         quote! {
             ::axum::Router::new()
                 #(#routes)*
-                .with_state((service, auth_provider, usage_tracker, duration_tracker))
+                .with_state((service, auth_provider, usage_tracker, duration_tracker, auth_transport))
         }
     };
 

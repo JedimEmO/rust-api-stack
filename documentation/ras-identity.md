@@ -232,6 +232,45 @@ println!("Permissions: {:?}", claims.permissions);
 session_service.end_session(&claims.jti).await;
 ```
 
+### Browser Session Cookies
+
+RAS services can accept the same JWT from either `Authorization: Bearer ...` or
+from a configured secure cookie. The session verifier stays the same:
+
+```rust
+use ras_auth_core::{AuthCookieConfig, CsrfConfig};
+
+let jwt_auth = JwtAuthProvider::new(Arc::new(session_service));
+let cookie = AuthCookieConfig::default();
+let csrf = CsrfConfig::default();
+
+let service = MyApiServiceBuilder::new(service_impl)
+    .auth_provider(jwt_auth)
+    .auth_cookie(cookie.clone())
+    .csrf_protection(csrf.clone())
+    .build();
+
+// After login:
+let token = session_service.begin_session("local", auth_payload).await?;
+let set_cookie = cookie.session_cookie_header_value(&token)?;
+let csrf_token = "random-per-session-csrf-token";
+let set_csrf_cookie = csrf.csrf_cookie_header_value(csrf_token)?;
+
+// After logout/revocation:
+let clear_cookie = cookie.clear_cookie_header_value()?;
+let clear_csrf_cookie = csrf.clear_csrf_cookie_header_value()?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Cookie auth is opt-in. Bearer tokens remain enabled by default and take
+precedence when both transports are present. The default cookie is `HttpOnly`,
+`Secure`, `SameSite=Lax`, `Path=/`, and host-only. `CsrfConfig::default()` uses
+a double-submit token: the browser receives a readable `__Host-ras-csrf` cookie
+and must echo the same value in the `x-ras-csrf` header on cookie-authenticated
+`POST`, `PUT`, `PATCH`, and `DELETE` requests. Bearer requests are unchanged.
+For cookie auth, use an explicit credentialed CORS allowlist; do not combine
+session cookies with permissive credentialed CORS.
+
 ## Permission Management
 
 Implement custom permission logic using the `UserPermissions` trait:
@@ -439,6 +478,8 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .nest("/auth", auth_router)
         .nest("/api", api_router)
+        // For cookie auth, replace permissive CORS with an explicit
+        // credentialed origin allowlist.
         .layer(CorsLayer::permissive())
         .with_state(session_service);
     
@@ -457,6 +498,9 @@ async fn main() -> anyhow::Result<()> {
 - **Use strong JWT secrets**: Generate cryptographically secure secrets
 - **Set appropriate TTLs**: Balance security and user experience
 - **Enable HTTPS**: Always use TLS in production
+- **Use secure cookies for browser sessions**: Prefer `HttpOnly`, `Secure`,
+  `SameSite`, host-prefixed names, double-submit CSRF tokens, and restrictive
+  credentialed CORS for cookie-authenticated unsafe requests
 - **Validate permissions**: Check permissions at the service level
 - **Handle errors gracefully**: Don't leak information in error messages
 

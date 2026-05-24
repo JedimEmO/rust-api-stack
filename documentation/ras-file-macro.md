@@ -496,12 +496,18 @@ UPLOAD WITH_PERMISSIONS([["admin"], ["upload", "premium"]]) special_upload() -> 
 // Requires: admin OR (upload AND premium)
 ```
 
-### Bearer Token Handling
+### Token Handling
 
-Tokens are extracted from the `Authorization` header:
+By default, protected endpoints extract bearer tokens from the `Authorization`
+header:
 ```
 Authorization: Bearer validtoken
 ```
+
+Generated file services can also opt into secure session cookies with
+`auth_cookie(AuthCookieConfig::default())`. When CSRF protection is enabled with
+`CsrfConfig::default()`, cookie-authenticated uploads must include an
+`x-ras-csrf` header matching the `__Host-ras-csrf` double-submit cookie.
 
 ## Error Handling
 
@@ -730,6 +736,8 @@ async fn main() {
     // Create app with CORS
     let app = Router::new()
         .merge(file_router)
+        // For cookie auth, replace permissive CORS with an explicit
+        // credentialed origin allowlist.
         .layer(CorsLayer::permissive());
     
     // Start server

@@ -210,11 +210,12 @@ fn decode_jwt<T: DeserializeOwned>(
         .decode(encoded_signature)
         .map_err(|err| jwt_error(format!("invalid JWT signature encoding: {err}")))?;
     let signing_input = format!("{encoded_header}.{encoded_claims}");
-    let expected_signature = sign_jwt(&signing_input, secret.as_bytes(), expected_algorithm)?;
-
-    if !signatures_match(&expected_signature, &signature) {
-        return Err(jwt_error("invalid JWT signature"));
-    }
+    verify_jwt_signature(
+        &signing_input,
+        secret.as_bytes(),
+        expected_algorithm,
+        &signature,
+    )?;
 
     let claims = URL_SAFE_NO_PAD
         .decode(encoded_claims)
@@ -249,13 +250,35 @@ fn sign_jwt(
     }
 }
 
-fn signatures_match(expected: &[u8], actual: &[u8]) -> bool {
-    let mut diff = expected.len() ^ actual.len();
-    for i in 0..expected.len().max(actual.len()) {
-        diff |= expected.get(i).copied().unwrap_or_default() as usize
-            ^ actual.get(i).copied().unwrap_or_default() as usize;
+fn verify_jwt_signature(
+    signing_input: &str,
+    secret: &[u8],
+    algorithm: JwtAlgorithm,
+    signature: &[u8],
+) -> Result<(), SessionError> {
+    match algorithm {
+        JwtAlgorithm::HS256 => {
+            let mut mac = Hmac::<Sha256>::new_from_slice(secret)
+                .map_err(|err| jwt_error(format!("invalid JWT secret: {err}")))?;
+            mac.update(signing_input.as_bytes());
+            mac.verify_slice(signature)
+                .map_err(|_| jwt_error("invalid JWT signature"))
+        }
+        JwtAlgorithm::HS384 => {
+            let mut mac = Hmac::<Sha384>::new_from_slice(secret)
+                .map_err(|err| jwt_error(format!("invalid JWT secret: {err}")))?;
+            mac.update(signing_input.as_bytes());
+            mac.verify_slice(signature)
+                .map_err(|_| jwt_error("invalid JWT signature"))
+        }
+        JwtAlgorithm::HS512 => {
+            let mut mac = Hmac::<Sha512>::new_from_slice(secret)
+                .map_err(|err| jwt_error(format!("invalid JWT secret: {err}")))?;
+            mac.update(signing_input.as_bytes());
+            mac.verify_slice(signature)
+                .map_err(|_| jwt_error("invalid JWT signature"))
+        }
     }
-    diff == 0
 }
 
 pub struct SessionService {

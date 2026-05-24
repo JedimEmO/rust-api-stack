@@ -10,7 +10,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use axum_test::multipart::{MultipartForm, Part};
-use ras_auth_core::AuthenticatedUser;
+use ras_auth_core::{AuthCookieConfig, AuthenticatedUser, CsrfConfig};
 use ras_file_macro::file_service;
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +28,7 @@ file_service!({
     base_path: "/files",
     endpoints: [
         DOWNLOAD UNAUTHORIZED download/{file_id: String}(),
+        DOWNLOAD WITH_PERMISSIONS(["user"]) download_secure/{file_id: String}(),
         UPLOAD WITH_PERMISSIONS(["user"]) upload() -> UploadResponse,
     ]
 });
@@ -42,6 +43,24 @@ struct DemoImpl {
 #[async_trait::async_trait]
 impl DemoTrait for DemoImpl {
     async fn download(&self, file_id: String) -> Result<impl IntoResponse, DemoFileError> {
+        let store = self.storage.lock().unwrap();
+        let bytes = store
+            .iter()
+            .find_map(|(id, data)| (id == &file_id).then(|| data.clone()))
+            .ok_or(DemoFileError::NotFound)?;
+
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/octet-stream")
+            .body(Body::from(bytes))
+            .unwrap())
+    }
+
+    async fn download_secure(
+        &self,
+        _user: &AuthenticatedUser,
+        file_id: String,
+    ) -> Result<impl IntoResponse, DemoFileError> {
         let store = self.storage.lock().unwrap();
         let bytes = store
             .iter()
@@ -83,6 +102,18 @@ fn router(storage: Storage) -> axum::Router {
     DemoBuilder::<DemoImpl, MockAuthProvider>::new(DemoImpl { storage })
         .auth_provider(MockAuthProvider::default())
         .build()
+}
+
+fn cookie_router(storage: Storage, csrf: bool) -> axum::Router {
+    let mut builder = DemoBuilder::<DemoImpl, MockAuthProvider>::new(DemoImpl { storage })
+        .auth_provider(MockAuthProvider::default())
+        .auth_cookie(AuthCookieConfig::default());
+
+    if csrf {
+        builder = builder.csrf_protection(CsrfConfig::default());
+    }
+
+    builder.build()
 }
 
 #[tokio::test]
@@ -129,6 +160,121 @@ async fn upload_rejected_without_token() {
 
     let response = server.post("/files/upload").multipart(form).await;
     response.assert_status(StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn cookie_auth_upload_and_download_secure_coexist_with_bearer() {
+    let storage: Storage = Arc::new(Mutex::new(Vec::new()));
+    storage
+        .lock()
+        .unwrap()
+        .push(("file-0".to_string(), b"secret file".to_vec()));
+    let server = mock_http_server(cookie_router(storage.clone(), false));
+
+    let response = server
+        .get("/files/download_secure/file-0")
+        .add_header("Cookie", "__Host-ras-session=user-token")
+        .await;
+
+    response.assert_status_ok();
+    let bytes = response.into_bytes();
+    assert_eq!(bytes.as_ref(), b"secret file");
+
+    let form = MultipartForm::new().add_part(
+        "file",
+        Part::bytes("from cookie")
+            .file_name("cookie.txt")
+            .mime_type("text/plain"),
+    );
+    let response = server
+        .post("/files/upload")
+        .add_header("Cookie", "__Host-ras-session=user-token")
+        .multipart(form)
+        .await;
+
+    response.assert_status_ok();
+
+    let form = MultipartForm::new().add_part(
+        "file",
+        Part::bytes("from bearer")
+            .file_name("bearer.txt")
+            .mime_type("text/plain"),
+    );
+    let response = server
+        .post("/files/upload")
+        .authorization_bearer("user-token")
+        .add_header("Cookie", "__Host-ras-session=invalid-token")
+        .multipart(form)
+        .await;
+
+    response.assert_status_ok();
+
+    let form = MultipartForm::new().add_part(
+        "file",
+        Part::bytes("bad bearer")
+            .file_name("bad.txt")
+            .mime_type("text/plain"),
+    );
+    let response = server
+        .post("/files/upload")
+        .add_header("Authorization", "Basic invalid")
+        .add_header("Cookie", "__Host-ras-session=user-token")
+        .multipart(form)
+        .await;
+
+    response.assert_status(StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn cookie_auth_upload_requires_csrf_when_enabled() {
+    let storage: Storage = Arc::new(Mutex::new(Vec::new()));
+    let server = mock_http_server(cookie_router(storage, true));
+
+    let form = MultipartForm::new().add_part(
+        "file",
+        Part::bytes("missing csrf")
+            .file_name("missing.txt")
+            .mime_type("text/plain"),
+    );
+    let response = server
+        .post("/files/upload")
+        .add_header("Cookie", "__Host-ras-session=user-token")
+        .multipart(form)
+        .await;
+
+    response.assert_status(StatusCode::FORBIDDEN);
+
+    let form = MultipartForm::new().add_part(
+        "file",
+        Part::bytes("with csrf")
+            .file_name("csrf.txt")
+            .mime_type("text/plain"),
+    );
+    let response = server
+        .post("/files/upload")
+        .add_header(
+            "Cookie",
+            "__Host-ras-session=user-token; __Host-ras-csrf=csrf-token",
+        )
+        .add_header("x-ras-csrf", "csrf-token")
+        .multipart(form)
+        .await;
+
+    response.assert_status_ok();
+
+    let form = MultipartForm::new().add_part(
+        "file",
+        Part::bytes("bearer")
+            .file_name("bearer.txt")
+            .mime_type("text/plain"),
+    );
+    let response = server
+        .post("/files/upload")
+        .authorization_bearer("user-token")
+        .multipart(form)
+        .await;
+
+    response.assert_status_ok();
 }
 
 #[tokio::test]

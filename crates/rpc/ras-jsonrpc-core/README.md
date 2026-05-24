@@ -274,6 +274,26 @@ users_by_token.insert(
 let auth_provider = StaticBearerAuthProvider { users_by_token };
 ```
 
+### Browser Cookie Transport
+
+JSON-RPC HTTP services can accept bearer tokens and secure session cookies on
+the same endpoint. The auth provider still validates the token string:
+
+```rust
+use ras_jsonrpc_core::{AuthCookieConfig, CsrfConfig};
+
+let router = MyRpcServiceBuilder::new(service_impl)
+    .auth_provider(auth_provider)
+    .auth_cookie(AuthCookieConfig::default())
+    .csrf_protection(CsrfConfig::default())
+    .build()?;
+```
+
+Bearer auth remains enabled by default and takes precedence when both
+credentials are present. JSON-RPC HTTP uses `POST`, so cookie-authenticated calls
+must include an `x-ras-csrf` header matching the `__Host-ras-csrf`
+double-submit cookie when default CSRF protection is enabled.
+
 ### API Key Authentication
 ```rust
 use ras_jsonrpc_core::{AuthError, AuthFuture, AuthProvider, AuthenticatedUser};

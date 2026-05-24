@@ -5,7 +5,7 @@ A Rust framework for building type-safe, authenticated agent systems with JSON-R
 ## Overview
 
 The Rust Agent Stack provides reusable building blocks for distributed agent systems:
-- **Pluggable Authentication** - JWT sessions, OAuth2, local username/password auth, and reusable authorization traits
+- **Pluggable Authentication** - JWT sessions, OAuth2, local username/password auth, secure cookie transport, and reusable authorization traits
 - **Type-Safe APIs** - Procedural macros for JSON-RPC, REST, and file services
 - **WebSocket Support** - Bidirectional real-time communication
 - **File Services** - Type-safe file upload/download with streaming support
@@ -272,6 +272,7 @@ Package-level guides:
 - **JWT Configuration** - Configurable algorithms, secrets, TTLs, and active-session enforcement
 - **PKCE OAuth2** - Proof Key for Code Exchange by default
 - **Session Management** - JWT-based sessions with revocation support
+- **Secure Cookie Transport** - Optional `HttpOnly`, `Secure`, `SameSite` cookies alongside bearer headers for browser sessions
 
 ### Observability
 
@@ -305,6 +306,7 @@ Browser examples use generated contracts without hand-written DTOs:
 - REST and file-service TypeScript usage samples assume a fetch client generated from OpenAPI specs.
 - JSON-RPC WASM UI uses generated Rust/WASM client code from the shared API crate.
 - Bearer tokens are passed as ordinary per-request headers.
+- Browser-facing services can opt into secure `HttpOnly` session cookies on the same generated builders, with double-submit CSRF protection for cookie-authenticated unsafe requests.
 
 ## Development
 

@@ -328,7 +328,8 @@ The generated server accepts both `rename_user.v2` and `rename_user.v1`. The gen
 ## Authentication Flow
 
 ### 1. Token Extraction
-The generated service automatically extracts Bearer tokens from the `Authorization` header:
+The generated service automatically extracts bearer tokens from the
+`Authorization` header, and can also accept a configured secure session cookie:
 ```
 Authorization: Bearer <token>
 ```

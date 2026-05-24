@@ -113,6 +113,25 @@ let service = UserServiceBuilder::new(UserServiceImpl)
 let app = axum::Router::new().merge(service);
 ```
 
+Cookie auth can be enabled on the same service without changing the
+`AuthProvider`:
+
+```rust
+use ras_auth_core::{AuthCookieConfig, CsrfConfig};
+
+let service = UserServiceBuilder::new(UserServiceImpl)
+    .auth_provider(my_auth_provider)
+    .auth_cookie(AuthCookieConfig::default())
+    .csrf_protection(CsrfConfig::default())
+    .build();
+```
+
+Bearer tokens remain accepted by default. If both bearer and cookie credentials
+are present, bearer takes precedence. The CSRF guard only applies to
+cookie-authenticated `POST`, `PUT`, `PATCH`, and `DELETE` requests.
+`CsrfConfig::default()` requires the `x-ras-csrf` header to match the
+`__Host-ras-csrf` double-submit cookie.
+
 ### OpenAPI Generation
 
 ```rust

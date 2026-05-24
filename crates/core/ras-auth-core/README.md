@@ -11,6 +11,9 @@ JSON-RPC, bidirectional JSON-RPC, and identity crates:
 - `AuthenticatedUser` - Represents an authenticated user with permissions
 - `AuthError` - Common error types for authentication failures
 - `AuthFuture` - Boxed future type returned by authentication providers
+- `AuthTransportConfig` - HTTP credential transport configuration for bearer and cookie auth
+- `AuthCookieConfig` - Secure session cookie settings and `Set-Cookie` helpers
+- `CsrfConfig` - CSRF guard for cookie-authenticated unsafe requests
 
 ## Key Types
 
@@ -59,6 +62,43 @@ pub enum AuthError {
     Internal(String),
 }
 ```
+
+### HTTP Credential Transport
+
+`AuthProvider` still validates a token string. HTTP services can choose how the
+token reaches the server:
+
+```rust
+use ras_auth_core::{AuthCookieConfig, AuthTransportConfig, CsrfConfig};
+
+let transport = AuthTransportConfig::default()
+    .with_cookie(AuthCookieConfig::default())
+    .with_csrf(CsrfConfig::default());
+```
+
+Bearer tokens remain enabled by default. If both `Authorization: Bearer ...` and
+the configured cookie are present, bearer wins. If the bearer header is present
+but malformed, the request fails instead of falling back to the cookie.
+
+Cookie helpers emit secure defaults:
+
+```rust
+use ras_auth_core::AuthCookieConfig;
+
+let cookie = AuthCookieConfig::default();
+let set_cookie = cookie.session_cookie_header_value("jwt-token")?;
+let clear_cookie = cookie.clear_cookie_header_value()?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+The default cookie is `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, and uses a
+`__Host-` name. Use `insecure_for_local_development()` only for local HTTP.
+
+`CsrfConfig::default()` uses a double-submit token: issue a CSRF cookie with
+`csrf_cookie_header_value(...)`, then have browser clients echo the same token in
+the `x-ras-csrf` header on cookie-authenticated `POST`, `PUT`, `PATCH`, and
+`DELETE` requests. Use `header_presence_only(...)` only behind restrictive
+credentialed CORS where a presence-only custom header is an intentional tradeoff.
 
 ## Usage
 

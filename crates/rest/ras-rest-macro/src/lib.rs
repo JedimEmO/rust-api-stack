@@ -771,6 +771,7 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
         pub struct #builder_name<T: #service_trait_name> {
             service: std::sync::Arc<T>,
             auth_provider: Option<std::sync::Arc<dyn ras_auth_core::AuthProvider>>,
+            auth_transport: ras_auth_core::AuthTransportConfig,
             with_usage_tracker: Option<std::sync::Arc<dyn Fn(&axum::http::HeaderMap, Option<&ras_auth_core::AuthenticatedUser>, &str, &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync>>,
             with_method_duration_tracker: Option<std::sync::Arc<dyn Fn(&str, &str, Option<&ras_auth_core::AuthenticatedUser>, std::time::Duration) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync>>,
         }
@@ -808,6 +809,7 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
                 Self {
                     service: std::sync::Arc::new(service),
                     auth_provider: None,
+                    auth_transport: ras_auth_core::AuthTransportConfig::default(),
                     with_usage_tracker: None,
                     with_method_duration_tracker: None,
                 }
@@ -816,6 +818,24 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
             /// Set the auth provider
             pub fn auth_provider<A: ras_auth_core::AuthProvider>(mut self, provider: A) -> Self {
                 self.auth_provider = Some(std::sync::Arc::new(provider));
+                self
+            }
+
+            /// Enable cookie authentication alongside bearer tokens.
+            pub fn auth_cookie(mut self, cookie: ras_auth_core::AuthCookieConfig) -> Self {
+                self.auth_transport.cookie = Some(cookie);
+                self
+            }
+
+            /// Replace the full auth transport configuration.
+            pub fn auth_transport(mut self, transport: ras_auth_core::AuthTransportConfig) -> Self {
+                self.auth_transport = transport;
+                self
+            }
+
+            /// Require CSRF validation for cookie-authenticated unsafe requests.
+            pub fn csrf_protection(mut self, csrf: ras_auth_core::CsrfConfig) -> Self {
+                self.auth_transport.csrf = Some(csrf);
                 self
             }
 
@@ -847,6 +867,10 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
 
             /// Build the axum router for the REST service
             pub fn build(self) -> axum::Router {
+                self.auth_transport
+                    .validate()
+                    .expect("invalid auth transport configuration");
+
                 let mut router = axum::Router::new();
 
                 #(#route_registrations)*
@@ -1118,6 +1142,7 @@ fn generate_canonical_route_registration(
         {
             let service = self.service.clone();
             let auth_provider = self.auth_provider.clone();
+            let auth_transport = self.auth_transport.clone();
             let required_permission_groups: Vec<Vec<String>> = #permission_groups_code;
             let with_usage_tracker = self.with_usage_tracker.clone();
             let with_method_duration_tracker = self.with_method_duration_tracker.clone();
@@ -1126,6 +1151,7 @@ fn generate_canonical_route_registration(
                 move |#axum_handler| {
                     let service = service.clone();
                     let auth_provider = auth_provider.clone();
+                    let auth_transport = auth_transport.clone();
                     let required_permission_groups: Vec<Vec<String>> = required_permission_groups.clone();
                     let with_usage_tracker = with_usage_tracker.clone();
                     let with_method_duration_tracker = with_method_duration_tracker.clone();
@@ -1160,6 +1186,7 @@ fn generate_legacy_route_registration(
         {
             let service = self.service.clone();
             let auth_provider = self.auth_provider.clone();
+            let auth_transport = self.auth_transport.clone();
             let required_permission_groups: Vec<Vec<String>> = #permission_groups_code;
             let with_usage_tracker = self.with_usage_tracker.clone();
             let with_method_duration_tracker = self.with_method_duration_tracker.clone();
@@ -1168,6 +1195,7 @@ fn generate_legacy_route_registration(
                 move |#axum_handler| {
                     let service = service.clone();
                     let auth_provider = auth_provider.clone();
+                    let auth_transport = auth_transport.clone();
                     let required_permission_groups: Vec<Vec<String>> = required_permission_groups.clone();
                     let with_usage_tracker = with_usage_tracker.clone();
                     let with_method_duration_tracker = with_method_duration_tracker.clone();
@@ -1232,7 +1260,9 @@ fn generate_legacy_handler_body(
             #json_handling
 
             if let Some(tracker) = &with_usage_tracker {
-                tracker(&headers, None, #method, #path).await;
+                let tracker_headers =
+                    ras_auth_core::redact_sensitive_headers_for_auth_transport(&headers, &auth_transport);
+                tracker(&tracker_headers, None, #method, #path).await;
             }
 
             let legacy_parts: #legacy_request_ident = #legacy_parts_init;
@@ -1307,13 +1337,9 @@ fn generate_legacy_handler_body(
             quote! {
                 #json_handling
 
-                let token = match headers
-                    .get("Authorization")
-                    .and_then(|h| h.to_str().ok())
-                    .and_then(|s| s.strip_prefix("Bearer "))
-                {
-                    Some(token) => token,
-                    None => {
+                let auth_credential = match ras_auth_core::extract_auth_credential(&headers, &auth_transport) {
+                    Ok(credential) => credential,
+                    Err(_) => {
                         use axum::response::IntoResponse;
                         return (
                             axum::http::StatusCode::UNAUTHORIZED,
@@ -1324,8 +1350,18 @@ fn generate_legacy_handler_body(
                     },
                 };
 
+                if let Err(_) = ras_auth_core::validate_csrf_for_credential(#method, &headers, &auth_credential, &auth_transport) {
+                    use axum::response::IntoResponse;
+                    return (
+                        axum::http::StatusCode::FORBIDDEN,
+                        axum::Json(serde_json::json!({
+                            "error": "CSRF validation failed"
+                        }))
+                    ).into_response();
+                }
+
                 let user = match &auth_provider {
-                    Some(provider) => match provider.authenticate(token.to_string()).await {
+                    Some(provider) => match provider.authenticate(auth_credential.token().to_string()).await {
                         Ok(user) => user,
                         Err(_) => {
                             use axum::response::IntoResponse;
@@ -1377,7 +1413,9 @@ fn generate_legacy_handler_body(
                 }
 
                 if let Some(tracker) = &with_usage_tracker {
-                    tracker(&headers, Some(&user), #method, #path).await;
+                    let tracker_headers =
+                        ras_auth_core::redact_sensitive_headers_for_auth_transport(&headers, &auth_transport);
+                    tracker(&tracker_headers, Some(&user), #method, #path).await;
                 }
 
                 let legacy_parts: #legacy_request_ident = #legacy_parts_init;
@@ -1543,7 +1581,9 @@ fn generate_handler_body(
 
                 // Call usage tracker if configured (for unauthorized endpoints, headers come from handler params)
                 if let Some(tracker) = &with_usage_tracker {
-                    tracker(&headers, None, #method, #path).await;
+                    let tracker_headers =
+                        ras_auth_core::redact_sensitive_headers_for_auth_transport(&headers, &auth_transport);
+                    tracker(&tracker_headers, None, #method, #path).await;
                 }
 
                 // Track duration
@@ -1634,13 +1674,9 @@ fn generate_handler_body(
                 #json_handling
 
                 // Extract and validate auth token
-                let token = match headers
-                    .get("Authorization")
-                    .and_then(|h| h.to_str().ok())
-                    .and_then(|s| s.strip_prefix("Bearer "))
-                {
-                    Some(token) => token,
-                    None => {
+                let auth_credential = match ras_auth_core::extract_auth_credential(&headers, &auth_transport) {
+                    Ok(credential) => credential,
+                    Err(_) => {
                         use axum::response::IntoResponse;
                         return (
                             axum::http::StatusCode::UNAUTHORIZED,
@@ -1651,9 +1687,19 @@ fn generate_handler_body(
                     },
                 };
 
+                if let Err(_) = ras_auth_core::validate_csrf_for_credential(#method, &headers, &auth_credential, &auth_transport) {
+                    use axum::response::IntoResponse;
+                    return (
+                        axum::http::StatusCode::FORBIDDEN,
+                        axum::Json(serde_json::json!({
+                            "error": "CSRF validation failed"
+                        }))
+                    ).into_response();
+                }
+
                 // Authenticate user
                 let user = match &auth_provider {
-                    Some(provider) => match provider.authenticate(token.to_string()).await {
+                    Some(provider) => match provider.authenticate(auth_credential.token().to_string()).await {
                         Ok(user) => user,
                         Err(_) => {
                             use axum::response::IntoResponse;
@@ -1712,7 +1758,9 @@ fn generate_handler_body(
 
                 // Call usage tracker if configured
                 if let Some(tracker) = &with_usage_tracker {
-                    tracker(&headers, Some(&user), #method, #path).await;
+                    let tracker_headers =
+                        ras_auth_core::redact_sensitive_headers_for_auth_transport(&headers, &auth_transport);
+                    tracker(&tracker_headers, Some(&user), #method, #path).await;
                 }
 
                 // Track duration
