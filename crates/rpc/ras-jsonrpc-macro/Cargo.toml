@@ -16,6 +16,7 @@ proc-macro = true
 default = ["server", "client"]  # Enable server by default for backward compatibility
 server = ["axum", "ras-jsonrpc-core"]
 client = ["reqwest"]
+permissions = []
 
 [dependencies]
 syn = { workspace = true }
@@ -47,6 +48,7 @@ futures = { workspace = true }
 axum = { workspace = true }
 ras-jsonrpc-core = { path = "../ras-jsonrpc-core", version = "0.1.2" }
 ras-auth-core = { path = "../../core/ras-auth-core", version = "0.1.0" }
+ras-permission-manifest = { path = "../../specs/ras-permission-manifest", version = "0.1.0" }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

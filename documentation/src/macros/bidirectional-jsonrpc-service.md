@@ -22,16 +22,19 @@ ras-jsonrpc-bidirectional-client = { version = "0.1.0", optional = true }
 [features]
 default = []
 server = [
+    "ras-jsonrpc-bidirectional-macro/server",
     "dep:ras-jsonrpc-bidirectional-server",
 ]
 client = [
+    "ras-jsonrpc-bidirectional-macro/client",
     "dep:ras-jsonrpc-bidirectional-client",
 ]
 ```
 
-Define these features on the shared API crate. The WebSocket server depends on
-that API crate with `features = ["server"]`; TUI, native, or browser clients
-depend on it with `features = ["client"]`.
+These API-crate features forward to the macro crate and enable the runtime
+dependencies used by the generated surface. The WebSocket server depends on the
+API crate with `features = ["server"]`; TUI, native, or browser clients depend
+on it with `features = ["client"]`.
 
 If `server_to_client_calls` is used, the server feature also needs optional
 `tokio` and `uuid` dependencies because generated server-side client handles

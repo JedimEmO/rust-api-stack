@@ -14,9 +14,10 @@ readme = "README.md"
 crate-type = ["rlib"]
 
 [dependencies]
-ras-file-macro = { path = "../../../crates/rest/ras-file-macro", version = "0.1.0", default-features = false }
+ras-file-macro = { path = "../../../crates/rest/ras-file-macro", version = "0.1.0", default-features = false, features = ["permissions"] }
 ras-file-core = { path = "../../../crates/rest/ras-file-core", version = "0.1.0", optional = true }
 ras-auth-core = { path = "../../../crates/core/ras-auth-core", version = "0.1.0", optional = true }
+ras-permission-manifest = { path = "../../../crates/specs/ras-permission-manifest", version = "0.1.0" }
 serde = { workspace = true, features = ["derive"] }
 async-trait = { workspace = true, optional = true }
 thiserror = { workspace = true }
@@ -43,6 +44,7 @@ serde_json = { workspace = true }
 [features]
 default = []
 server = [
+    "ras-file-macro/server",
     "dep:ras-file-core",
     "dep:ras-auth-core",
     "dep:async-trait",
@@ -51,6 +53,7 @@ server = [
     "dep:serde_json",
 ]
 client = [
+    "ras-file-macro/client",
     "dep:reqwest",
     "dep:tokio",
     "dep:tokio-util",

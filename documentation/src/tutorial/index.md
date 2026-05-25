@@ -12,9 +12,9 @@ The example application is a small team workspace:
 - admins can perform wider maintenance operations.
 
 The important part is not the domain. The important part is the shape: the API
-contract lives in a shared Rust crate, generated server code is enabled by the
-server feature, generated client code is enabled by the client feature, and auth
-requirements are declared beside the operation definitions.
+contract lives in a shared Rust crate, API-crate `server` and `client` features
+forward to the service macro features, and auth requirements are declared
+beside the operation definitions.
 
 ## Target Architecture
 
@@ -44,7 +44,8 @@ workspace-api = { path = "../workspace-api", default-features = false, features 
 ```
 
 This keeps generated transport code out of crates that do not need it, while
-keeping request and response types shared.
+keeping request and response types shared. The proc macro features decide what
+code is emitted; the API-crate features are only the downstream selection point.
 
 ## What You Will Build
 
@@ -63,4 +64,3 @@ attachments, and bidirectional JSON-RPC for live notifications. If your
 application is more command-oriented, the same structure works with
 [`jsonrpc_service!`](../macros/jsonrpc-service.md) instead of
 [`rest_service!`](../macros/rest-service.md).
-

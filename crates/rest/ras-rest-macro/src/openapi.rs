@@ -119,7 +119,6 @@ pub fn generate_openapi_code(
                     sanitized_name
                 );
                 quote! {
-                    #[cfg(feature = "server")]
                     fn #fn_name() -> serde_json::Value {
                         let schema = schemars::schema_for!(#type_tokens);
                         let mut schema_value = serde_json::to_value(&schema).unwrap_or_else(|_| {
@@ -196,6 +195,8 @@ pub fn generate_openapi_code(
                     groups.iter().flatten().cloned().collect()
                 }
             };
+            let permission_groups = permission_groups_for_spec(&endpoint.auth);
+            let permission_groups_tokens = permission_groups_tokens(&permission_groups);
 
             let request_type_name = if let Some(request_type) = &endpoint.request_type {
                 sanitize_type_name(&quote!(#request_type).to_string())
@@ -243,6 +244,7 @@ pub fn generate_openapi_code(
                     description: #description,
                     auth_required: #auth_required,
                     permissions: vec![#(#permissions.to_string()),*],
+                    permission_groups: #permission_groups_tokens,
                     request_type_name: #request_type_name.to_string(),
                     response_type_name: #response_type_name.to_string(),
                     path_params: vec![#(#path_param_infos),*] as Vec<(String, String)>,
@@ -296,6 +298,7 @@ pub fn generate_openapi_code(
                     })
                     .collect();
                 let permissions = permissions.clone();
+                let permission_groups_tokens = permission_groups_tokens.clone();
                 let summary = summary.clone();
                 let description = description.clone();
 
@@ -307,6 +310,7 @@ pub fn generate_openapi_code(
                         description: #description,
                         auth_required: #auth_required,
                         permissions: vec![#(#permissions.to_string()),*],
+                        permission_groups: #permission_groups_tokens,
                         request_type_name: #request_type_name.to_string(),
                         response_type_name: #response_type_name.to_string(),
                         path_params: vec![#(#path_param_infos),*] as Vec<(String, String)>,
@@ -323,7 +327,6 @@ pub fn generate_openapi_code(
         .collect();
 
     quote! {
-        #[cfg(feature = "server")]
         #[derive(serde::Serialize)]
         struct #endpoint_info_struct_name {
             method: String,
@@ -332,6 +335,7 @@ pub fn generate_openapi_code(
             description: Option<String>,
             auth_required: bool,
             permissions: Vec<String>,
+            permission_groups: Vec<Vec<String>>,
             request_type_name: String,
             response_type_name: String,
             path_params: Vec<(String, String)>, // (name, type)
@@ -342,7 +346,6 @@ pub fn generate_openapi_code(
         }
 
         // Helper function to fix schema references and flatten nested definitions
-        #[cfg(feature = "server")]
         fn fix_schema_refs(value: &mut serde_json::Value, schemas: &mut serde_json::Map<String, serde_json::Value>) {
             match value {
                 serde_json::Value::Object(obj) => {
@@ -402,7 +405,6 @@ pub fn generate_openapi_code(
         }
 
         // Helper function to normalize nullable properties for better OpenAPI explorer compatibility.
-        #[cfg(feature = "server")]
         fn normalize_nullable_properties(value: &mut serde_json::Value) {
             match value {
                 serde_json::Value::Object(obj) => {
@@ -458,7 +460,6 @@ pub fn generate_openapi_code(
         }
 
         // Helper function to fix Option types that use anyOf with null or type arrays
-        #[cfg(feature = "server")]
         fn fix_option_types(value: &mut serde_json::Value) {
             match value {
                 serde_json::Value::Object(obj) => {
@@ -547,7 +548,6 @@ pub fn generate_openapi_code(
         #(#schema_fns)*
 
         /// Generate OpenAPI 3.0 document for this service
-        #[cfg(feature = "server")]
         pub fn #openapi_fn_name() -> serde_json::Value {
             use serde_json::json;
             use schemars::{schema_for, JsonSchema};
@@ -684,6 +684,10 @@ pub fn generate_openapi_code(
                     if !endpoint.permissions.is_empty() {
                         operation["x-permissions"] = json!(endpoint.permissions);
                     }
+
+                    if !endpoint.permission_groups.is_empty() {
+                        operation["x-permission-groups"] = json!(endpoint.permission_groups);
+                    }
                 }
 
                 // Add the operation to the path item
@@ -712,7 +716,6 @@ pub fn generate_openapi_code(
         }
 
         /// Write OpenAPI document to the target directory
-        #[cfg(feature = "server")]
         pub fn #openapi_to_file_fn_name() -> std::io::Result<()> {
             let doc = #openapi_fn_name();
             let output_path = #output_path_code;
@@ -731,6 +734,20 @@ pub fn generate_openapi_code(
         }
 
     }
+}
+
+fn permission_groups_for_spec(auth: &AuthRequirement) -> Vec<Vec<String>> {
+    match auth {
+        AuthRequirement::Unauthorized => vec![],
+        AuthRequirement::WithPermissions(groups) => groups.clone(),
+    }
+}
+
+fn permission_groups_tokens(groups: &[Vec<String>]) -> TokenStream {
+    let groups = groups
+        .iter()
+        .map(|group| quote! { vec![#(#group.to_string()),*] });
+    quote! { vec![#(#groups),*] }
 }
 
 /// Generates code to include schema generation for types when schemars is available

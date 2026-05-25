@@ -5,6 +5,7 @@ use syn::parse_macro_input;
 mod client;
 mod openapi;
 mod parser;
+mod permissions;
 mod server;
 
 use parser::FileServiceDefinition;
@@ -30,39 +31,53 @@ pub fn file_service(input: TokenStream) -> TokenStream {
     let server_mod = format_ident!("__ras_file_{}_server", service_name_lower);
     let openapi_mod = format_ident!("__ras_file_{}_openapi", service_name_lower);
     let client_mod = format_ident!("__ras_file_{}_client", service_name_lower);
+    let permissions_code = if cfg!(feature = "permissions") {
+        permissions::generate_permissions_code(&definition)
+    } else {
+        quote! {}
+    };
 
-    let expanded = quote! {
-        #[cfg(feature = "server")]
+    let server_output = if cfg!(feature = "server") {
+        quote! {
         mod #server_mod {
             use super::*;
             #server_code
         }
 
-        #[cfg(feature = "server")]
         pub use #server_mod::*;
 
-        #[cfg(feature = "server")]
         const _: () = {
             #schema_checks
         };
 
-        #[cfg(feature = "server")]
         mod #openapi_mod {
             use super::*;
             #openapi_code
         }
 
-        #[cfg(feature = "server")]
         pub use #openapi_mod::*;
+        }
+    } else {
+        quote! {}
+    };
 
-        #[cfg(feature = "client")]
+    let client_output = if cfg!(feature = "client") {
+        quote! {
         mod #client_mod {
             use super::*;
             #client_code
         }
 
-        #[cfg(feature = "client")]
         pub use #client_mod::*;
+        }
+    } else {
+        quote! {}
+    };
+
+    let expanded = quote! {
+        #permissions_code
+        #server_output
+        #client_output
     };
 
     TokenStream::from(expanded)

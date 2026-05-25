@@ -6,10 +6,10 @@ optional OpenRPC output.
 
 ## Dependencies And Features
 
-Put the macro in the shared API definition crate and make `server` and
-`client` features on that API crate. Server binaries then depend on
-`my-api` with `features = ["server"]`; clients depend on the same API crate
-with `features = ["client"]`.
+Put the macro in the shared API definition crate. If you want server and client
+outputs to stay optional, expose API-crate features that forward to the macro
+crate features and enable the runtime dependencies those generated surfaces
+refer to.
 
 ```toml
 [dependencies]
@@ -27,9 +27,14 @@ reqwest = { version = "0.12", features = ["json"], optional = true }
 
 [features]
 default = []
-server = ["dep:ras-jsonrpc-core", "dep:axum", "dep:tokio"]
-client = ["dep:reqwest"]
+server = ["ras-jsonrpc-macro/server", "dep:ras-jsonrpc-core", "dep:axum", "dep:tokio"]
+client = ["ras-jsonrpc-macro/client", "dep:reqwest"]
 ```
+
+Server binaries then depend on `my-api` with `features = ["server"]`; clients
+depend on the same API crate with `features = ["client"]`. The generated code
+itself is selected by the `ras-jsonrpc-macro` features, not by generated
+consumer-crate cfg attributes.
 
 ## Define The Service
 

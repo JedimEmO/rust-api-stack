@@ -7,8 +7,9 @@ multipart fields, and stream bytes instead of buffering entire files.
 
 ## Dependencies And Features
 
-Put the file service definition in a shared API crate and expose generated
-transport code through API-crate features:
+Put the file service definition in a shared API crate. If you want generated
+transport code to stay optional, expose API-crate features that forward to the
+macro crate features:
 
 ```toml
 [dependencies]
@@ -32,6 +33,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "mul
 [features]
 default = []
 server = [
+    "ras-file-macro/server",
     "dep:ras-file-core",
     "dep:ras-auth-core",
     "dep:async-trait",
@@ -39,11 +41,13 @@ server = [
     "dep:schemars",
     "dep:serde_json",
 ]
-client = ["dep:reqwest", "dep:tokio", "dep:tokio-util"]
+client = ["ras-file-macro/client", "dep:reqwest", "dep:tokio", "dep:tokio-util"]
 ```
 
 Server crates depend on the API crate with `features = ["server"]`. Native and
 browser clients depend on the same API crate with `features = ["client"]`.
+Those API-crate features forward to `ras-file-macro/server` and
+`ras-file-macro/client`; the macro emits only the selected generated surfaces.
 
 ## Define The Service
 

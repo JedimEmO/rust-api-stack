@@ -16,6 +16,7 @@ proc-macro = true
 default = ["server", "client"]
 server = []
 client = []
+permissions = []
 
 [dependencies]
 syn = { workspace = true, features = ["full", "extra-traits", "visit-mut"] }
@@ -33,6 +34,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 ras-auth-core = { path = "../../core/ras-auth-core", version = "0.1.0" }
 ras-file-core = { path = "../ras-file-core", version = "0.1.0" }
+ras-permission-manifest = { path = "../../specs/ras-permission-manifest", version = "0.1.0" }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 axum-test = { workspace = true }

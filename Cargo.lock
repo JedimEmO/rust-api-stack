@@ -233,6 +233,7 @@ dependencies = [
  "ras-jsonrpc-core",
  "ras-jsonrpc-macro",
  "ras-jsonrpc-types",
+ "ras-permission-manifest",
  "reqwest",
  "schemars",
  "serde",
@@ -271,6 +272,7 @@ dependencies = [
  "ras-jsonrpc-bidirectional-server",
  "ras-jsonrpc-bidirectional-types",
  "ras-jsonrpc-types",
+ "ras-permission-manifest",
  "ras-rest-core",
  "ras-rest-macro",
  "reqwest",
@@ -1078,6 +1080,7 @@ dependencies = [
  "ras-auth-core",
  "ras-file-core",
  "ras-file-macro",
+ "ras-permission-manifest",
  "reqwest",
  "schemars",
  "serde",
@@ -1103,6 +1106,7 @@ dependencies = [
  "mime_guess",
  "ras-auth-core",
  "ras-file-core",
+ "ras-permission-manifest",
  "tempfile",
  "tokio",
  "tower-http",
@@ -1121,6 +1125,7 @@ dependencies = [
  "ras-auth-core",
  "ras-file-core",
  "ras-file-macro",
+ "ras-permission-manifest",
  "reqwest",
  "serde",
  "serde_json",
@@ -2062,6 +2067,7 @@ dependencies = [
  "ras-jsonrpc-core",
  "ras-jsonrpc-macro",
  "ras-jsonrpc-types",
+ "ras-permission-manifest",
  "reqwest",
  "schemars",
  "serde",
@@ -2085,6 +2091,7 @@ dependencies = [
  "ras-jsonrpc-core",
  "ras-jsonrpc-macro",
  "ras-jsonrpc-types",
+ "ras-permission-manifest",
  "schemars",
  "serde",
  "serde_json",
@@ -2339,6 +2346,7 @@ dependencies = [
  "ras-jsonrpc-core",
  "ras-jsonrpc-macro",
  "ras-jsonrpc-types",
+ "ras-permission-manifest",
  "reqwest",
  "schemars",
  "serde",
@@ -2356,6 +2364,7 @@ dependencies = [
  "axum-extra",
  "axum-test",
  "ras-auth-core",
+ "ras-permission-manifest",
  "ras-rest-core",
  "ras-rest-macro",
  "reqwest",
@@ -2658,6 +2667,7 @@ dependencies = [
  "quote",
  "ras-auth-core",
  "ras-file-core",
+ "ras-permission-manifest",
  "reqwest",
  "schemars",
  "serde",
@@ -2784,6 +2794,7 @@ dependencies = [
  "ras-jsonrpc-bidirectional-server",
  "ras-jsonrpc-bidirectional-types",
  "ras-jsonrpc-types",
+ "ras-permission-manifest",
  "serde",
  "serde_json",
  "syn",
@@ -2861,6 +2872,7 @@ dependencies = [
  "ras-identity-session",
  "ras-jsonrpc-core",
  "ras-jsonrpc-types",
+ "ras-permission-manifest",
  "reqwest",
  "schemars",
  "serde",
@@ -2921,6 +2933,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ras-permission-manifest"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ras-rest-core"
 version = "0.1.1"
 dependencies = [
@@ -2947,6 +2967,7 @@ dependencies = [
  "ras-auth-core",
  "ras-identity-session",
  "ras-jsonrpc-core",
+ "ras-permission-manifest",
  "ras-rest-core",
  "reqwest",
  "schemars",
@@ -3123,6 +3144,7 @@ dependencies = [
  "axum",
  "axum-extra",
  "ras-auth-core",
+ "ras-permission-manifest",
  "ras-rest-core",
  "ras-rest-macro",
  "reqwest",
@@ -3144,6 +3166,7 @@ dependencies = [
  "axum-extra",
  "http",
  "ras-auth-core",
+ "ras-permission-manifest",
  "ras-rest-core",
  "rest-api",
  "serde",

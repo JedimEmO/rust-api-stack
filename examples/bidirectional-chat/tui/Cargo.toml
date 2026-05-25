@@ -41,3 +41,7 @@ chrono = { workspace = true }
 
 # Configuration
 dotenvy = { workspace = true }
+
+[features]
+default = []
+server-api = ["bidirectional-chat-api/server"]

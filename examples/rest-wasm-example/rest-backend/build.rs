@@ -15,4 +15,17 @@ fn main() {
             // Don't fail the build, just warn
         }
     }
+
+    let manifest = ras_permission_manifest::PermissionManifest::from_services([
+        rest_api::generate_userservice_permission_manifest(),
+    ]);
+    if let Err(e) = ras_permission_manifest::write_manifest(
+        "target/ras-permissions/rest-wasm-example.json",
+        &manifest,
+    ) {
+        println!(
+            "cargo:warning=Failed to generate permission manifest: {}",
+            e
+        );
+    }
 }

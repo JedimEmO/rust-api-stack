@@ -12,14 +12,15 @@ readme = "README.md"
 
 [features]
 default = []
-server = ["dep:axum", "dep:ras-jsonrpc-core"]
-client = ["dep:reqwest"]
+server = ["ras-jsonrpc-macro/server", "dep:axum", "dep:ras-jsonrpc-core"]
+client = ["ras-jsonrpc-macro/client", "dep:reqwest"]
 
 [dependencies]
 # JSON-RPC infrastructure
-ras-jsonrpc-macro = { path = "../../../crates/rpc/ras-jsonrpc-macro", version = "0.2.0", default-features = false }
+ras-jsonrpc-macro = { path = "../../../crates/rpc/ras-jsonrpc-macro", version = "0.2.0", default-features = false, features = ["permissions"] }
 ras-jsonrpc-core = { path = "../../../crates/rpc/ras-jsonrpc-core", version = "0.1.2", optional = true }
 ras-jsonrpc-types = { path = "../../../crates/rpc/ras-jsonrpc-types", version = "0.1.1" }
+ras-permission-manifest = { path = "../../../crates/specs/ras-permission-manifest", version = "0.1.0" }
 
 # Web framework and utilities
 axum = { workspace = true, optional = true }

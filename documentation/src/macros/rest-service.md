@@ -25,6 +25,7 @@ reqwest = { version = "0.12", features = ["json"], optional = true }
 [features]
 default = []
 server = [
+    "ras-rest-macro/server",
     "dep:ras-rest-core",
     "dep:ras-auth-core",
     "dep:async-trait",
@@ -32,12 +33,19 @@ server = [
     "dep:axum-extra",
     "dep:tokio",
 ]
-client = ["dep:reqwest"]
+client = ["ras-rest-macro/client", "dep:reqwest"]
 ```
 
-These features belong on the shared API definition crate. A backend depends on
-that crate with `features = ["server"]`; a Rust client or WASM crate depends on
-the same crate with `features = ["client"]`.
+These API-crate features are forwarding gates. They enable the relevant macro
+crate feature and the runtime dependencies that generated code refers to. The
+macro emits server or client code only when the corresponding
+`ras-rest-macro` feature is enabled; the generated code does not depend on a
+consumer-crate `#[cfg(feature = "...")]` branch.
+
+A backend depends on the API crate with `features = ["server"]`; a Rust client
+or WASM crate depends on the same crate with `features = ["client"]`. If one
+crate should always expose both surfaces, enable `server` and `client` directly
+on the `ras-rest-macro` dependency and make the runtime dependencies non-optional.
 
 ## Define The Service
 

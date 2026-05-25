@@ -13,7 +13,7 @@ readme = "README.md"
 [features]
 default = ["server"]
 server = []
-client = []
+client = ["basic-jsonrpc-api/client"]
 
 [dependencies]
 basic-jsonrpc-api = { path = "../api", version = "0.1.0", features = ["server"] }

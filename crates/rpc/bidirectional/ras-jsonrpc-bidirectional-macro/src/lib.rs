@@ -3,6 +3,7 @@ use quote::{format_ident, quote};
 use syn::{Ident, LitStr, Token, Type, parse::Parse, parse_macro_input};
 
 mod client;
+mod permissions;
 mod server;
 
 #[cfg(test)]
@@ -267,32 +268,49 @@ fn generate_service_code(
     let server_mod = format_ident!("__ras_jsonrpc_bidirectional_{}_server", service_name_lower);
     let client_mod = format_ident!("__ras_jsonrpc_bidirectional_{}_client", service_name_lower);
 
-    // Generate server code - this will be conditionally compiled by the user
+    // Generate server code only when the macro crate's server feature is enabled.
     let server_code = server::generate_server_code(&service_def);
 
-    // Generate client code - this will be conditionally compiled by the user
+    // Generate client code only when the macro crate's client feature is enabled.
     let client_code = client::generate_client_code(&service_def);
+    let permissions_code = if cfg!(feature = "permissions") {
+        permissions::generate_permissions_code(&service_def)
+    } else {
+        quote! {}
+    };
 
-    let output = quote! {
-        #[cfg(feature = "server")]
+    let server_output = if cfg!(feature = "server") {
+        quote! {
         mod #server_mod {
             use super::*;
 
             #server_code
         }
 
-        #[cfg(feature = "server")]
         pub use #server_mod::*;
+        }
+    } else {
+        quote! {}
+    };
 
-        #[cfg(feature = "client")]
+    let client_output = if cfg!(feature = "client") {
+        quote! {
         mod #client_mod {
             use super::*;
 
             #client_code
         }
 
-        #[cfg(feature = "client")]
         pub use #client_mod::*;
+        }
+    } else {
+        quote! {}
+    };
+
+    let output = quote! {
+        #permissions_code
+        #server_output
+        #client_output
     };
 
     Ok(output)

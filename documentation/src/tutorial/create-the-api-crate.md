@@ -5,7 +5,8 @@ connections, runtime configuration, or concrete auth logic.
 
 ## Cargo Features
 
-Use API-crate features to select generated transport code:
+Use API-crate features to forward macro-crate features and enable the runtime
+dependencies referenced by generated transport code:
 
 ```toml
 [package]
@@ -38,6 +39,9 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "mul
 [features]
 default = []
 server = [
+    "ras-rest-macro/server",
+    "ras-file-macro/server",
+    "ras-jsonrpc-bidirectional-macro/server",
     "dep:schemars",
     "dep:serde_json",
     "dep:async-trait",
@@ -49,11 +53,20 @@ server = [
     "dep:axum-extra",
     "dep:tokio",
 ]
-client = ["dep:reqwest", "dep:tokio", "dep:tokio-util"]
+client = [
+    "ras-rest-macro/client",
+    "ras-file-macro/client",
+    "ras-jsonrpc-bidirectional-macro/client",
+    "dep:reqwest",
+    "dep:tokio",
+    "dep:tokio-util",
+]
 ```
 
 Server crates enable `workspace-api/server`. Rust or WASM clients enable
-`workspace-api/client`.
+`workspace-api/client`. The proc macro crate features decide which generated
+code is emitted; the API-crate features are just a convenient way to select
+those macro features from downstream crates.
 
 ## Source Layout
 
@@ -181,4 +194,3 @@ jsonrpc_bidirectional_service!({
 
 The API crate now describes the externally visible application boundary. The
 server crate can focus on persistence, auth, and business rules.
-

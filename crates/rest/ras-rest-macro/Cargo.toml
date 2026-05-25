@@ -16,6 +16,7 @@ proc-macro = true
 default = ["server", "client"]  # Enable server by default for backward compatibility
 server = ["axum", "ras-auth-core", "ras-rest-core", "async-trait"]
 client = ["reqwest"]
+permissions = []
 
 [dependencies]
 syn = { workspace = true }
@@ -50,6 +51,7 @@ axum = { workspace = true }
 axum-extra = { workspace = true }
 ras-auth-core = { path = "../../core/ras-auth-core", version = "0.1.0" }
 ras-rest-core = { path = "../ras-rest-core", version = "0.1.1" }
+ras-permission-manifest = { path = "../../specs/ras-permission-manifest", version = "0.1.0" }
 axum-test = { workspace = true }
 schemars = { workspace = true }
 criterion = { workspace = true, features = ["async_tokio"] }

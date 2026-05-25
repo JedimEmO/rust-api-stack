@@ -14,7 +14,8 @@ pub fn generate_userservice_openrpc_to_file() -> Result<(), std::io::Error>;
 ```
 
 The document includes method names, request and response schemas, auth
-extensions, permissions, and version metadata for versioned methods.
+extensions, flattened `x-permissions`, grouped `x-permission-groups`, and
+version metadata for versioned methods.
 
 ## OpenAPI
 
@@ -27,16 +28,18 @@ pub fn generate_userservice_openapi_to_file() -> std::io::Result<()>;
 ```
 
 REST operations include routes, HTTP methods, JSON schemas, bearer auth
-requirements, and permission metadata. File-service operations also include
+requirements, flattened `x-permissions`, and grouped `x-permission-groups`.
+File-service operations also include
 multipart schemas, binary download responses, and `x-ras-file` metadata for
 upload limits, part policies, content types, and range support.
 
 ## Rust Clients
 
-The shared API crate's `client` feature generates typed Rust clients. The
-examples keep API definitions in separate API crates so server and browser
-crates can depend on the same contract while enabling different API-crate
-features.
+Enabling a service macro crate's `client` feature emits typed Rust clients.
+The examples keep API definitions in separate API crates and expose API-crate
+`client` features that forward to the macro crates, so server and browser
+crates can depend on the same contract while selecting different generated
+surfaces.
 
 For browser targets, compile client crates with `--target wasm32-unknown-unknown`
 and enable only the API crate's client-side feature set. See:

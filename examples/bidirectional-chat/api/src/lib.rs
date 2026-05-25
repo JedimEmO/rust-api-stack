@@ -369,3 +369,55 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod permission_manifest_tests {
+    use super::*;
+    use ras_permission_manifest::{
+        AuthRequirementInfo, OperationKind, PermissionSet, TransportKind, WireTarget,
+    };
+
+    #[test]
+    fn generated_permission_manifest_documents_bidirectional_methods_only() {
+        let manifest = generate_chatservice_permission_manifest();
+
+        assert_eq!(manifest.service_name, "ChatService");
+        assert_eq!(manifest.transport, TransportKind::JsonRpcBidirectional);
+        assert_eq!(manifest.operations.len(), 10);
+
+        let kick_user = manifest
+            .operations
+            .iter()
+            .find(|operation| {
+                matches!(
+                    &operation.wire,
+                    WireTarget::BidirectionalJsonRpc { direction, method }
+                        if direction == "client_to_server" && method == "kick_user"
+                )
+            })
+            .expect("kick_user operation");
+
+        assert_eq!(kick_user.kind, OperationKind::BidirectionalClientToServer);
+        assert_eq!(
+            kick_user.auth,
+            AuthRequirementInfo::Permissions {
+                any_of: vec![ras_permission_manifest::PermissionGroupInfo {
+                    all_of: vec!["moderator".to_string()],
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn generated_permission_constants_can_feed_token_permissions() {
+        let permissions = PermissionSet::new()
+            .with(chatservice_permissions::MODERATOR)
+            .into_hash_set();
+
+        assert!(permissions.contains("moderator"));
+        assert!(
+            chatservice_permissions::operations::CLIENT_TO_SERVER_KICK_USER
+                .is_satisfied_by(&permissions)
+        );
+    }
+}

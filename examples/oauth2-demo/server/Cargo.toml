@@ -10,6 +10,10 @@ homepage = "https://github.com/JedimEmO/rust-api-stack"
 publish = false
 readme = "README.md"
 
+[features]
+default = []
+client = ["oauth2-demo-api/client"]
+
 [dependencies]
 oauth2-demo-api = { path = "../api", version = "0.1.0", features = ["server"] }
 # JSON-RPC infrastructure
@@ -43,4 +47,5 @@ mime_guess = { workspace = true }
 
 [build-dependencies]
 oauth2-demo-api = { path = "../api", version = "0.1.0", features = ["server"] }
+ras-permission-manifest = { path = "../../../crates/specs/ras-permission-manifest", version = "0.1.0" }
 serde_json = { workspace = true }

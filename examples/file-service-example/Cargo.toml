@@ -12,8 +12,8 @@ readme = "README.md"
 
 [features]
 default = ["server"]
-server = []
-client = []
+server = ["ras-file-macro/server"]
+client = ["ras-file-macro/client"]
 
 [dependencies]
 axum = { workspace = true }
@@ -23,6 +23,7 @@ serde_json = { workspace = true }
 ras-file-macro = { path = "../../crates/rest/ras-file-macro", version = "0.1.0", default-features = false }
 ras-file-core = { path = "../../crates/rest/ras-file-core", version = "0.1.0" }
 ras-auth-core = { path = "../../crates/core/ras-auth-core", version = "0.1.0" }
+ras-permission-manifest = { path = "../../crates/specs/ras-permission-manifest", version = "0.1.0" }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 tower-http = { workspace = true, features = ["fs", "trace"] }

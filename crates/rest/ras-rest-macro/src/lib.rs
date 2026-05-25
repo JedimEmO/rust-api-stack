@@ -4,6 +4,7 @@ use syn::{Ident, LitStr, Token, Type, parse::Parse, parse_macro_input};
 
 mod client;
 mod openapi;
+mod permissions;
 mod static_hosting;
 
 /// Macro to generate a REST service with authentication support
@@ -678,7 +679,12 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
     };
 
     // Generate client code
-    let client_code = crate::client::generate_client_code(&service_def);
+    let client_impl = crate::client::generate_client_code(&service_def);
+    let permissions_code = if cfg!(feature = "permissions") {
+        permissions::generate_permissions_code(&service_def)
+    } else {
+        quote! {}
+    };
 
     // Generate trait methods
     let trait_methods = service_def.endpoints.iter().map(|endpoint| {
@@ -760,12 +766,11 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
         quote! {}
     };
 
-    let output = quote! {
-        #[cfg(feature = "server")]
+    let server_code = if cfg!(feature = "server") {
+        quote! {
         mod #server_mod {
             use super::*;
 
-        #[cfg(feature = "server")]
         /// Generated service trait
         #[async_trait::async_trait]
         #[allow(private_interfaces, private_bounds)]
@@ -773,7 +778,6 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
             #(#trait_methods)*
         }
 
-        #[cfg(feature = "server")]
         /// Generated builder for the REST service
         pub struct #builder_name<T: #service_trait_name> {
             service: std::sync::Arc<T>,
@@ -783,22 +787,18 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
             with_method_duration_tracker: Option<std::sync::Arc<dyn Fn(&str, &str, Option<&ras_auth_core::AuthenticatedUser>, std::time::Duration) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync>>,
         }
 
-        #[cfg(feature = "server")]
         const _: () = {
             #schema_checks
         };
 
         // Generate OpenAPI function at module level if serve_docs is enabled
-        #[cfg(feature = "server")]
         #openapi_code
 
         #static_hosting_code
 
         // Define query parameter structs
-        #[cfg(feature = "server")]
         use self::query_params::*;
 
-        #[cfg(feature = "server")]
         mod query_params {
             #[allow(unused_imports)]
             use super::*;
@@ -806,10 +806,8 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
             #(#query_structs)*
         }
 
-        #[cfg(feature = "server")]
         #request_part_structs
 
-        #[cfg(feature = "server")]
         impl<T: #service_trait_name> #builder_name<T> {
             /// Create a new builder with the service implementation
             pub fn new(service: T) -> Self {
@@ -896,18 +894,30 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
 
         }
 
-        #[cfg(feature = "server")]
         pub use #server_mod::*;
+        }
+    } else {
+        quote! {}
+    };
 
-        #[cfg(feature = "client")]
+    let client_code = if cfg!(feature = "client") {
+        quote! {
         mod #client_mod {
             use super::*;
 
-            #client_code
+            #client_impl
         }
 
-        #[cfg(feature = "client")]
         pub use #client_mod::*;
+        }
+    } else {
+        quote! {}
+    };
+
+    let output = quote! {
+        #permissions_code
+        #server_code
+        #client_code
     };
 
     Ok(output)

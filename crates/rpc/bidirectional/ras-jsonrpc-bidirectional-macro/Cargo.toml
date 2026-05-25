@@ -23,12 +23,14 @@ serde_json = { workspace = true }
 default = ["server", "client"]
 server = []
 client = []
+permissions = []
 
 [dev-dependencies]
 ras-jsonrpc-bidirectional-types = { path = "../ras-jsonrpc-bidirectional-types", version = "0.1.0" }
 ras-jsonrpc-bidirectional-server = { path = "../ras-jsonrpc-bidirectional-server", version = "0.1.0" }
 ras-jsonrpc-bidirectional-client = { path = "../ras-jsonrpc-bidirectional-client", version = "0.1.0" }
 ras-auth-core = { path = "../../../core/ras-auth-core", version = "0.1.0" }
+ras-permission-manifest = { path = "../../../specs/ras-permission-manifest", version = "0.1.0" }
 ras-jsonrpc-types = { path = "../../ras-jsonrpc-types", version = "0.1.1" }
 tokio = { workspace = true }
 serde = { workspace = true }

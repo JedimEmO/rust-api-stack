@@ -20,8 +20,9 @@ anyhow = { workspace = true }
 axum = { workspace = true }
 ras-auth-core = { path = "../../../../crates/core/ras-auth-core", version = "0.1.0" }
 ras-jsonrpc-core = { path = "../../../../crates/rpc/ras-jsonrpc-core", version = "0.1.2" }
-ras-jsonrpc-macro = { path = "../../../../crates/rpc/ras-jsonrpc-macro", version = "0.2.0" }
+ras-jsonrpc-macro = { path = "../../../../crates/rpc/ras-jsonrpc-macro", version = "0.2.0", default-features = false }
 ras-jsonrpc-types = { path = "../../../../crates/rpc/ras-jsonrpc-types", version = "0.1.1" }
+ras-permission-manifest = { path = "../../../../crates/specs/ras-permission-manifest", version = "0.1.0" }
 reqwest = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }

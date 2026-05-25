@@ -4,6 +4,7 @@ use syn::{Ident, LitStr, Token, Type, parse::Parse, parse_macro_input};
 
 mod client;
 mod openrpc;
+mod permissions;
 mod static_hosting;
 
 /// Macro to generate a JSON-RPC service with authentication support
@@ -459,8 +460,8 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
         quote! {}
     };
 
-    let server_code = quote! {
-        #[cfg(feature = "server")]
+    let server_code = if cfg!(feature = "server") {
+        quote! {
         mod #server_mod {
             use super::*;
 
@@ -468,25 +469,35 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
             #explorer_code
         }
 
-        #[cfg(feature = "server")]
         pub use #server_mod::*;
+        }
+    } else {
+        quote! {}
     };
 
     let client_impl = crate::client::generate_client_code(&service_def);
+    let permissions_code = if cfg!(feature = "permissions") {
+        permissions::generate_permissions_code(&service_def)
+    } else {
+        quote! {}
+    };
 
-    let client_code = quote! {
-        #[cfg(feature = "client")]
+    let client_code = if cfg!(feature = "client") {
+        quote! {
         mod #client_mod {
             use super::*;
 
             #client_impl
         }
 
-        #[cfg(feature = "client")]
         pub use #client_mod::*;
+        }
+    } else {
+        quote! {}
     };
 
     let output = quote! {
+        #permissions_code
         #openrpc_code
         #schema_checks
         #server_code

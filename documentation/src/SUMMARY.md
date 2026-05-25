@@ -24,5 +24,6 @@
 # Integration Topics
 
 - [Generated Specs And Clients](generated-specs-and-clients.md)
+- [Permission Manifests](permission-manifests.md)
 - [Identity And Sessions](identity-and-sessions.md)
 - [Observability](observability.md)

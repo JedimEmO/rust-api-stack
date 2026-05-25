@@ -345,6 +345,15 @@ mod tests {
                 ("list_documents".to_string(), vec!["user:read".to_string()]),
             ])
         );
+
+        let list_documents = methods
+            .iter()
+            .find(|method| method["name"] == "list_documents")
+            .expect("list_documents method");
+        assert_eq!(
+            list_documents["x-permission-groups"],
+            json!([["user:read"]])
+        );
     }
 
     #[test]
@@ -354,5 +363,48 @@ mod tests {
             &doc["components"]["schemas"]["GetUserInfoResponse"]["properties"]["metadata"];
 
         assert_eq!(metadata["type"], json!("object"));
+    }
+}
+
+#[cfg(test)]
+mod permission_manifest_tests {
+    use super::*;
+    use ras_permission_manifest::{
+        AuthRequirementInfo, OperationKind, PermissionSet, TransportKind, WireTarget,
+    };
+
+    #[test]
+    fn generated_permission_manifest_distinguishes_authenticated_only_jsonrpc() {
+        let manifest = generate_googleoauth2service_permission_manifest();
+
+        assert_eq!(manifest.service_name, "GoogleOAuth2Service");
+        assert_eq!(manifest.transport, TransportKind::JsonRpc);
+
+        let user_info = manifest
+            .operations
+            .iter()
+            .find(|operation| {
+                matches!(
+                    &operation.wire,
+                    WireTarget::JsonRpc { method } if method == "get_user_info"
+                )
+            })
+            .expect("get_user_info operation");
+
+        assert_eq!(user_info.kind, OperationKind::JsonRpcMethod);
+        assert_eq!(user_info.auth, AuthRequirementInfo::Authenticated);
+    }
+
+    #[test]
+    fn generated_permission_constants_can_feed_token_permissions() {
+        let permissions = PermissionSet::new()
+            .with(googleoauth2service_permissions::USER_READ)
+            .into_hash_set();
+
+        assert!(permissions.contains("user:read"));
+        assert!(
+            googleoauth2service_permissions::operations::LIST_DOCUMENTS
+                .is_satisfied_by(&permissions)
+        );
     }
 }

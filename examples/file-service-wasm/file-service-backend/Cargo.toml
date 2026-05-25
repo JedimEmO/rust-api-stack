@@ -10,6 +10,10 @@ homepage = "https://github.com/JedimEmO/rust-api-stack"
 publish = false
 readme = "README.md"
 
+[features]
+default = []
+client = ["file-service-api/client"]
+
 [dependencies]
 # API crate with server feature
 file-service-api = { path = "../file-service-api", version = "0.1.0", features = ["server"] }
@@ -40,6 +44,7 @@ dotenvy = { workspace = true }
 
 [build-dependencies]
 file-service-api = { path = "../file-service-api", version = "0.1.0", features = ["server"] }
+ras-permission-manifest = { path = "../../../crates/specs/ras-permission-manifest", version = "0.1.0" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

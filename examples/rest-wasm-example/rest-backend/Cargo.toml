@@ -10,8 +10,13 @@ homepage = "https://github.com/JedimEmO/rust-api-stack"
 publish = false
 readme = "README.md"
 
+[features]
+default = []
+client = ["rest-api/client"]
+
 [build-dependencies]
 rest-api = { path = "../rest-api", version = "0.1.0", features = ["server"] }
+ras-permission-manifest = { path = "../../../crates/specs/ras-permission-manifest", version = "0.1.0" }
 
 [dependencies]
 rest-api = { path = "../rest-api", version = "0.1.0", features = ["server"] }

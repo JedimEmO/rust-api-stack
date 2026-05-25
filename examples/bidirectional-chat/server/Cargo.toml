@@ -47,3 +47,4 @@ axum-test = { workspace = true }
 [features]
 default = ["server"]
 server = []
+client = ["bidirectional-chat-api/client"]

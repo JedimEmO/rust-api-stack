@@ -46,6 +46,8 @@ pub fn generate_openapi_code(
         let path = endpoint.path.value();
         let auth_required = matches!(endpoint.auth, AuthRequirement::WithPermissions(_));
         let permissions = permissions_for_openapi(&endpoint.auth);
+        let permission_groups = permission_groups_for_openapi(&endpoint.auth);
+        let permission_groups_tokens = permission_groups_tokens(&permission_groups);
 
         let path_params = endpoint.path_params.iter().map(|param| {
             let name = param.name.to_string();
@@ -76,6 +78,7 @@ pub fn generate_openapi_code(
                         path: #path.to_string(),
                         auth_required: #auth_required,
                         permissions: vec![#(#permissions.to_string()),*],
+                        permission_groups: #permission_groups_tokens,
                         path_params: vec![#(#path_params),*],
                         response_type_name: Some(#response_type_name.to_string()),
                         max_total_bytes: #max_total,
@@ -96,6 +99,7 @@ pub fn generate_openapi_code(
                         path: #path.to_string(),
                         auth_required: #auth_required,
                         permissions: vec![#(#permissions.to_string()),*],
+                        permission_groups: #permission_groups_tokens,
                         path_params: vec![#(#path_params),*],
                         response_type_name: None,
                         max_total_bytes: None,
@@ -128,6 +132,7 @@ pub fn generate_openapi_code(
             path: String,
             auth_required: bool,
             permissions: Vec<String>,
+            permission_groups: Vec<Vec<String>>,
             path_params: Vec<(String, String)>,
             response_type_name: Option<String>,
             max_total_bytes: Option<u64>,
@@ -315,6 +320,9 @@ pub fn generate_openapi_code(
                     if !endpoint.permissions.is_empty() {
                         operation["x-permissions"] = json!(endpoint.permissions);
                     }
+                    if !endpoint.permission_groups.is_empty() {
+                        operation["x-permission-groups"] = json!(endpoint.permission_groups);
+                    }
                 }
 
                 path_item[method_lower] = operation;
@@ -490,6 +498,20 @@ fn permissions_for_openapi(auth: &AuthRequirement) -> Vec<String> {
         AuthRequirement::Unauthorized => vec![],
         AuthRequirement::WithPermissions(groups) => groups.iter().flatten().cloned().collect(),
     }
+}
+
+fn permission_groups_for_openapi(auth: &AuthRequirement) -> Vec<Vec<String>> {
+    match auth {
+        AuthRequirement::Unauthorized => vec![],
+        AuthRequirement::WithPermissions(groups) => groups.clone(),
+    }
+}
+
+fn permission_groups_tokens(groups: &[Vec<String>]) -> TokenStream {
+    let groups = groups
+        .iter()
+        .map(|group| quote! { vec![#(#group.to_string()),*] });
+    quote! { vec![#(#groups),*] }
 }
 
 fn sanitize_type_name(type_name: &str) -> String {

@@ -223,6 +223,10 @@ mod tests {
             serde_json::json!([])
         );
         assert_eq!(create_user["x-permissions"], serde_json::json!(["admin"]));
+        assert_eq!(
+            create_user["x-permission-groups"],
+            serde_json::json!([["admin"]])
+        );
 
         let create_task = &doc["paths"]["/users/{user_id}/tasks"]["post"];
         assert_eq!(
@@ -230,6 +234,10 @@ mod tests {
             serde_json::json!([])
         );
         assert_eq!(create_task["x-permissions"], serde_json::json!(["user"]));
+        assert_eq!(
+            create_task["x-permission-groups"],
+            serde_json::json!([["user"]])
+        );
         assert_eq!(
             parameter(create_task, "user_id")["in"],
             serde_json::json!("path")
@@ -279,5 +287,53 @@ mod tests {
             parameter(task_search, "per_page")["required"],
             serde_json::json!(false)
         );
+    }
+}
+
+#[cfg(test)]
+mod permission_manifest_tests {
+    use super::*;
+    use ras_permission_manifest::{
+        AuthRequirementInfo, OperationKind, PermissionSet, TransportKind, WireTarget,
+    };
+
+    #[test]
+    fn generated_permission_manifest_documents_rest_auth() {
+        let manifest = generate_userservice_permission_manifest();
+
+        assert_eq!(manifest.service_name, "UserService");
+        assert_eq!(manifest.transport, TransportKind::Rest);
+
+        let create_user = manifest
+            .operations
+            .iter()
+            .find(|operation| {
+                matches!(
+                    &operation.wire,
+                    WireTarget::Rest { method, path }
+                        if method == "POST" && path == "/api/v1/users"
+                )
+            })
+            .expect("create user operation");
+
+        assert_eq!(create_user.kind, OperationKind::RestEndpoint);
+        assert_eq!(
+            create_user.auth,
+            AuthRequirementInfo::Permissions {
+                any_of: vec![ras_permission_manifest::PermissionGroupInfo {
+                    all_of: vec!["admin".to_string()],
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn generated_permission_constants_can_feed_token_permissions() {
+        let permissions = PermissionSet::new()
+            .with(userservice_permissions::ADMIN)
+            .into_hash_set();
+
+        assert!(permissions.contains("admin"));
+        assert!(userservice_permissions::operations::POST_USERS.is_satisfied_by(&permissions));
     }
 }

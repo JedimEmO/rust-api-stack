@@ -68,4 +68,6 @@ When OpenRPC or OpenAPI generation is enabled, protected operations include
 authentication metadata. REST and file services expose bearer auth security
 requirements in OpenAPI, and JSON-RPC methods expose `x-authentication`.
 Permission names are also emitted as extension metadata so explorer UIs and
-client-generation workflows can show what a call requires.
+client-generation workflows can show what a call requires. `x-permissions`
+contains a flattened compatibility list, while `x-permission-groups` preserves
+the real OR/AND grouping.

@@ -181,6 +181,7 @@ mod tests {
         let profile_upload = &doc["paths"]["/upload_profile_picture"]["post"];
         assert_eq!(profile_upload["security"][0]["bearerAuth"], json!([]));
         assert_eq!(profile_upload["x-permissions"], json!(["user"]));
+        assert_eq!(profile_upload["x-permission-groups"], json!([["user"]]));
         assert_eq!(
             profile_upload["requestBody"]["content"]["multipart/form-data"]["encoding"]["file"]["contentType"],
             json!("image/png, image/jpeg, image/webp")
@@ -207,6 +208,7 @@ mod tests {
         let secure_download = &doc["paths"]["/download_secure/{file_id}"]["get"];
         assert_eq!(secure_download["security"][0]["bearerAuth"], json!([]));
         assert_eq!(secure_download["x-permissions"], json!(["user"]));
+        assert_eq!(secure_download["x-permission-groups"], json!([["user"]]));
     }
 
     #[cfg(feature = "server")]
@@ -228,5 +230,56 @@ mod tests {
             json!("string")
         );
         assert!(upload_response_schema["properties"]["size"].is_object());
+    }
+}
+
+#[cfg(test)]
+mod permission_manifest_tests {
+    use super::*;
+    use ras_permission_manifest::{
+        AuthRequirementInfo, OperationKind, PermissionSet, TransportKind, WireTarget,
+    };
+
+    #[test]
+    fn generated_permission_manifest_documents_file_operations() {
+        let manifest = generate_documentservice_permission_manifest();
+
+        assert_eq!(manifest.service_name, "DocumentService");
+        assert_eq!(manifest.transport, TransportKind::File);
+
+        let secure_download = manifest
+            .operations
+            .iter()
+            .find(|operation| {
+                matches!(
+                    &operation.wire,
+                    WireTarget::File { method, path }
+                        if method == "GET" && path == "/api/documents/download_secure/{file_id}"
+                )
+            })
+            .expect("secure download operation");
+
+        assert_eq!(secure_download.kind, OperationKind::FileDownload);
+        assert_eq!(
+            secure_download.auth,
+            AuthRequirementInfo::Permissions {
+                any_of: vec![ras_permission_manifest::PermissionGroupInfo {
+                    all_of: vec!["user".to_string()],
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn generated_permission_constants_can_feed_token_permissions() {
+        let permissions = PermissionSet::new()
+            .with(documentservice_permissions::USER)
+            .into_hash_set();
+
+        assert!(permissions.contains("user"));
+        assert!(
+            documentservice_permissions::operations::DOWNLOAD_SECURE_BY_FILE_ID
+                .is_satisfied_by(&permissions)
+        );
     }
 }
