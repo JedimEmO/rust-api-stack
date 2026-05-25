@@ -3,7 +3,6 @@ title = "Rust Agent Stack API Builder Guide"
 description = "Rationale and usage guide for the Rust Agent Stack service macros."
 authors = ["Rust Agent Stack contributors"]
 language = "en"
-multilingual = false
 src = "documentation/src"
 
 [build]
