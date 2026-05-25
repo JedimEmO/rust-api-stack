@@ -2,10 +2,12 @@
 name = "ras-identity-core"
 version = "0.1.1"
 edition = "2024"
+rust-version = "1.88"
 description = "Core traits and types for identity management and authentication"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/example/rust-agent-stack"
-homepage = "https://github.com/example/rust-agent-stack"
+repository = "https://github.com/JedimEmO/rust-api-stack"
+homepage = "https://github.com/JedimEmO/rust-api-stack"
+readme = "README.md"
 
 [dependencies]
 async-trait = { workspace = true }

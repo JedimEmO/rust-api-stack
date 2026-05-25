@@ -15,7 +15,7 @@ mod types;
 mod tests;
 
 pub use client::{OAuth2Client, PkceChallenge};
-pub use config::{OAuth2Config, OAuth2ProviderConfig};
+pub use config::{OAuth2Config, OAuth2ProviderConfig, UserInfoMapping};
 pub use error::{OAuth2Error, OAuth2Result};
 pub use provider::{OAuth2AuthPayload, OAuth2Provider, OAuth2Response};
 pub use state::{InMemoryStateStore, OAuth2State, OAuth2StateStore};

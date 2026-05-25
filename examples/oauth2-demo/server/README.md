@@ -1,19 +1,19 @@
 # Google OAuth2 Example
 
-A comprehensive example demonstrating Google OAuth2 integration with the Rust Agent Stack identity management system. This example showcases the complete OAuth2 Authorization Code flow with PKCE, JWT session management, and role-based access control through a JSON-RPC API.
+An example demonstrating Google OAuth2 integration with the Rust Agent Stack identity management system. It covers the OAuth2 Authorization Code flow with PKCE, JWT session management, and role-based access control through a JSON-RPC API.
 
 ## Features
 
-- 🔐 **Secure OAuth2 Flow**: Authorization Code with PKCE for enhanced security
-- 🎯 **Role-Based Permissions**: Dynamic permission assignment based on user attributes
-- 🚀 **JSON-RPC API**: Type-safe API endpoints with compile-time validation
-- ⚡ **JWT Session Management**: Stateless authentication with embedded permissions
-- 🛡️ **CSRF Protection**: State parameter validation and secure token handling
-- 📚 **Interactive Documentation**: Built-in API documentation and testing interface
+- **Secure OAuth2 flow**: Authorization Code with PKCE for enhanced security
+- **Role-based permissions**: Dynamic permission assignment based on user attributes
+- **JSON-RPC API**: Type-safe API endpoints with compile-time validation
+- **JWT session management**: Stateless authentication with embedded permissions
+- **CSRF protection**: State parameter validation and secure token handling
+- **Interactive documentation**: Built-in API documentation and testing interface
 
 ## Architecture
 
-This example demonstrates the complete integration of several Rust Agent Stack components:
+This example demonstrates how several Rust Agent Stack components fit together:
 
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
@@ -65,10 +65,10 @@ This example demonstrates the complete integration of several Rust Agent Stack c
 
 2. Edit `.env` with your Google OAuth2 credentials:
    ```bash
-   GOOGLE_CLIENT_ID=your_client_id.apps.googleusercontent.com
-   GOOGLE_CLIENT_SECRET=your_client_secret
+   GOOGLE_CLIENT_ID=000000000000-example.apps.googleusercontent.com
+   GOOGLE_CLIENT_SECRET=GOCSPX-local-demo-secret
    REDIRECT_URI=http://localhost:3000/auth/callback
-   JWT_SECRET=your-super-secret-jwt-key-change-in-production
+   JWT_SECRET=oauth2-demo-local-secret-at-least-32-bytes
    ```
 
 ### 3. Run the Application
@@ -77,10 +77,10 @@ From the workspace root:
 
 ```bash
 # Build the example
-cargo build -p google-oauth-example
+cargo build -p oauth2-demo-server --locked
 
 # Run the server
-cargo run -p google-oauth-example
+cargo run -p oauth2-demo-server --locked
 ```
 
 The server will start on `http://localhost:3000`.
@@ -99,12 +99,14 @@ The server will start on `http://localhost:3000`.
 
 The application provides several test endpoints demonstrating different permission levels:
 
+Set `JWT_TOKEN` to the token shown after completing the browser login flow.
+
 #### Basic User Operations
 ```bash
 # Get user information
 curl -X POST http://localhost:3000/api/rpc \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Authorization: Bearer $JWT_TOKEN" \
   -d '{
     "jsonrpc": "2.0",
     "method": "get_user_info",
@@ -115,7 +117,7 @@ curl -X POST http://localhost:3000/api/rpc \
 # List documents
 curl -X POST http://localhost:3000/api/rpc \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Authorization: Bearer $JWT_TOKEN" \
   -d '{
     "jsonrpc": "2.0",
     "method": "list_documents",
@@ -129,13 +131,13 @@ curl -X POST http://localhost:3000/api/rpc \
 # Create document (requires content:create permission)
 curl -X POST http://localhost:3000/api/rpc \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Authorization: Bearer $JWT_TOKEN" \
   -d '{
     "jsonrpc": "2.0",
     "method": "create_document",
     "params": {
       "title": "My New Document",
-      "content": "Document content here...",
+      "content": "This document was created through the JSON-RPC demo API.",
       "tags": ["example", "api"]
     },
     "id": 3
@@ -147,7 +149,7 @@ curl -X POST http://localhost:3000/api/rpc \
 # Delete document (requires admin:write permission)
 curl -X POST http://localhost:3000/api/rpc \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Authorization: Bearer $JWT_TOKEN" \
   -d '{
     "jsonrpc": "2.0",
     "method": "delete_document",
@@ -158,7 +160,7 @@ curl -X POST http://localhost:3000/api/rpc \
 # System status (requires system:admin permission)
 curl -X POST http://localhost:3000/api/rpc \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Authorization: Bearer $JWT_TOKEN" \
   -d '{
     "jsonrpc": "2.0",
     "method": "get_system_status",
@@ -201,7 +203,7 @@ To test different permission levels, you can:
 ### JWT Security
 - **Configurable JWT secrets** (change in production!)
 - **Token expiration** with configurable TTL
-- **Session tracking** for token revocation
+- **JWT session creation** with permissions embedded in claims
 - **Embedded permissions** for stateless authorization
 
 ### API Security
@@ -215,23 +217,22 @@ To test different permission levels, you can:
 ### Project Structure
 
 ```
-examples/google-oauth-example/
-├── src/
-│   ├── main.rs              # Main application and server setup
-│   ├── permissions.rs       # Custom permission provider
-│   └── service.rs          # JSON-RPC service definitions
-├── static/
-│   ├── index.html          # Frontend interface
-│   └── api-docs.html       # API documentation
-├── .env.example            # Environment configuration template
-├── Cargo.toml              # Dependencies and metadata
-└── README.md               # This file
+examples/oauth2-demo/
+├── api/                    # Shared JSON-RPC API definitions
+└── server/
+    ├── src/
+    │   ├── main.rs         # Main application and server setup
+    │   ├── permissions.rs  # Custom permission provider
+    │   └── service.rs      # JSON-RPC service implementation
+    ├── static/             # Frontend and API documentation pages
+    ├── Cargo.toml          # Dependencies and metadata
+    └── README.md           # This file
 ```
 
 ### Key Dependencies
 
-- **rust-identity-oauth2**: OAuth2 provider implementation
-- **rust-identity-session**: JWT session management
+- **ras-identity-oauth2**: OAuth2 provider implementation
+- **ras-identity-session**: JWT session management
 - **ras-jsonrpc-macro**: Type-safe JSON-RPC service generation
 - **axum**: Web framework for HTTP handling
 - **tower-http**: Middleware for CORS and static files
@@ -240,20 +241,20 @@ examples/google-oauth-example/
 
 ```bash
 # Run all tests
-cargo test -p google-oauth-example
+cargo test -p oauth2-demo-server --locked
 
 # Run with output
-cargo test -p google-oauth-example -- --nocapture
+cargo test -p oauth2-demo-server --locked -- --nocapture
 
 # Run specific test
-cargo test -p google-oauth-example test_permissions
+cargo test -p oauth2-demo-server --locked test_basic_user_permissions
 ```
 
 ### Development Tips
 
 1. **Enable debug logging**:
    ```bash
-   RUST_LOG=debug cargo run -p google-oauth-example
+   RUST_LOG=debug cargo run -p oauth2-demo-server --locked
    ```
 
 2. **Use ngrok for HTTPS testing**:
@@ -310,12 +311,19 @@ cargo test -p google-oauth-example test_permissions
 
 ## Related Examples
 
-- **basic-jsonrpc-service**: Simpler JSON-RPC service example
-- Check other examples in the `/examples` directory for additional patterns
+- [`examples/basic-jsonrpc`](../../basic-jsonrpc/) - Simpler JSON-RPC service with authentication and generated OpenRPC docs
+- [`examples/bidirectional-chat`](../../bidirectional-chat/) - WebSocket authentication and session-backed login
 
 ## Contributing
 
 This example is part of the Rust Agent Stack project. See the main project README for contribution guidelines.
+
+## Checks
+
+```bash
+cargo test -p oauth2-demo-server --locked
+cargo clippy -p oauth2-demo-server --all-targets --all-features --locked -- -D warnings
+```
 
 ## License
 

@@ -1,31 +1,22 @@
-use axum::body::Body;
-use axum::response::{IntoResponse, Response};
 use ras_file_macro::file_service;
 
-// Try with parentheses instead of braces
 file_service!({
-    service_name: TestParen,
-    base_path: "/api",
+    service_name: DownloadOnly,
+    base_path: "/files",
     endpoints: [
-        DOWNLOAD UNAUTHORIZED download/{id: String}(),
+        DOWNLOAD UNAUTHORIZED nested/{folder: String}/download/{id: String} {
+            content_types: ["application/octet-stream"],
+            ranges: false,
+        },
     ]
 });
 
-// Implement the service
-#[derive(Clone)]
-struct TestService;
-
-#[async_trait::async_trait]
-impl TestParenTrait for TestService {
-    async fn download(&self, id: String) -> Result<impl IntoResponse, TestParenFileError> {
-        Ok(Response::builder()
-            .header("content-type", "text/plain")
-            .body(Body::from(format!("Download {}", id)))
-            .unwrap())
-    }
-}
-
 #[test]
-fn test() {
-    let _service = TestService;
+fn path_struct_name_tracks_nested_download_path() {
+    let path = DownloadOnlyNestedByFolderDownloadByIdPath {
+        folder: "a".to_string(),
+        id: "b".to_string(),
+    };
+    assert_eq!(path.folder, "a");
+    assert_eq!(path.id, "b");
 }

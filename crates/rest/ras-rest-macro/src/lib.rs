@@ -1,9 +1,10 @@
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::{Ident, LitStr, Token, Type, parse::Parse, parse_macro_input};
 
 mod client;
 mod openapi;
+mod permissions;
 mod static_hosting;
 
 /// Macro to generate a REST service with authentication support
@@ -17,29 +18,28 @@ mod static_hosting;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```rust
 /// use ras_rest_macro::rest_service;
 /// use serde::{Deserialize, Serialize};
 /// use schemars::JsonSchema;
-/// use axum::response::IntoResponse;
 ///
-/// #[derive(Serialize, Deserialize, JsonSchema)]
+/// #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 /// struct UsersResponse {
 ///     users: Vec<()>,
 /// }
 ///
-/// #[derive(Serialize, Deserialize, JsonSchema)]
+/// #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 /// struct CreateUserRequest {
 ///     name: String,
 /// }
 ///
-/// #[derive(Serialize, Deserialize, JsonSchema)]
+/// #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 /// struct UserResponse {
 ///     id: String,
 ///     name: String,
 /// }
 ///
-/// #[derive(Serialize, Deserialize, JsonSchema)]
+/// #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 /// struct UpdateUserRequest {
 ///     name: String,
 /// }
@@ -59,6 +59,8 @@ mod static_hosting;
 ///         DELETE WITH_PERMISSIONS(["admin"]) users/{id: String}() -> (),
 ///     ]
 /// });
+///
+/// # fn main() {}
 /// ```
 #[proc_macro]
 pub fn rest_service(input: TokenStream) -> TokenStream {
@@ -655,10 +657,12 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
     let service_trait_name = quote::format_ident!("{}Trait", service_name);
     let builder_name = quote::format_ident!("{}Builder", service_name);
     let base_path = &service_def.base_path;
+    let service_name_lower = service_name.to_string().to_lowercase();
+    let server_mod = format_ident!("__ras_rest_{}_server", service_name_lower);
+    let client_mod = format_ident!("__ras_rest_{}_client", service_name_lower);
 
     // Generate OpenAPI code if enabled in the macro input
-    let (openapi_code, schema_checks) = if service_def.openapi.is_some() {
-        let openapi_config = service_def.openapi.as_ref().unwrap();
+    let (openapi_code, schema_checks) = if let Some(openapi_config) = &service_def.openapi {
         (
             openapi::generate_openapi_code(&service_def, openapi_config),
             openapi::generate_schema_impl_checks(&service_def),
@@ -675,7 +679,12 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
     };
 
     // Generate client code
-    let client_code = crate::client::generate_client_code(&service_def);
+    let client_impl = crate::client::generate_client_code(&service_def);
+    let permissions_code = if cfg!(feature = "permissions") {
+        permissions::generate_permissions_code(&service_def)
+    } else {
+        quote! {}
+    };
 
     // Generate trait methods
     let trait_methods = service_def.endpoints.iter().map(|endpoint| {
@@ -715,8 +724,6 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
             async fn #handler_name(&self, #(#params),*) -> ras_rest_core::RestResult<#response_type>;
         }
     });
-
-    // No more individual handler fields - we'll store the service implementation instead
 
     let request_part_structs = generate_rest_request_part_structs(&service_def);
 
@@ -759,39 +766,39 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
         quote! {}
     };
 
-    let output = quote! {
-        #[cfg(feature = "server")]
+    let server_code = if cfg!(feature = "server") {
+        quote! {
+        mod #server_mod {
+            use super::*;
+
         /// Generated service trait
         #[async_trait::async_trait]
+        #[allow(private_interfaces, private_bounds)]
         pub trait #service_trait_name: Send + Sync + 'static {
             #(#trait_methods)*
         }
 
-        #[cfg(feature = "server")]
         /// Generated builder for the REST service
         pub struct #builder_name<T: #service_trait_name> {
             service: std::sync::Arc<T>,
             auth_provider: Option<std::sync::Arc<dyn ras_auth_core::AuthProvider>>,
+            auth_transport: ras_auth_core::AuthTransportConfig,
             with_usage_tracker: Option<std::sync::Arc<dyn Fn(&axum::http::HeaderMap, Option<&ras_auth_core::AuthenticatedUser>, &str, &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync>>,
             with_method_duration_tracker: Option<std::sync::Arc<dyn Fn(&str, &str, Option<&ras_auth_core::AuthenticatedUser>, std::time::Duration) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync>>,
         }
 
-        #[cfg(feature = "server")]
         const _: () = {
             #schema_checks
         };
 
         // Generate OpenAPI function at module level if serve_docs is enabled
-        #[cfg(feature = "server")]
         #openapi_code
 
         #static_hosting_code
 
         // Define query parameter structs
-        #[cfg(feature = "server")]
         use self::query_params::*;
 
-        #[cfg(feature = "server")]
         mod query_params {
             #[allow(unused_imports)]
             use super::*;
@@ -799,16 +806,15 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
             #(#query_structs)*
         }
 
-        #[cfg(feature = "server")]
         #request_part_structs
 
-        #[cfg(feature = "server")]
         impl<T: #service_trait_name> #builder_name<T> {
             /// Create a new builder with the service implementation
             pub fn new(service: T) -> Self {
                 Self {
                     service: std::sync::Arc::new(service),
                     auth_provider: None,
+                    auth_transport: ras_auth_core::AuthTransportConfig::default(),
                     with_usage_tracker: None,
                     with_method_duration_tracker: None,
                 }
@@ -817,6 +823,24 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
             /// Set the auth provider
             pub fn auth_provider<A: ras_auth_core::AuthProvider>(mut self, provider: A) -> Self {
                 self.auth_provider = Some(std::sync::Arc::new(provider));
+                self
+            }
+
+            /// Enable cookie authentication alongside bearer tokens.
+            pub fn auth_cookie(mut self, cookie: ras_auth_core::AuthCookieConfig) -> Self {
+                self.auth_transport.cookie = Some(cookie);
+                self
+            }
+
+            /// Replace the full auth transport configuration.
+            pub fn auth_transport(mut self, transport: ras_auth_core::AuthTransportConfig) -> Self {
+                self.auth_transport = transport;
+                self
+            }
+
+            /// Require CSRF validation for cookie-authenticated unsafe requests.
+            pub fn csrf_protection(mut self, csrf: ras_auth_core::CsrfConfig) -> Self {
+                self.auth_transport.csrf = Some(csrf);
                 self
             }
 
@@ -848,6 +872,10 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
 
             /// Build the axum router for the REST service
             pub fn build(self) -> axum::Router {
+                self.auth_transport
+                    .validate()
+                    .expect("invalid auth transport configuration");
+
                 let mut router = axum::Router::new();
 
                 #(#route_registrations)*
@@ -864,6 +892,31 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
             }
         }
 
+        }
+
+        pub use #server_mod::*;
+        }
+    } else {
+        quote! {}
+    };
+
+    let client_code = if cfg!(feature = "client") {
+        quote! {
+        mod #client_mod {
+            use super::*;
+
+            #client_impl
+        }
+
+        pub use #client_mod::*;
+        }
+    } else {
+        quote! {}
+    };
+
+    let output = quote! {
+        #permissions_code
+        #server_code
         #client_code
     };
 
@@ -1092,7 +1145,6 @@ fn generate_query_struct(
 
     quote! {
         #[derive(serde::Deserialize)]
-        #[allow(dead_code)]
         pub(super) struct #struct_name {
             #(#fields),*
         }
@@ -1120,6 +1172,7 @@ fn generate_canonical_route_registration(
         {
             let service = self.service.clone();
             let auth_provider = self.auth_provider.clone();
+            let auth_transport = self.auth_transport.clone();
             let required_permission_groups: Vec<Vec<String>> = #permission_groups_code;
             let with_usage_tracker = self.with_usage_tracker.clone();
             let with_method_duration_tracker = self.with_method_duration_tracker.clone();
@@ -1128,6 +1181,7 @@ fn generate_canonical_route_registration(
                 move |#axum_handler| {
                     let service = service.clone();
                     let auth_provider = auth_provider.clone();
+                    let auth_transport = auth_transport.clone();
                     let required_permission_groups: Vec<Vec<String>> = required_permission_groups.clone();
                     let with_usage_tracker = with_usage_tracker.clone();
                     let with_method_duration_tracker = with_method_duration_tracker.clone();
@@ -1162,6 +1216,7 @@ fn generate_legacy_route_registration(
         {
             let service = self.service.clone();
             let auth_provider = self.auth_provider.clone();
+            let auth_transport = self.auth_transport.clone();
             let required_permission_groups: Vec<Vec<String>> = #permission_groups_code;
             let with_usage_tracker = self.with_usage_tracker.clone();
             let with_method_duration_tracker = self.with_method_duration_tracker.clone();
@@ -1170,6 +1225,7 @@ fn generate_legacy_route_registration(
                 move |#axum_handler| {
                     let service = service.clone();
                     let auth_provider = auth_provider.clone();
+                    let auth_transport = auth_transport.clone();
                     let required_permission_groups: Vec<Vec<String>> = required_permission_groups.clone();
                     let with_usage_tracker = with_usage_tracker.clone();
                     let with_method_duration_tracker = with_method_duration_tracker.clone();
@@ -1234,7 +1290,9 @@ fn generate_legacy_handler_body(
             #json_handling
 
             if let Some(tracker) = &with_usage_tracker {
-                tracker(&headers, None, #method, #path).await;
+                let tracker_headers =
+                    ras_auth_core::redact_sensitive_headers_for_auth_transport(&headers, &auth_transport);
+                tracker(&tracker_headers, None, #method, #path).await;
             }
 
             let legacy_parts: #legacy_request_ident = #legacy_parts_init;
@@ -1309,13 +1367,9 @@ fn generate_legacy_handler_body(
             quote! {
                 #json_handling
 
-                let token = match headers
-                    .get("Authorization")
-                    .and_then(|h| h.to_str().ok())
-                    .and_then(|s| s.strip_prefix("Bearer "))
-                {
-                    Some(token) => token,
-                    None => {
+                let auth_credential = match ras_auth_core::extract_auth_credential(&headers, &auth_transport) {
+                    Ok(credential) => credential,
+                    Err(_) => {
                         use axum::response::IntoResponse;
                         return (
                             axum::http::StatusCode::UNAUTHORIZED,
@@ -1326,8 +1380,18 @@ fn generate_legacy_handler_body(
                     },
                 };
 
+                if let Err(_) = ras_auth_core::validate_csrf_for_credential(#method, &headers, &auth_credential, &auth_transport) {
+                    use axum::response::IntoResponse;
+                    return (
+                        axum::http::StatusCode::FORBIDDEN,
+                        axum::Json(serde_json::json!({
+                            "error": "CSRF validation failed"
+                        }))
+                    ).into_response();
+                }
+
                 let user = match &auth_provider {
-                    Some(provider) => match provider.authenticate(token.to_string()).await {
+                    Some(provider) => match provider.authenticate(auth_credential.token().to_string()).await {
                         Ok(user) => user,
                         Err(_) => {
                             use axum::response::IntoResponse;
@@ -1379,7 +1443,9 @@ fn generate_legacy_handler_body(
                 }
 
                 if let Some(tracker) = &with_usage_tracker {
-                    tracker(&headers, Some(&user), #method, #path).await;
+                    let tracker_headers =
+                        ras_auth_core::redact_sensitive_headers_for_auth_transport(&headers, &auth_transport);
+                    tracker(&tracker_headers, Some(&user), #method, #path).await;
                 }
 
                 let legacy_parts: #legacy_request_ident = #legacy_parts_init;
@@ -1545,7 +1611,9 @@ fn generate_handler_body(
 
                 // Call usage tracker if configured (for unauthorized endpoints, headers come from handler params)
                 if let Some(tracker) = &with_usage_tracker {
-                    tracker(&headers, None, #method, #path).await;
+                    let tracker_headers =
+                        ras_auth_core::redact_sensitive_headers_for_auth_transport(&headers, &auth_transport);
+                    tracker(&tracker_headers, None, #method, #path).await;
                 }
 
                 // Track duration
@@ -1636,13 +1704,9 @@ fn generate_handler_body(
                 #json_handling
 
                 // Extract and validate auth token
-                let token = match headers
-                    .get("Authorization")
-                    .and_then(|h| h.to_str().ok())
-                    .and_then(|s| s.strip_prefix("Bearer "))
-                {
-                    Some(token) => token,
-                    None => {
+                let auth_credential = match ras_auth_core::extract_auth_credential(&headers, &auth_transport) {
+                    Ok(credential) => credential,
+                    Err(_) => {
                         use axum::response::IntoResponse;
                         return (
                             axum::http::StatusCode::UNAUTHORIZED,
@@ -1653,9 +1717,19 @@ fn generate_handler_body(
                     },
                 };
 
+                if let Err(_) = ras_auth_core::validate_csrf_for_credential(#method, &headers, &auth_credential, &auth_transport) {
+                    use axum::response::IntoResponse;
+                    return (
+                        axum::http::StatusCode::FORBIDDEN,
+                        axum::Json(serde_json::json!({
+                            "error": "CSRF validation failed"
+                        }))
+                    ).into_response();
+                }
+
                 // Authenticate user
                 let user = match &auth_provider {
-                    Some(provider) => match provider.authenticate(token.to_string()).await {
+                    Some(provider) => match provider.authenticate(auth_credential.token().to_string()).await {
                         Ok(user) => user,
                         Err(_) => {
                             use axum::response::IntoResponse;
@@ -1714,7 +1788,9 @@ fn generate_handler_body(
 
                 // Call usage tracker if configured
                 if let Some(tracker) = &with_usage_tracker {
-                    tracker(&headers, Some(&user), #method, #path).await;
+                    let tracker_headers =
+                        ras_auth_core::redact_sensitive_headers_for_auth_transport(&headers, &auth_transport);
+                    tracker(&tracker_headers, Some(&user), #method, #path).await;
                 }
 
                 // Track duration

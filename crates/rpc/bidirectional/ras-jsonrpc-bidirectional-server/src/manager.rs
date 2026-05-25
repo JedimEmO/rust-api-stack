@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, info, warn};
 
-/// Thread-safe connection manager using DashMap for high-performance concurrent access
+/// Thread-safe connection manager using DashMap for concurrent access
 #[derive(Debug, Default)]
 pub struct DefaultConnectionManager {
     /// Active connections indexed by ConnectionId
@@ -84,7 +84,8 @@ impl DefaultConnectionManager {
 #[async_trait]
 impl ConnectionManager for DefaultConnectionManager {
     async fn add_connection(&self, info: ConnectionInfo) -> Result<()> {
-        // Create a dummy sender - real senders should be added via add_connection_with_sender
+        // Connections without an erased sender receive a closed internal channel.
+        // Runtime transports should call add_connection_with_sender.
         let (tx, _rx) = mpsc::channel(1);
         let sender = ChannelMessageSender::new(info.id, tx);
         self.connections.insert(info.id, (info.clone(), sender));
@@ -104,7 +105,7 @@ impl ConnectionManager for DefaultConnectionManager {
             info!("Added connection with sender: {}", info.id);
             Ok(())
         } else {
-            // Fallback to dummy sender if downcast fails
+            // Store the connection even when the erased sender has an unexpected type.
             self.add_connection(info).await
         }
     }

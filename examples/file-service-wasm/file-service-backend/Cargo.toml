@@ -2,36 +2,37 @@
 name = "file-service-backend"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
+description = "Backend for the Rust Agent Stack file-service OpenAPI usage example"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-api-stack"
+homepage = "https://github.com/JedimEmO/rust-api-stack"
+publish = false
+readme = "README.md"
+
+[features]
+default = []
+client = ["file-service-api/client"]
 
 [dependencies]
 # API crate with server feature
-file-service-api = { path = "../file-service-api", features = ["server"] }
+file-service-api = { path = "../file-service-api", version = "0.1.0", features = ["server"] }
 
 # Core dependencies
 axum = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
-tower = { workspace = true }
 tower-http = { workspace = true, features = ["cors", "fs"] }
 
 # Authentication
-ras-auth-core = { path = "../../../crates/core/ras-auth-core" }
+ras-auth-core = { path = "../../../crates/core/ras-auth-core", version = "0.1.0" }
+ras-file-core = { path = "../../../crates/rest/ras-file-core", version = "0.1.0" }
 async-trait = { workspace = true }
 
-# Serialization
-serde = { workspace = true }
-serde_json = { workspace = true }
-
-# JWT dependencies (required by SessionConfig)
-chrono = { workspace = true }
-jsonwebtoken = { workspace = true }
-
 # Error handling
-thiserror = { workspace = true }
 anyhow = { workspace = true }
 
 # File handling
 uuid = { workspace = true, features = ["v4", "serde"] }
-tokio-util = { workspace = true }
 mime_guess = { workspace = true }
 
 # Logging
@@ -42,4 +43,8 @@ tracing-subscriber = { workspace = true }
 dotenvy = { workspace = true }
 
 [build-dependencies]
-file-service-api = { path = "../file-service-api", features = ["server"] }
+file-service-api = { path = "../file-service-api", version = "0.1.0", features = ["server"] }
+ras-permission-manifest = { path = "../../../crates/specs/ras-permission-manifest", version = "0.1.0" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -1,3 +1,0 @@
-Please do `git ls-files examples/dominator-example/` and then read `docs_and_help/llm-txt/dwind_dominator.md` to get up to speed on how to do UI development in rust with dominator, dwind.
-You can find all the dominator colors here: https://jedimemo.github.io/dwind/doc/dwind/colors/index.html and the sizing classes are here: https://jedimemo.github.io/dwind/doc/dwind/sizing/index.html
-You can ask the dominator guru for help with both dominator and dwind. He is very knowlegeable!

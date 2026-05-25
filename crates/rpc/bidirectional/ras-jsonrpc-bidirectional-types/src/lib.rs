@@ -18,7 +18,9 @@ pub mod sender;
 
 pub use error::BidirectionalError;
 pub use manager::ConnectionManager;
-pub use sender::{MessageSender, NoOpMessageSender};
+#[cfg(not(target_arch = "wasm32"))]
+pub use sender::WebSocketMessageSender;
+pub use sender::{MessageSender, MessageSenderExt, NoOpMessageSender};
 
 /// Unique identifier for a WebSocket connection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

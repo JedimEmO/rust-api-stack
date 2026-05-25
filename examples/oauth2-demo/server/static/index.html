@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Google OAuth2 Example - Rust Agent Stack</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🦀</text></svg>">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.75em%22 font-size=%2242%22>RAS</text></svg>">
     <style>
         :root {
             --primary-color: #4285f4;
@@ -465,7 +465,7 @@
     <div class="background-overlay"></div>
     <div class="container">
         <div class="header animate-fade-in">
-            <h1>🦀 Google OAuth2 Example</h1>
+            <h1>Google OAuth2 Example</h1>
             <p>Rust Agent Stack - Identity Management with JSON-RPC</p>
         </div>
 
@@ -489,12 +489,12 @@
 
                 <div class="features animate-fade-in">
                     <div class="feature">
-                        <div class="feature-icon">🔒</div>
+                        <div class="feature-icon">Auth</div>
                         <h3>Secure Authentication</h3>
                         <p>Uses OAuth2 with PKCE for enhanced security. State parameters prevent CSRF attacks, and JWTs provide stateless session management with configurable expiration.</p>
                     </div>
                     <div class="feature">
-                        <div class="feature-icon">🎯</div>
+                        <div class="feature-icon">RBAC</div>
                         <h3>Smart Permissions</h3>
                         <p>Dynamic permission assignment based on email domain and user attributes. Different access levels for admin, trusted domains, and beta users.</p>
                         <div style="margin-top: 12px;">
@@ -504,19 +504,19 @@
                         </div>
                     </div>
                     <div class="feature">
-                        <div class="feature-icon">🚀</div>
+                        <div class="feature-icon">API</div>
                         <h3>JSON-RPC API</h3>
-                        <p>Type-safe API endpoints with automatic serialization and authentication. Real-time validation with comprehensive error handling and response caching.</p>
+                        <p>Type-safe API endpoints with automatic serialization and authentication. The browser page exercises the same JSON-RPC methods served by the example backend.</p>
                     </div>
                     <div class="feature">
-                        <div class="feature-icon">⚡</div>
+                        <div class="feature-icon">Rust</div>
                         <h3>Modern Rust</h3>
                         <p>Built with async/await, strong typing, and zero-cost abstractions. Leverages Rust 2024 edition features for maximum performance and safety.</p>
                     </div>
                 </div>
 
                 <div class="card" id="apiTestingSection" style="display: none;">
-                    <h3>🧪 Interactive API Testing</h3>
+                    <h3>Interactive API Testing</h3>
                     <p>After authentication, you can test the API endpoints directly in your browser:</p>
                     
                     <div id="apiPlayground">
@@ -538,7 +538,7 @@ curl -X POST http://localhost:3000/api/rpc \
             </div>
 
             <div class="auth-section animate-fade-in">
-                <h3>🔐 Authentication Flow</h3>
+                <h3>Authentication Flow</h3>
                 
                 <div class="auth-steps">
                     <div class="step active" id="step1">
@@ -563,12 +563,12 @@ curl -X POST http://localhost:3000/api/rpc \
                 
                 <button class="button" id="authButton" onclick="startOAuth2()">
                     <div class="loading-spinner"></div>
-                    <span class="button-text">🚀 Sign in with Google</span>
+                    <span class="button-text">Sign in with Google</span>
                 </button>
                 
                 <div style="margin-top: 24px; display: flex; flex-direction: column; gap: 12px;">
-                    <a href="/api-docs" class="button secondary">📚 View API Documentation</a>
-                    <button class="button secondary" onclick="showDemo()">🎬 See Demo</button>
+                    <a href="/api-docs" class="button secondary">View API Documentation</a>
+                    <button class="button secondary" onclick="showDemo()">See Demo</button>
                 </div>
                 
                 <div style="margin-top: 24px; padding: 16px; background: var(--background-color); border-radius: var(--border-radius); font-size: 14px; color: var(--text-secondary);">
@@ -586,7 +586,7 @@ curl -X POST http://localhost:3000/api/rpc \
         let authState = {
             isAuthenticating: false,
             currentStep: 1,
-            token: localStorage.getItem('jwt_token'),
+            token: sessionStorage.getItem('jwt_token'),
             userInfo: null
         };
 
@@ -741,7 +741,7 @@ curl -X POST http://localhost:3000/api/rpc \
             // Update UI to show authenticated state
             const authButton = document.getElementById('authButton');
             authButton.innerHTML = `
-                <span class="button-text">✅ Authenticated - Explore API</span>
+                <span class="button-text">Authenticated - Explore API</span>
             `;
             authButton.className = 'button success';
             authButton.onclick = () => window.location.href = '/api-docs';

@@ -196,9 +196,10 @@ mod tests {
     use std::sync::Mutex;
     use tokio::sync::oneshot;
 
-    /// Tiny stub manager: enough state to exercise the default `connection_*`
-    /// methods and the `ConnectionManagerExt` helpers without dragging in the
-    /// full `DefaultConnectionManager`. Uses sync `Mutex` for simplicity.
+    /// Minimal in-memory manager used to exercise the default `connection_*`
+    /// methods and the `ConnectionManagerExt` helpers without depending on the
+    /// server crate's full manager implementation. Uses sync `Mutex` for
+    /// simplicity.
     #[derive(Default)]
     struct StubManager {
         conns: Mutex<HashMap<ConnectionId, ConnectionInfo>>,
@@ -392,8 +393,8 @@ mod tests {
         // The default `add_connection_with_sender` must fall through to
         // `add_connection`.
         let id3 = ConnectionId::new();
-        let dummy: Box<dyn std::any::Any + Send + Sync> = Box::new(()) as _;
-        mgr.add_connection_with_sender(ConnectionInfo::new(id3), dummy)
+        let unexpected_sender: Box<dyn std::any::Any + Send + Sync> = Box::new(()) as _;
+        mgr.add_connection_with_sender(ConnectionInfo::new(id3), unexpected_sender)
             .await
             .unwrap();
         assert!(mgr.connection_exists(id3).await.unwrap());
@@ -410,13 +411,14 @@ mod tests {
         mgr.notify_connection(id, "evt", serde_json::json!({"k": 1}))
             .await
             .unwrap();
-        let sent = mgr.sent.lock().unwrap();
-        assert_eq!(sent.len(), 1);
-        match &sent[0].1 {
-            BidirectionalMessage::ServerNotification(n) => assert_eq!(n.method, "evt"),
-            other => panic!("unexpected: {other:?}"),
+        {
+            let sent = mgr.sent.lock().unwrap();
+            assert_eq!(sent.len(), 1);
+            match &sent[0].1 {
+                BidirectionalMessage::ServerNotification(n) => assert_eq!(n.method, "evt"),
+                other => panic!("unexpected: {other:?}"),
+            }
         }
-        drop(sent);
 
         // notify_topic broadcasts to the topic with one subscriber.
         let n = mgr
@@ -424,12 +426,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(n, 1);
-        let bs = mgr.broadcasts.lock().unwrap();
-        assert!(matches!(
-            &bs[0].1,
-            BidirectionalMessage::Broadcast(BroadcastMessage { method, .. }) if method == "msg"
-        ));
-        drop(bs);
+        {
+            let bs = mgr.broadcasts.lock().unwrap();
+            assert!(matches!(
+                &bs[0].1,
+                BidirectionalMessage::Broadcast(BroadcastMessage { method, .. }) if method == "msg"
+            ));
+        }
 
         // ping_connection should produce a Ping payload.
         mgr.ping_connection(id).await.unwrap();
@@ -470,5 +473,81 @@ mod tests {
         assert!(!mgr.connection_exists(alice2).await.unwrap());
         // Bob unaffected.
         assert!(mgr.connection_exists(bob).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn subscriptions_users_and_broadcast_filters_update_connection_state() {
+        let mgr = StubManager::default();
+        let id = ConnectionId::new();
+        mgr.add_connection(ConnectionInfo::new(id)).await.unwrap();
+
+        assert!(mgr.get_subscriptions(id).await.unwrap().is_empty());
+        mgr.add_subscription(id, "room:1".to_string())
+            .await
+            .unwrap();
+        mgr.add_subscription(id, "alerts".to_string())
+            .await
+            .unwrap();
+
+        let mut subscriptions = mgr.get_subscriptions(id).await.unwrap();
+        subscriptions.sort();
+        assert_eq!(subscriptions, vec!["alerts", "room:1"]);
+        assert_eq!(
+            mgr.get_subscribed_connections("room:1")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+
+        mgr.remove_subscription(id, "room:1").await.unwrap();
+        let info = mgr.get_connection(id).await.unwrap().unwrap();
+        assert!(!info.is_subscribed_to("room:1"));
+        assert!(info.is_subscribed_to("alerts"));
+
+        mgr.set_connection_user(id, user("alice", &["read", "write"]))
+            .await
+            .unwrap();
+        assert_eq!(
+            mgr.broadcast_to_authenticated(BidirectionalMessage::Ping)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            mgr.broadcast_to_permission("read", BidirectionalMessage::Ping)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            mgr.broadcast_to_permission("admin", BidirectionalMessage::Ping)
+                .await
+                .unwrap(),
+            0
+        );
+
+        mgr.clear_connection_user(id).await.unwrap();
+        assert_eq!(mgr.authenticated_connection_count().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn missing_connection_mutations_return_not_found() {
+        let mgr = StubManager::default();
+        let missing = ConnectionId::new();
+
+        assert!(matches!(
+            mgr.remove_connection(missing).await,
+            Err(BidirectionalError::ConnectionNotFound(id)) if id == missing
+        ));
+        assert!(matches!(
+            mgr.set_connection_user(missing, user("alice", &[])).await,
+            Err(BidirectionalError::ConnectionNotFound(id)) if id == missing
+        ));
+        assert!(matches!(
+            mgr.clear_connection_user(missing).await,
+            Err(BidirectionalError::ConnectionNotFound(id)) if id == missing
+        ));
+        assert!(!mgr.connection_exists(missing).await.unwrap());
     }
 }

@@ -1,0 +1,22 @@
+[package]
+name = "ras-openrpc-types"
+version = "0.1.1"
+edition = "2024"
+rust-version = "1.88"
+description = "Rust types for the OpenRPC 1.3.2 specification with serde support, bon builders, and validation helpers"
+keywords = ["openrpc", "json-rpc", "api", "specification", "types"]
+categories = ["api-bindings", "data-structures", "web-programming"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-api-stack"
+homepage = "https://github.com/JedimEmO/rust-api-stack"
+readme = "README.md"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+bon = { workspace = true }
+schemars = { workspace = true, optional = true }
+
+[features]
+default = []
+json-schema = ["schemars"]

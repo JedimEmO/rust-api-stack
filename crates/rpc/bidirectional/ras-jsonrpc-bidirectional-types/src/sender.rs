@@ -1,10 +1,16 @@
 //! Message sender trait for bidirectional JSON-RPC
 
-use crate::{BidirectionalError, BidirectionalMessage, ConnectionId, Result};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::BidirectionalError;
+use crate::{BidirectionalMessage, ConnectionId, Result};
 use async_trait::async_trait;
+#[cfg(not(target_arch = "wasm32"))]
 use futures::sink::SinkExt;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::sync::Mutex;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 /// Trait for sending messages over WebSocket connections
@@ -24,6 +30,7 @@ pub trait MessageSender: Send + Sync {
 }
 
 /// A message sender implementation using tokio-tungstenite
+#[cfg(not(target_arch = "wasm32"))]
 pub struct WebSocketMessageSender<S>
 where
     S: SinkExt<WsMessage> + Send + Unpin,
@@ -33,6 +40,7 @@ where
     is_closed: Arc<Mutex<bool>>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<S> WebSocketMessageSender<S>
 where
     S: SinkExt<WsMessage> + Send + Unpin,
@@ -48,6 +56,7 @@ where
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[async_trait]
 impl<S> MessageSender for WebSocketMessageSender<S>
 where
@@ -170,12 +179,12 @@ impl Default for NoOpMessageSender {
 #[async_trait]
 impl MessageSender for NoOpMessageSender {
     async fn send_message(&self, _message: BidirectionalMessage) -> Result<()> {
-        // No-op implementation - just return success
+        // No-op senders acknowledge messages without producing side effects.
         Ok(())
     }
 
     async fn close(&self) -> Result<()> {
-        // No-op implementation - just return success
+        // Closing a no-op sender has no external state to update.
         Ok(())
     }
 
@@ -192,6 +201,8 @@ impl MessageSender for NoOpMessageSender {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
 
     #[tokio::test]
     async fn test_message_sender_ext() {
@@ -319,6 +330,7 @@ mod tests {
         assert_ne!(s2.connection_id(), s3.connection_id());
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[tokio::test]
     async fn websocket_sender_drives_real_sink() {
         use futures::channel::mpsc;

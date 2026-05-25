@@ -8,7 +8,7 @@ current and compatibility routes.
 ## Local setup
 
 ```bash
-npm --prefix tests/playwright install
+npm --prefix tests/playwright ci
 npm --prefix tests/playwright run install:browsers
 npm --prefix tests/playwright test
 ```

@@ -35,7 +35,7 @@ test.describe('JSON-RPC API explorer', () => {
     await expect(page.locator('#operation-description pre code')).toContainText('{"message":"hello"}');
     await expect(page.locator('#operation-description a').filter({ hasText: 'Rust API Stack' })).toHaveAttribute(
       'href',
-      'https://example.com/docs'
+      'https://github.com/JedimEmO/rust-api-stack/blob/main/crates/rpc/ras-jsonrpc-macro/README.md'
     );
     const descriptionText = await page.locator('#operation-description').evaluate((el) => el.textContent ?? '');
     expect(descriptionText).toContain('Line one\nLine two');
@@ -102,7 +102,7 @@ test.describe('JSON-RPC API explorer', () => {
     await expect(page.locator('#response-status')).toContainText('RPC error');
     await expect(page.locator('#response-output')).toContainText('Authentication');
 
-    await page.locator('#jwt-token').fill('admin-token');
+    await page.locator('#bearer-token').fill('admin-token');
     await page.locator('#save-token').click();
     await expect(page.locator('#auth-state')).toContainText('Token set');
     await send(page);
@@ -117,7 +117,7 @@ test.describe('JSON-RPC API explorer', () => {
 
   test('saves JSON-RPC requests, restores history, and keeps tokens out of localStorage', async ({ page }) => {
     await selectMethod(page, 'create_widget');
-    await page.locator('#jwt-token').fill('admin-token');
+    await page.locator('#bearer-token').fill('admin-token');
     await page.locator('#save-token').click();
     await page.locator('#params-editor').fill(JSON.stringify({ name: 'Saved RPC', owner: 'saved-owner' }, null, 2));
 

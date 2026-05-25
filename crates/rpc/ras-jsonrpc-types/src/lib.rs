@@ -81,6 +81,9 @@ pub mod error_codes {
 
     /// Token expired.
     pub const TOKEN_EXPIRED: i32 = -32003;
+
+    /// CSRF validation failed.
+    pub const CSRF_VALIDATION_FAILED: i32 = -32004;
 }
 
 impl JsonRpcRequest {
@@ -201,6 +204,15 @@ impl JsonRpcError {
             None,
         )
     }
+
+    /// Creates a CSRF validation error.
+    pub fn csrf_validation_failed() -> Self {
+        Self::new(
+            error_codes::CSRF_VALIDATION_FAILED,
+            "CSRF validation failed".to_string(),
+            None,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -256,6 +268,10 @@ mod tests {
             JsonRpcError::token_expired().code,
             error_codes::TOKEN_EXPIRED
         );
+        assert_eq!(
+            JsonRpcError::csrf_validation_failed().code,
+            error_codes::CSRF_VALIDATION_FAILED
+        );
     }
 
     #[test]
@@ -273,5 +289,66 @@ mod tests {
         let s = serde_json::to_string(&req).unwrap();
         assert!(!s.contains("\"id\""));
         assert!(!s.contains("\"params\""));
+    }
+
+    #[test]
+    fn request_serializes_canonical_jsonrpc_wire_shape() {
+        let request = JsonRpcRequest::new(
+            "subtract".to_string(),
+            Some(serde_json::json!([42, 23])),
+            Some(serde_json::json!(1)),
+        );
+
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "subtract",
+                "params": [42, 23],
+                "id": 1
+            })
+        );
+    }
+
+    #[test]
+    fn success_response_omits_error_field() {
+        let response = JsonRpcResponse::success(
+            serde_json::json!({ "value": 19 }),
+            Some(serde_json::json!("req-1")),
+        );
+
+        assert_eq!(
+            serde_json::to_value(response).unwrap(),
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "result": { "value": 19 },
+                "id": "req-1"
+            })
+        );
+    }
+
+    #[test]
+    fn error_response_omits_result_field_and_keeps_error_data() {
+        let response = JsonRpcResponse::error(
+            JsonRpcError::new(
+                error_codes::INVALID_PARAMS,
+                "Invalid params".to_string(),
+                Some(serde_json::json!({ "field": "name" })),
+            ),
+            Some(serde_json::json!("req-2")),
+        );
+
+        assert_eq!(
+            serde_json::to_value(response).unwrap(),
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": -32602,
+                    "message": "Invalid params",
+                    "data": { "field": "name" }
+                },
+                "id": "req-2"
+            })
+        );
     }
 }

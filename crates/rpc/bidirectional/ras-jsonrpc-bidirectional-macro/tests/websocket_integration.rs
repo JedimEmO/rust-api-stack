@@ -1,4 +1,4 @@
-//! Basic WebSocket integration test for macro
+//! Basic macro generation test
 //!
 //! This test focuses on ensuring the macro generates working server and client code
 //! that can be compiled and basic types are created correctly.
@@ -41,7 +41,15 @@ mod tests {
     fn test_types_exist() {
         // This test ensures the macro generates the expected types
         // If it compiles, the basic macro generation is working
-        assert!(true, "Types generated successfully");
+        let request = SimpleRequest {
+            message: "ping".to_string(),
+        };
+        let response = SimpleResponse {
+            result: "pong".to_string(),
+        };
+
+        assert_eq!(request.message, "ping");
+        assert_eq!(response.result, "pong");
     }
 
     #[cfg(feature = "server")]
@@ -52,8 +60,6 @@ mod tests {
 
         // This will only compile if the trait exists
         fn _check_trait_exists<T: SimpleServiceService>(_: PhantomData<T>) {}
-
-        assert!(true, "Server trait exists");
     }
 
     #[cfg(feature = "server")]
@@ -69,7 +75,5 @@ mod tests {
             A: ras_auth_core::AuthProvider,
         {
         }
-
-        assert!(true, "Builder exists");
     }
 }

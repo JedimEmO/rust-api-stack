@@ -2,46 +2,47 @@
 name = "rest-api"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
+description = "Shared REST API contract for the Rust Agent Stack OpenAPI usage example"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-api-stack"
+homepage = "https://github.com/JedimEmO/rust-api-stack"
+publish = false
+readme = "README.md"
 
 [lib]
 crate-type = ["rlib"]
 
 [dependencies]
-ras-rest-macro = { path = "../../../crates/rest/ras-rest-macro" }
-ras-auth-core = { path = "../../../crates/core/ras-auth-core" }
-ras-rest-core = { path = "../../../crates/rest/ras-rest-core" }
+ras-rest-macro = { path = "../../../crates/rest/ras-rest-macro", version = "0.2.1", default-features = false, features = ["permissions"] }
+ras-auth-core = { path = "../../../crates/core/ras-auth-core", version = "0.1.0", optional = true }
+ras-permission-manifest = { path = "../../../crates/specs/ras-permission-manifest", version = "0.1.0" }
+ras-rest-core = { path = "../../../crates/rest/ras-rest-core", version = "0.1.1", optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 schemars = { workspace = true }
-tracing.workspace = true
-async-trait = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true, optional = true }
 thiserror = { workspace = true }
-wasm-bindgen = { version = "0.2", optional = true }
-wasm-bindgen-futures = { version = "0.4", optional = true }
-js-sys = { version = "0.3", optional = true }
-web-sys = { version = "0.3", optional = true }
-serde-wasm-bindgen = { version = "0.6", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-axum = { workspace = true }
-axum-extra.workspace = true
-tower = { workspace = true }
-http = { workspace = true }
-reqwest = { workspace = true }
-tokio = { workspace = true }
+axum = { workspace = true, optional = true }
+axum-extra = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json"], optional = true }
 
 [features]
 default = []
-wasm-client = [
-    "wasm-bindgen",
-    "wasm-bindgen-futures",
-    "js-sys",
-    "web-sys",
-    "serde-wasm-bindgen",
-    "ras-rest-macro/client",
+server = [
+    "ras-rest-macro/server",
+    "dep:ras-auth-core",
+    "dep:ras-rest-core",
+    "dep:async-trait",
+    "dep:axum",
+    "dep:axum-extra",
+    "dep:tokio",
 ]
-server = ["ras-rest-macro/server"]
-client = ["ras-rest-macro/client"]
+client = ["ras-rest-macro/client", "dep:reqwest"]

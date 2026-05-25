@@ -15,8 +15,8 @@ allow_any_origin = true
 allowed_origins = ["http://localhost:3000", "https://example.com"]
 
 [auth]
-# JWT secret key (REQUIRED for production, use JWT_SECRET env var)
-jwt_secret = "change-me-in-production"
+# JWT secret key. Must be at least 32 bytes; replace for shared environments.
+jwt_secret = "change-this-to-at-least-32-random-bytes"
 # JWT TTL in seconds (24 hours)
 jwt_ttl_seconds = 86400
 # Enable refresh tokens
@@ -25,7 +25,8 @@ refresh_enabled = true
 jwt_algorithm = "HS256"
 
 [chat]
-# Data directory for persistence (can also use CHAT_DATA_DIR env var)
+# Data directory for persistence (can also use CHAT_DATA_DIR env var).
+# Relative paths are resolved from the directory where the server process starts.
 data_dir = "./chat_data"
 # Maximum message length in characters
 max_message_length = 1000
@@ -92,13 +93,13 @@ display_name = "Moderator"
 permissions = ["moderator", "user"]
 
 [rate_limit]
-# Enable rate limiting
+# Enable chat message rate limiting
 enabled = false
-# Maximum messages per minute per user
+# Maximum chat messages per minute per authenticated user
 messages_per_minute = 30
-# Maximum concurrent connections per IP
+# Reserved for deployment-level connection limiting; validated but not enforced by the chat service
 connections_per_ip = 10
-# Maximum login attempts per hour per IP
+# Reserved for deployment-level login throttling; validated but not enforced by the chat service
 login_attempts_per_hour = 20
 
 # Environment Variable Overrides

@@ -1,9 +1,10 @@
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::{Ident, LitStr, Token, Type, parse::Parse, parse_macro_input};
 
 mod client;
 mod openrpc;
+mod permissions;
 mod static_hosting;
 
 /// Macro to generate a JSON-RPC service with authentication support
@@ -419,9 +420,12 @@ impl Parse for MethodVersionDefinition {
 }
 
 fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_macro2::TokenStream> {
+    let service_name_lower = service_def.service_name.to_string().to_lowercase();
+    let server_mod = format_ident!("__ras_jsonrpc_{}_server", service_name_lower);
+    let client_mod = format_ident!("__ras_jsonrpc_{}_client", service_name_lower);
+
     // Generate OpenRPC code if enabled in the macro input
-    let (openrpc_code, schema_checks) = if service_def.openrpc.is_some() {
-        let openrpc_config = service_def.openrpc.as_ref().unwrap();
+    let (openrpc_code, schema_checks) = if let Some(openrpc_config) = &service_def.openrpc {
         (
             openrpc::generate_openrpc_code(&service_def, openrpc_config),
             openrpc::generate_schema_impl_checks(&service_def),
@@ -430,73 +434,70 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
         (quote! {}, quote! {})
     };
 
-    // Generate server code only if server feature is enabled in the macro crate
-    let server_code = if cfg!(feature = "server") {
-        let server_impl = generate_server_code(&service_def);
+    let server_impl = generate_server_code(&service_def);
 
-        // Generate explorer code if enabled - only if server feature is enabled
-        let explorer_code = if service_def.explorer.is_some() && service_def.openrpc.is_some() {
-            let explorer_config = match &service_def.explorer {
-                Some(ExplorerConfig::Enabled) => static_hosting::StaticHostingConfig {
-                    serve_explorer: true,
-                    explorer_path: "/explorer".to_string(),
-                },
-                Some(ExplorerConfig::WithPath(path)) => static_hosting::StaticHostingConfig {
-                    serve_explorer: true,
-                    explorer_path: path.clone(),
-                },
-                None => static_hosting::StaticHostingConfig::default(),
-            };
-
-            // Extract base path from server code (we'll need to pass this to explorer)
-            // For now, use the default empty string since JSON-RPC typically uses a single endpoint
-            static_hosting::generate_static_hosting_code(
-                &explorer_config,
-                &service_def.service_name,
-                "",
-            )
-        } else {
-            quote! {}
+    let explorer_code = if service_def.explorer.is_some() && service_def.openrpc.is_some() {
+        let explorer_config = match &service_def.explorer {
+            Some(ExplorerConfig::Enabled) => static_hosting::StaticHostingConfig {
+                serve_explorer: true,
+                explorer_path: "/explorer".to_string(),
+            },
+            Some(ExplorerConfig::WithPath(path)) => static_hosting::StaticHostingConfig {
+                serve_explorer: true,
+                explorer_path: path.clone(),
+            },
+            None => static_hosting::StaticHostingConfig::default(),
         };
 
-        // Wrap all server code in a cfg attribute to ensure it's only compiled when server feature is enabled
+        // JSON-RPC services in this macro expose the explorer next to a single endpoint.
+        // The static host generator still accepts a base path for future reuse.
+        static_hosting::generate_static_hosting_code(
+            &explorer_config,
+            &service_def.service_name,
+            "",
+        )
+    } else {
+        quote! {}
+    };
+
+    let server_code = if cfg!(feature = "server") {
         quote! {
-            #[cfg(feature = "server")]
-            mod _generated_server {
-                use super::*;
+        mod #server_mod {
+            use super::*;
 
-                #server_impl
-                #explorer_code
-            }
+            #server_impl
+            #explorer_code
+        }
 
-            #[cfg(feature = "server")]
-            pub use _generated_server::*;
+        pub use #server_mod::*;
         }
     } else {
         quote! {}
     };
 
-    // Generate client code only if client feature is enabled in the macro crate
+    let client_impl = crate::client::generate_client_code(&service_def);
+    let permissions_code = if cfg!(feature = "permissions") {
+        permissions::generate_permissions_code(&service_def)
+    } else {
+        quote! {}
+    };
+
     let client_code = if cfg!(feature = "client") {
-        let client_impl = crate::client::generate_client_code(&service_def);
-
-        // Wrap all client code in a cfg attribute to ensure it's only compiled when client feature is enabled
         quote! {
-            #[cfg(feature = "client")]
-            mod _generated_client {
-                use super::*;
+        mod #client_mod {
+            use super::*;
 
-                #client_impl
-            }
+            #client_impl
+        }
 
-            #[cfg(feature = "client")]
-            pub use _generated_client::*;
+        pub use #client_mod::*;
         }
     } else {
         quote! {}
     };
 
     let output = quote! {
+        #permissions_code
         #openrpc_code
         #schema_checks
         #server_code
@@ -551,6 +552,7 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
 
     quote! {
         /// Generated service trait
+        #[allow(private_interfaces, private_bounds)]
         pub trait #service_trait_name: Send + Sync + 'static {
             #(#trait_methods)*
         }
@@ -560,6 +562,7 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
             base_url: String,
             service: std::sync::Arc<T>,
             auth_provider: Option<Box<dyn ras_jsonrpc_core::AuthProvider>>,
+            auth_transport: ras_jsonrpc_core::AuthTransportConfig,
             usage_tracker: Option<Box<dyn Fn(&axum::http::HeaderMap, Option<&ras_jsonrpc_core::AuthenticatedUser>, &ras_jsonrpc_types::JsonRpcRequest) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync>>,
             method_duration_tracker: Option<Box<dyn Fn(&str, Option<&ras_jsonrpc_core::AuthenticatedUser>, std::time::Duration) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync>>,
         }
@@ -573,6 +576,7 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
                     base_url: "/rpc".to_string(),
                     service: std::sync::Arc::new(service),
                     auth_provider: None,
+                    auth_transport: ras_jsonrpc_core::AuthTransportConfig::default(),
                     usage_tracker: None,
                     method_duration_tracker: None,
                 }
@@ -587,6 +591,24 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
             /// Set the auth provider
             pub fn auth_provider<A: ras_jsonrpc_core::AuthProvider>(mut self, provider: A) -> Self {
                 self.auth_provider = Some(Box::new(provider));
+                self
+            }
+
+            /// Enable cookie authentication alongside bearer tokens.
+            pub fn auth_cookie(mut self, cookie: ras_jsonrpc_core::AuthCookieConfig) -> Self {
+                self.auth_transport.cookie = Some(cookie);
+                self
+            }
+
+            /// Replace the full auth transport configuration.
+            pub fn auth_transport(mut self, transport: ras_jsonrpc_core::AuthTransportConfig) -> Self {
+                self.auth_transport = transport;
+                self
+            }
+
+            /// Require CSRF validation for cookie-authenticated JSON-RPC requests.
+            pub fn csrf_protection(mut self, csrf: ras_jsonrpc_core::CsrfConfig) -> Self {
+                self.auth_transport.csrf = Some(csrf);
                 self
             }
 
@@ -618,6 +640,10 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
 
             /// Build the axum router for the JSON-RPC service
             pub fn build(self) -> Result<axum::Router, String> {
+                self.auth_transport
+                    .validate()
+                    .map_err(|err| err.to_string())?;
+
                 let base_url = self.base_url.clone();
                 let service = std::sync::Arc::new(self);
 
@@ -634,6 +660,7 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
                                 ras_jsonrpc_types::error_codes::AUTHENTICATION_REQUIRED => axum::http::StatusCode::UNAUTHORIZED,
                                 ras_jsonrpc_types::error_codes::INSUFFICIENT_PERMISSIONS => axum::http::StatusCode::FORBIDDEN,
                                 ras_jsonrpc_types::error_codes::TOKEN_EXPIRED => axum::http::StatusCode::UNAUTHORIZED,
+                                ras_jsonrpc_types::error_codes::CSRF_VALIDATION_FAILED => axum::http::StatusCode::FORBIDDEN,
                                 _ => axum::http::StatusCode::OK, // Other JSON-RPC errors still return 200 OK
                             }
                         } else {
@@ -675,13 +702,19 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
 
                 // Try to authenticate user if auth provider is available
                 let auth_result = if let Some(auth_provider) = &self.auth_provider {
-                    if let Some(token) = headers
-                        .get("Authorization")
-                        .and_then(|h| h.to_str().ok())
-                        .and_then(|s| s.strip_prefix("Bearer ")) {
-                        Some(auth_provider.authenticate(token.to_string()).await)
-                    } else {
-                        None
+                    match ras_jsonrpc_core::extract_auth_credential(&headers, &self.auth_transport) {
+                        Ok(credential) => {
+                            if let Err(_) = ras_jsonrpc_core::validate_csrf_for_credential("POST", &headers, &credential, &self.auth_transport) {
+                                return ras_jsonrpc_types::JsonRpcResponse::error(
+                                    ras_jsonrpc_types::JsonRpcError::csrf_validation_failed(),
+                                    request_id
+                                );
+                            }
+
+                            Some(auth_provider.authenticate(credential.token().to_string()).await)
+                        },
+                        Err(ras_jsonrpc_core::AuthTransportError::MissingCredentials) => None,
+                        Err(_) => Some(Err(ras_jsonrpc_core::AuthError::AuthenticationRequired)),
                     }
                 } else {
                     None
@@ -695,13 +728,21 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
                             request_id
                         );
                     }
-                    _ => None,
+                    Some(Err(_)) => {
+                        return ras_jsonrpc_types::JsonRpcResponse::error(
+                            ras_jsonrpc_types::JsonRpcError::authentication_required(),
+                            request_id
+                        );
+                    }
+                    None => None,
                 };
 
                 // Call usage tracker if configured
                 if let Some(tracker) = &self.usage_tracker {
                     let user_ref = authenticated_user.as_ref();
-                    tracker(&headers, user_ref, &request).await;
+                    let tracker_headers =
+                        ras_jsonrpc_core::redact_sensitive_headers_for_auth_transport(&headers, &self.auth_transport);
+                    tracker(&tracker_headers, user_ref, &request).await;
                 }
 
                 // Dispatch method

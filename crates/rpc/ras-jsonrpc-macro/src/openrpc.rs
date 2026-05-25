@@ -172,6 +172,8 @@ pub fn generate_openrpc_code(
                     groups.iter().flatten().cloned().collect()
                 }
             };
+            let permission_groups = permission_groups_for_spec(&method.auth);
+            let permission_groups_tokens = permission_groups_tokens(&permission_groups);
 
             let request_type = &method.request_type;
             let response_type = &method.response_type;
@@ -194,6 +196,7 @@ pub fn generate_openrpc_code(
                     description: #description,
                     auth_required: #auth_required,
                     permissions: vec![#(#permissions.to_string()),*],
+                    permission_groups: #permission_groups_tokens,
                     request_type_name: stringify!(#request_type).to_string(),
                     response_type_name: stringify!(#response_type).to_string(),
                     version: #canonical_version_tokens,
@@ -212,6 +215,7 @@ pub fn generate_openrpc_code(
                     .unwrap_or_else(|| "current".to_string());
                 let canonical_method_name = canonical_method_name.clone();
                 let permissions = permissions.clone();
+                let permission_groups_tokens = permission_groups_tokens.clone();
                 let summary = summary.clone();
                 let description = description.clone();
 
@@ -222,6 +226,7 @@ pub fn generate_openrpc_code(
                         description: #description,
                         auth_required: #auth_required,
                         permissions: vec![#(#permissions.to_string()),*],
+                        permission_groups: #permission_groups_tokens,
                         request_type_name: stringify!(#request_type).to_string(),
                         response_type_name: stringify!(#response_type).to_string(),
                         version: Some(#version_label.to_string()),
@@ -243,6 +248,7 @@ pub fn generate_openrpc_code(
             description: Option<String>,
             auth_required: bool,
             permissions: Vec<String>,
+            permission_groups: Vec<Vec<String>>,
             request_type_name: String,
             response_type_name: String,
             version: Option<String>,
@@ -420,6 +426,10 @@ pub fn generate_openrpc_code(
                     if !method.permissions.is_empty() {
                         extensions.insert("x-permissions".to_string(), json!(method.permissions));
                     }
+
+                    if !method.permission_groups.is_empty() {
+                        extensions.insert("x-permission-groups".to_string(), json!(method.permission_groups));
+                    }
                 }
 
                 if let Some(version) = &method.version {
@@ -566,6 +576,20 @@ pub fn generate_openrpc_code(
             Ok(())
         }
     }
+}
+
+fn permission_groups_for_spec(auth: &AuthRequirement) -> Vec<Vec<String>> {
+    match auth {
+        AuthRequirement::Unauthorized => vec![],
+        AuthRequirement::WithPermissions(groups) => groups.clone(),
+    }
+}
+
+fn permission_groups_tokens(groups: &[Vec<String>]) -> TokenStream {
+    let groups = groups
+        .iter()
+        .map(|group| quote! { vec![#(#group.to_string()),*] });
+    quote! { vec![#(#groups),*] }
 }
 
 /// Generates code to include schema generation for types when schemars is available

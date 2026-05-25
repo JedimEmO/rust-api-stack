@@ -18,7 +18,7 @@ impl ServiceWithObservability {
             .expect("Failed to set up OpenTelemetry");
 
         // Create usage tracker callback
-        let usage_tracker = {
+        let _usage_tracker = {
             let usage_tracker = otel.usage_tracker();
             move |headers: axum::http::HeaderMap,
                   user: Option<ras_auth_core::AuthenticatedUser>,
@@ -36,7 +36,7 @@ impl ServiceWithObservability {
         };
 
         // Create duration tracker callback
-        let duration_tracker = {
+        let _duration_tracker = {
             let duration_tracker = otel.method_duration_tracker();
             move |method: &str,
                   path: &str,
@@ -56,8 +56,8 @@ impl ServiceWithObservability {
 
         info!("Service configured with OpenTelemetry observability");
 
-        // In a real implementation, the REST macro would wire these up automatically
-        // For now, we just create a simple router with the metrics endpoint
+        // The example keeps the service route minimal while exposing the metrics endpoint.
+        // A REST macro integration would normally assemble the application router.
         let app = Router::new()
             .route("/api/v1/health", axum::routing::get(|| async { "OK" }))
             .merge(otel.metrics_router());
@@ -67,6 +67,12 @@ impl ServiceWithObservability {
 
     pub fn into_router(self) -> Router {
         self.app
+    }
+}
+
+impl Default for ServiceWithObservability {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

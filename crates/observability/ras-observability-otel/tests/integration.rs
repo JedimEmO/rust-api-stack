@@ -9,13 +9,20 @@ use axum::{
 };
 use axum_test::TestServer;
 use ras_auth_core::AuthenticatedUser;
-use ras_observability_core::{
-    MethodDurationTracker, Protocol, RequestContext, ServiceMetrics, UsageTracker,
-};
+use ras_observability_core::{MethodDurationTracker, RequestContext, ServiceMetrics, UsageTracker};
 use ras_observability_otel::{OtelMethodDurationTracker, OtelSetupBuilder, OtelUsageTracker};
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Instant};
-use tokio::time::{Duration, sleep};
+use tokio::{
+    sync::{Mutex, MutexGuard},
+    time::{Duration, sleep},
+};
+
+static OTEL_TEST_LOCK: Mutex<()> = Mutex::const_new(());
+
+async fn otel_test_guard() -> MutexGuard<'static, ()> {
+    OTEL_TEST_LOCK.lock().await
+}
 
 #[derive(Clone)]
 struct AppState {
@@ -132,10 +139,10 @@ async fn get_profile(
     Ok(Json(response))
 }
 
-// Disabled due to flaky metrics timing issues
-// #[tokio::test]
-#[allow(dead_code)]
+#[tokio::test]
 async fn test_full_service_integration() {
+    let _guard = otel_test_guard().await;
+
     // Set up observability
     let setup = OtelSetupBuilder::new("integration_test_service")
         .build()
@@ -160,7 +167,7 @@ async fn test_full_service_integration() {
         .merge(setup.metrics_router());
 
     // Create test server
-    let server = TestServer::new(app).unwrap();
+    let server = TestServer::builder().mock_transport().build(app).unwrap();
 
     // Test health check
     let response = server.get("/health").await;
@@ -210,7 +217,7 @@ async fn test_full_service_integration() {
     // Verify metrics are present
     assert!(metrics_text.contains("requests_started_total"));
     assert!(metrics_text.contains("requests_completed_total"));
-    assert!(metrics_text.contains("method_duration_seconds"));
+    assert!(metrics_text.contains("method_duration_milliseconds"));
 
     // Verify specific labels are present
     assert!(metrics_text.contains("method=\"GET /health\""));
@@ -220,10 +227,10 @@ async fn test_full_service_integration() {
     assert!(metrics_text.contains("success=\"true\""));
 }
 
-// Disabled due to flaky metrics timing issues
-// #[tokio::test]
-#[allow(dead_code)]
+#[tokio::test]
 async fn test_jsonrpc_protocol_tracking() {
+    let _guard = otel_test_guard().await;
+
     let setup = OtelSetupBuilder::new("jsonrpc_test_service")
         .build()
         .expect("Failed to set up OpenTelemetry");
@@ -257,7 +264,7 @@ async fn test_jsonrpc_protocol_tracking() {
 
     // Create metrics endpoint to verify
     let app = setup.metrics_router();
-    let server = TestServer::new(app).unwrap();
+    let server = TestServer::builder().mock_transport().build(app).unwrap();
 
     let response = server.get("/metrics").await;
     let metrics_text = response.text();
@@ -269,10 +276,10 @@ async fn test_jsonrpc_protocol_tracking() {
     assert!(metrics_text.contains("protocol=\"JSON-RPC\""));
 }
 
-// Disabled due to flaky metrics timing issues
-// #[tokio::test]
-#[allow(dead_code)]
+#[tokio::test]
 async fn test_websocket_protocol_tracking() {
+    let _guard = otel_test_guard().await;
+
     let setup = OtelSetupBuilder::new("websocket_test_service")
         .build()
         .expect("Failed to set up OpenTelemetry");
@@ -284,13 +291,8 @@ async fn test_websocket_protocol_tracking() {
     let ws_operations = ["connect", "subscribe", "publish", "disconnect"];
 
     for operation in &ws_operations {
-        let context = RequestContext {
-            method: operation.to_string(),
-            protocol: Protocol::WebSocket,
-            metadata: [("connection_id".to_string(), "ws-123".to_string())]
-                .into_iter()
-                .collect(),
-        };
+        let context =
+            RequestContext::websocket(*operation).with_metadata("connection_id", "ws-123");
 
         metrics.increment_requests_started(&context);
         metrics.record_method_duration(&context, Duration::from_millis(5));
@@ -304,7 +306,7 @@ async fn test_websocket_protocol_tracking() {
 
     // Verify metrics
     let app = setup.metrics_router();
-    let server = TestServer::new(app).unwrap();
+    let server = TestServer::builder().mock_transport().build(app).unwrap();
 
     let response = server.get("/metrics").await;
     let metrics_text = response.text();
@@ -316,10 +318,10 @@ async fn test_websocket_protocol_tracking() {
     }
 }
 
-// Disabled due to flaky metrics timing issues
-// #[tokio::test]
-#[allow(dead_code)]
+#[tokio::test]
 async fn test_error_scenarios() {
+    let _guard = otel_test_guard().await;
+
     let setup = OtelSetupBuilder::new("error_test_service")
         .build()
         .expect("Failed to set up OpenTelemetry");
@@ -354,7 +356,7 @@ async fn test_error_scenarios() {
 
     // Verify failure metrics
     let app = setup.metrics_router();
-    let server = TestServer::new(app).unwrap();
+    let server = TestServer::builder().mock_transport().build(app).unwrap();
 
     let response = server.get("/metrics").await;
     let metrics_text = response.text();
@@ -365,6 +367,8 @@ async fn test_error_scenarios() {
 
 #[tokio::test]
 async fn test_high_cardinality_protection() {
+    let _guard = otel_test_guard().await;
+
     let setup = OtelSetupBuilder::new("cardinality_test_service")
         .build()
         .expect("Failed to set up OpenTelemetry");
@@ -399,7 +403,7 @@ async fn test_high_cardinality_protection() {
     // Metrics should only have limited cardinality based on method and protocol
     // not on user_id, item_id, or other high-cardinality fields
     let app = setup.metrics_router();
-    let server = TestServer::new(app).unwrap();
+    let server = TestServer::builder().mock_transport().build(app).unwrap();
 
     let response = server.get("/metrics").await;
     let metrics_text = response.text();

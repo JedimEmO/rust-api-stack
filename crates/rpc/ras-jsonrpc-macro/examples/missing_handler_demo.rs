@@ -102,17 +102,15 @@ fn main() {
 
     println!("=== JSON-RPC Service Trait Demo ===\n");
 
-    println!("Building service from a complete trait implementation...");
+    println!("Building service from a trait implementation that covers every method...");
 
     let complete_builder = CalculatorServiceBuilder::new(CalculatorServiceImpl)
         .base_url("/api/calc")
         .auth_provider(DemoAuthProvider);
 
     // This should succeed
-    let _router = complete_builder
-        .build()
-        .expect("Failed to build complete service");
-    println!("✓ Build succeeded! All handlers are configured.");
+    let _router = complete_builder.build().expect("Failed to build service");
+    println!("Build succeeded. All handlers are configured.");
 
     println!("\nSummary:");
     println!("- The JSON-RPC service builder accepts a generated trait implementation");

@@ -251,7 +251,7 @@ pub fn generate_server_code(
 
                 // Wait for response with timeout
                 let response = tokio::time::timeout(
-                    std::time::Duration::from_secs(30), // TODO: Make configurable
+                    std::time::Duration::from_secs(30),
                     response_receiver
                 ).await
                 .map_err(|_| ras_jsonrpc_bidirectional_types::BidirectionalError::Timeout)?
@@ -273,14 +273,12 @@ pub fn generate_server_code(
     });
 
     quote! {
-        #[cfg(feature = "server")]
         /// Typed client handle for server-side client management
         pub struct #client_handle_name<'a> {
             client_id: ras_jsonrpc_bidirectional_types::ConnectionId,
             connection_manager: &'a dyn ras_jsonrpc_bidirectional_types::ConnectionManager,
         }
 
-        #[cfg(feature = "server")]
         impl<'a> #client_handle_name<'a> {
             /// Create a new client handle
             pub fn new(client_id: ras_jsonrpc_bidirectional_types::ConnectionId, connection_manager: &'a dyn ras_jsonrpc_bidirectional_types::ConnectionManager) -> Self {
@@ -313,7 +311,6 @@ pub fn generate_server_code(
             #(#client_handle_call_methods)*
         }
 
-        #[cfg(feature = "server")]
         /// Generated bidirectional service trait
         #[async_trait::async_trait]
         pub trait #service_trait_name: Send + Sync + 'static {
@@ -339,14 +336,12 @@ pub fn generate_server_code(
             }
         }
 
-        #[cfg(feature = "server")]
         /// Generated message handler for the bidirectional service
         pub struct #handler_name<T: #service_trait_name, M: ras_jsonrpc_bidirectional_types::ConnectionManager + 'static> {
             service: std::sync::Arc<T>,
             connection_manager: std::sync::Arc<M>,
         }
 
-        #[cfg(feature = "server")]
         impl<T: #service_trait_name, M: ras_jsonrpc_bidirectional_types::ConnectionManager + 'static> #handler_name<T, M> {
             pub fn new(
                 service: std::sync::Arc<T>,
@@ -393,7 +388,6 @@ pub fn generate_server_code(
             #(#default_notification_impls)*
         }
 
-        #[cfg(feature = "server")]
         #[async_trait::async_trait]
         impl<T: #service_trait_name, M: ras_jsonrpc_bidirectional_types::ConnectionManager + 'static> ras_jsonrpc_bidirectional_server::MessageHandler for #handler_name<T, M> {
             async fn handle_request(
@@ -424,8 +418,7 @@ pub fn generate_server_code(
                 Ok(())
             }
 
-            async fn on_disconnect(&self, context: std::sync::Arc<ras_jsonrpc_bidirectional_server::ConnectionContext>, reason: Option<String>) -> ras_jsonrpc_bidirectional_server::ServerResult<()> {
-                let _ = reason; // Unused for now
+            async fn on_disconnect(&self, context: std::sync::Arc<ras_jsonrpc_bidirectional_server::ConnectionContext>, _reason: Option<String>) -> ras_jsonrpc_bidirectional_server::ServerResult<()> {
                 // Call the service's on_client_disconnected
                 if let Err(e) = self.service.on_client_disconnected(context.id, self.connection_manager.as_ref()).await {
                     return Err(ras_jsonrpc_bidirectional_server::ServerError::Internal(e.to_string()));
@@ -434,7 +427,6 @@ pub fn generate_server_code(
             }
         }
 
-        #[cfg(feature = "server")]
         /// Builder for the bidirectional WebSocket service
         pub struct #builder_name<T: #service_trait_name, A: ras_auth_core::AuthProvider> {
             service: std::sync::Arc<T>,
@@ -442,7 +434,6 @@ pub fn generate_server_code(
             require_auth: bool,
         }
 
-        #[cfg(feature = "server")]
         impl<T: #service_trait_name, A: ras_auth_core::AuthProvider> #builder_name<T, A> {
             /// Create a new builder
             pub fn new(service: T, auth_provider: A) -> Self {

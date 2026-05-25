@@ -2,21 +2,25 @@
 
 Procedural macros for generating type-safe JSON-RPC services with authentication and axum integration.
 
+See the canonical mdBook
+[`jsonrpc_service!` guide](../../../documentation/src/macros/jsonrpc-service.md)
+for the rationale, auth model, usage flow, and runnable examples.
+
 ## Overview
 
-This crate provides the `jsonrpc_service!` procedural macro that generates type-safe JSON-RPC services with built-in authentication, authorization, and seamless axum integration. It transforms a declarative service definition into a fully functional JSON-RPC server with compile-time safety guarantees.
+This crate provides the `jsonrpc_service!` procedural macro that generates type-safe JSON-RPC services with built-in authentication, authorization, and axum integration. It transforms a declarative service definition into a JSON-RPC router with compile-time checks for the generated service trait.
 
 ## Features
 
-- ✅ **Declarative Service Definition**: Clean, readable syntax for defining JSON-RPC methods
-- ✅ **Authentication Integration**: Built-in support for `UNAUTHORIZED` and `WITH_PERMISSIONS` methods
-- ✅ **Type Safety**: Compile-time validation of request/response types
-- ✅ **Axum Integration**: Generates standard axum `Router` for easy composition
-- ✅ **Trait-Based Service Wiring**: Implement one generated trait and pass it to the service builder
-- ✅ **Versioned Methods**: Optional request/response migrations for legacy wire methods
-- ✅ **Async Support**: Full async/await support throughout
-- ✅ **JSON-RPC 2.0 Compliant**: Complete protocol compliance with proper error handling
-- ✅ **OpenRPC Document Generation**: Automatic API documentation generation
+- **Declarative service definition**: Clean, readable syntax for defining JSON-RPC methods
+- **Authentication integration**: Built-in support for `UNAUTHORIZED` and `WITH_PERMISSIONS` methods
+- **Type safety**: Compile-time validation of request/response types
+- **Axum integration**: Generates standard axum `Router` for easy composition
+- **Trait-based service wiring**: Implement one generated trait and pass it to the service builder
+- **Versioned methods**: Optional request/response migrations for legacy wire methods
+- **Async support**: Full async/await support throughout
+- **JSON-RPC 2.0 responses**: Generates standard success and error envelopes
+- **OpenRPC document generation**: Automatic API documentation generation
 
 ## Usage
 
@@ -24,15 +28,33 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-ras-jsonrpc-macro = "0.2.0"
-ras-jsonrpc-core = "0.1.2"  # For AuthProvider and VersionMigration traits
-axum = "0.8"                  # For web server integration
+ras-jsonrpc-macro = { version = "0.2.0", default-features = false }
+ras-jsonrpc-core = { version = "0.1.2", optional = true }
+ras-jsonrpc-types = "0.1.1"
 serde = { version = "1.0", features = ["derive"] }
-tokio = { version = "1.0", features = ["full"] }
+serde_json = "1.0"
+schemars = "1.0.0-alpha.20"
 
-# Optional: For OpenRPC document generation
-schemars = "0.8"              # Required if using openrpc feature
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+axum = { version = "0.8", optional = true }
+tokio = { version = "1.0", features = ["full"], optional = true }
+reqwest = { version = "0.12", features = ["json"], optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json"], optional = true }
+
+[features]
+default = []
+server = [
+    "dep:ras-jsonrpc-core",
+    "dep:axum",
+    "dep:tokio",
+]
+client = ["dep:reqwest"]
 ```
+
+Define `server` and `client` on the API crate that invokes the macro. Downstream
+server and client crates enable the API crate feature they need.
 
 ## Quick Start
 
@@ -75,7 +97,7 @@ struct MyAuthProvider;
 impl AuthProvider for MyAuthProvider {
     fn authenticate(&self, token: String) -> AuthFuture<'_> {
         Box::pin(async move {
-            // Validate JWT token (simplified)
+            // Validate the bearer token (simplified)
             if token.starts_with("valid_") {
                 let mut permissions = HashSet::new();
                 permissions.insert("user".to_string());
@@ -163,7 +185,9 @@ jsonrpc_service!({
     service_name: ServiceName,  // Name of the generated service
     openrpc: true,              // Optional: Enable OpenRPC generation
     methods: [
-        // Method definitions...
+        UNAUTHORIZED sign_in(SignInRequest) -> SignInResponse,
+        WITH_PERMISSIONS(["user"]) get_profile(()) -> UserProfile,
+        WITH_PERMISSIONS(["admin"]) delete_user(UserId) -> (),
     ]
 });
 ```
@@ -182,7 +206,8 @@ UNAUTHORIZED method_name(RequestType) -> ResponseType,
 WITH_PERMISSIONS(["perm1", "perm2"]) method_name(RequestType) -> ResponseType,
 ```
 - Requires valid authentication
-- Checks for specified permissions
+- Requires all listed permissions in the group
+- Use `WITH_PERMISSIONS(["admin"] | ["moderator", "editor"])` for OR between permission groups
 - Trait method signature: `fn method(&self, &AuthenticatedUser, RequestType) -> impl Future<Output = Result<ResponseType, Error>> + Send`
 
 #### Empty Permissions (Any Valid Token)
@@ -200,18 +225,29 @@ The macro generates:
 ### Service Builder
 ```rust
 pub trait MyServiceTrait: Send + Sync + 'static {
-    // One method per JSON-RPC method definition.
-}
+    async fn sign_in(
+        &self,
+        request: SignInRequest,
+    ) -> Result<SignInResponse, Box<dyn std::error::Error + Send + Sync>>;
 
-pub struct MyServiceBuilder<T: MyServiceTrait> {
-    // Internal fields...
+    async fn get_profile(
+        &self,
+        user: &ras_jsonrpc_core::AuthenticatedUser,
+        request: (),
+    ) -> Result<UserProfile, Box<dyn std::error::Error + Send + Sync>>;
+
+    async fn delete_user(
+        &self,
+        user: &ras_jsonrpc_core::AuthenticatedUser,
+        request: UserId,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
 }
 
 impl<T: MyServiceTrait> MyServiceBuilder<T> {
-    pub fn new(service: T) -> Self { /* ... */ }
-    pub fn base_url(self, base_url: impl Into<String>) -> Self { /* ... */ }
-    pub fn auth_provider<T: AuthProvider>(self, provider: T) -> Self { /* ... */ }
-    pub fn build(self) -> Result<axum::Router, String> { /* ... */ }
+    pub fn new(service: T) -> Self;
+    pub fn base_url(self, base_url: impl Into<String>) -> Self;
+    pub fn auth_provider<A: ras_jsonrpc_core::AuthProvider>(self, provider: A) -> Self;
+    pub fn build(self) -> Result<axum::Router, String>;
 }
 ```
 
@@ -293,12 +329,13 @@ jsonrpc_service!({
 });
 ```
 
-The generated server accepts both `rename_user.v2` and `rename_user.v1`. The generated Rust client exposes `rename_user(...)` for the canonical method and `rename_user_v1(...)` for the legacy method.
+The generated server accepts both `rename_user.v2` and `rename_user.v1`. The generated Rust client exposes `rename_user(...)` for the canonical method and `rename_user_v1(...)` for the legacy method. Version labels can be identifiers such as `v1` or string labels such as `"1.0.0"`; string labels are sanitized for Rust method suffixes, for example `rename_user_v1_0_0(...)`.
 
 ## Authentication Flow
 
 ### 1. Token Extraction
-The generated service automatically extracts Bearer tokens from the `Authorization` header:
+The generated service automatically extracts bearer tokens from the
+`Authorization` header, and can also accept a configured secure session cookie:
 ```
 Authorization: Bearer <token>
 ```
@@ -366,7 +403,7 @@ curl -X POST http://localhost:3000/api/rpc \
 
 ## Error Handling
 
-The macro generates comprehensive error handling:
+The macro generates typed error handling for:
 
 - **Parse Errors**: Invalid JSON (-32700)
 - **Invalid Request**: Malformed JSON-RPC (-32600)  
@@ -379,7 +416,7 @@ The macro generates comprehensive error handling:
 
 ## OpenRPC Document Generation
 
-The macro can automatically generate OpenRPC specification documents for your JSON-RPC API. This provides machine-readable API documentation that can be used by tools like the openrpc-to-bruno converter.
+The macro can automatically generate OpenRPC specification documents for your JSON-RPC API. This provides machine-readable API documentation for clients, API explorers, and external tooling.
 
 ### Enabling OpenRPC
 
@@ -389,7 +426,8 @@ jsonrpc_service!({
     service_name: MyService,
     openrpc: true,  // Generates to target/openrpc/myservice.json
     methods: [
-        // ... method definitions ...
+        UNAUTHORIZED sign_in(SignInRequest) -> SignInResponse,
+        WITH_PERMISSIONS(["user"]) get_profile(()) -> UserProfile,
     ]
 });
 ```
@@ -400,7 +438,8 @@ jsonrpc_service!({
     service_name: MyService,
     openrpc: { output: "docs/api/myservice.json" },
     methods: [
-        // ... method definitions ...
+        UNAUTHORIZED sign_in(SignInRequest) -> SignInResponse,
+        WITH_PERMISSIONS(["user"]) get_profile(()) -> UserProfile,
     ]
 });
 ```
@@ -440,7 +479,7 @@ The generated OpenRPC document includes:
 
 - **Service metadata**: Title, version, description
 - **Method specifications**: Name, parameters, results
-- **JSON Schemas**: Complete type definitions with descriptions
+- **JSON Schemas**: Type definitions with descriptions
 - **Authentication metadata**: `x-authentication` and `x-permissions` extensions for each method
 - **Version metadata**: `x-ras-version`, `x-ras-canonical-version`, and `x-ras-canonical-method` extensions for versioned methods
 
@@ -484,23 +523,14 @@ fn main() {
 ```
 
 This generates an OpenRPC document at `target/openrpc/userservice.json` with:
-- Complete method documentation
+- Method documentation
 - JSON schemas for all types
 - Authentication requirements (`x-authentication: true`)
 - Permission requirements (`x-permissions: ["admin"]`)
 
-### Converting to Bruno Collections
-
-The generated OpenRPC documents can be converted to Bruno API testing collections using the `openrpc-to-bruno` tool:
-
-```bash
-cargo install openrpc-to-bruno
-openrpc-to-bruno -i target/openrpc/userservice.json -o bruno-collection
-```
-
 ## Integration
 
-This crate works seamlessly with:
+This crate works with:
 
 - [`ras-jsonrpc-core`](../ras-jsonrpc-core) - Authentication traits and types
 - [`ras-jsonrpc-types`](../ras-jsonrpc-types) - JSON-RPC protocol types
@@ -508,12 +538,19 @@ This crate works seamlessly with:
 
 ## Examples
 
-See the [`examples/`](../../examples/) directory for complete working examples:
+See the [`examples/`](../../../examples/) directory for usage examples:
 
-- [`basic-jsonrpc-service`](../../examples/basic-jsonrpc-service) - Complete service with authentication
+- [`basic-jsonrpc-service`](../../../examples/basic-jsonrpc/service) - Runnable service with authentication
 - [`usage.rs`](examples/usage.rs) - Standalone usage example
 - [`openrpc_demo.rs`](examples/openrpc_demo.rs) - OpenRPC document generation example
 
+## Checks
+
+```bash
+cargo test -p ras-jsonrpc-macro --locked
+cargo clippy -p ras-jsonrpc-macro --all-targets --all-features --locked -- -D warnings
+```
+
 ## License
 
-This project is licensed under the MIT License.
+This project is licensed under either MIT or Apache-2.0.

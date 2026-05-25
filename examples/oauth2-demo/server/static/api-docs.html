@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>API Documentation - Google OAuth2 Example</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📚</text></svg>">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.75em%22 font-size=%2242%22>API</text></svg>">
     <style>
         :root {
             --primary-color: #4285f4;
@@ -472,41 +472,41 @@
     <div class="background-overlay"></div>
     <div class="container">
         <div class="sidebar">
-            <h2>📚 Navigation</h2>
+            <h2>Navigation</h2>
             <nav>
                 <ul>
-                    <li><a href="/examples/google-oauth-example/server/static" class="button secondary">← Back to Home</a></li>
-                    <li><a href="#authentication">🔐 Authentication</a></li>
-                    <li><a href="#endpoints">📋 Endpoints</a></li>
-                    <li><a href="#get_user_info">👤 Get User Info</a></li>
-                    <li><a href="#list_documents">📄 List Documents</a></li>
-                    <li><a href="#create_document">➕ Create Document</a></li>
-                    <li><a href="#delete_document">🗑️ Delete Document</a></li>
-                    <li><a href="#get_system_status">⚙️ System Status</a></li>
-                    <li><a href="#get_beta_features">🧪 Beta Features</a></li>
-                    <li><a href="#permissions">🎯 Permissions</a></li>
-                    <li><a href="#examples">💡 Examples</a></li>
+                    <li><a href="/" class="button secondary">← Back to Home</a></li>
+                    <li><a href="#authentication">Authentication</a></li>
+                    <li><a href="#endpoints">Endpoints</a></li>
+                    <li><a href="#get_user_info">Get User Info</a></li>
+                    <li><a href="#list_documents">List Documents</a></li>
+                    <li><a href="#create_document">Create Document</a></li>
+                    <li><a href="#delete_document">Delete Document</a></li>
+                    <li><a href="#get_system_status">System Status</a></li>
+                    <li><a href="#get_beta_features">Beta Features</a></li>
+                    <li><a href="#permissions">Permissions</a></li>
+                    <li><a href="#examples">Examples</a></li>
                 </ul>
             </nav>
             
             <div style="margin-top: 30px; padding: 16px; background: var(--background-color); border-radius: var(--border-radius); font-size: 13px;">
-                <strong>💡 Pro Tip:</strong><br>
+                <strong>Tip:</strong><br>
                 Use the "Try It" buttons to test endpoints directly from this page!
             </div>
         </div>
         
         <div class="main-content">
             <div class="header animate-fade-in">
-                <h1>📚 JSON-RPC API Documentation</h1>
+                <h1>JSON-RPC API Documentation</h1>
                 <p>Interactive documentation for the Google OAuth2 Example - Rust Agent Stack</p>
                 <div class="header-actions">
-                    <button id="authStatusBtn" class="button secondary" onclick="checkAuthStatus()">🔄 Check Auth Status</button>
-                    <button class="button" onclick="window.open('/', '_blank')">🚀 Try OAuth2 Flow</button>
+                    <button id="authStatusBtn" class="button secondary" onclick="checkAuthStatus()">Check Auth Status</button>
+                    <button class="button" onclick="window.open('/', '_blank')">Try OAuth2 Flow</button>
                 </div>
             </div>
 
             <div class="endpoint" id="authentication">
-                <h3>🔐 Authentication</h3>
+                <h3>Authentication</h3>
                 <p>All API endpoints require authentication using a JWT token obtained through the OAuth2 flow. Include the token in the Authorization header:</p>
                 <div class="code-block" data-language="http">
                     <button class="copy-button" onclick="copyToClipboard(this)">Copy</button>
@@ -519,7 +519,7 @@ Authorization: Bearer YOUR_JWT_TOKEN
                 </div>
                 
                 <div class="try-it-section" id="tokenSection">
-                    <h4>🔑 JWT Token Manager</h4>
+                    <h4>JWT Token Manager</h4>
                     <p>Enter your JWT token to enable interactive API testing:</p>
                     <div style="display: flex; gap: 12px; margin-top: 16px; align-items: center;">
                         <input type="password" id="jwtToken" placeholder="Paste your JWT token here..." 
@@ -532,7 +532,7 @@ Authorization: Bearer YOUR_JWT_TOKEN
             </div>
 
             <div class="endpoint" id="endpoints">
-                <h3>📌 Available Endpoints</h3>
+                <h3>Available Endpoints</h3>
                 <p>All requests use the JSON-RPC 2.0 protocol. Send POST requests to <code>/api/rpc</code> with the following structure:</p>
                 <div class="code-block json" data-language="json">
                     <button class="copy-button" onclick="copyToClipboard(this)">Copy</button>
@@ -545,7 +545,7 @@ Authorization: Bearer YOUR_JWT_TOKEN
                 </div>
                 
                 <div style="background: var(--background-color); padding: 20px; border-radius: var(--border-radius); margin: 20px 0;">
-                    <h4>🎯 Quick Stats</h4>
+                    <h4>Quick Stats</h4>
                     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; margin-top: 12px;">
                         <div style="text-align: center;">
                             <div style="font-size: 24px; font-weight: 600; color: var(--primary-color);">6</div>
@@ -575,7 +575,7 @@ Authorization: Bearer YOUR_JWT_TOKEN
                 <p>Returns information about the currently authenticated user, including their permissions and metadata.</p>
                 
                 <div class="try-it-section" data-endpoint="get_user_info">
-                    <button class="button" onclick="toggleEndpointForm('get_user_info')">🧪 Try It Out</button>
+                    <button class="button" onclick="toggleEndpointForm('get_user_info')">Try It Out</button>
                 </div>
                 
                 <div class="endpoint-form" id="form_get_user_info">
@@ -646,7 +646,7 @@ Authorization: Bearer YOUR_JWT_TOKEN
                 <p>Retrieves a paginated list of documents available to the user.</p>
                 
                 <div class="try-it-section" data-endpoint="list_documents">
-                    <button class="button" onclick="toggleEndpointForm('list_documents')">🧪 Try It Out</button>
+                    <button class="button" onclick="toggleEndpointForm('list_documents')">Try It Out</button>
                 </div>
                 
                 <div class="endpoint-form" id="form_list_documents">
@@ -740,7 +740,7 @@ Authorization: Bearer YOUR_JWT_TOKEN
                 <p>Creates a new document. Requires elevated permissions.</p>
                 
                 <div class="try-it-section" data-endpoint="create_document">
-                    <button class="button" onclick="toggleEndpointForm('create_document')">🧪 Try It Out</button>
+                    <button class="button" onclick="toggleEndpointForm('create_document')">Try It Out</button>
                 </div>
                 
                 <div class="endpoint-form" id="form_create_document">
@@ -915,7 +915,7 @@ Authorization: Bearer YOUR_JWT_TOKEN
         </div>
 
         <div class="endpoint" id="permissions">
-            <h3>🎯 Permission System</h3>
+            <h3>Permission System</h3>
             <p>The application uses a role-based permission system based on user attributes:</p>
             
             <h4>Permission Assignment Rules</h4>
@@ -963,7 +963,7 @@ Authorization: Bearer YOUR_JWT_TOKEN
         </div>
 
         <div class="endpoint" id="examples">
-            <h3>🧪 Complete Examples</h3>
+            <h3>Complete Examples</h3>
             
             <h4>Testing with curl</h4>
             <p>Here are complete curl examples for testing the API:</p>
@@ -1032,7 +1032,7 @@ curl -X POST http://localhost:3000/api/rpc \
 
     <script>
         // Global state
-        let authToken = localStorage.getItem('jwt_token') || '';
+        let authToken = sessionStorage.getItem('jwt_token') || '';
         let isAuthenticated = false;
 
         // Initialize page
@@ -1070,7 +1070,7 @@ curl -X POST http://localhost:3000/api/rpc \
         function checkStoredToken() {
             if (authToken) {
                 document.getElementById('jwtToken').value = authToken.substring(0, 20) + '...';
-                updateTokenStatus('Token loaded from storage', 'success');
+                updateTokenStatus('Token loaded for this browser session', 'success');
                 isAuthenticated = true;
                 updateTryItSections();
             }
@@ -1079,7 +1079,7 @@ curl -X POST http://localhost:3000/api/rpc \
         function checkAuthStatus() {
             const btn = document.getElementById('authStatusBtn');
             const originalText = btn.textContent;
-            btn.textContent = '🔄 Checking...';
+            btn.textContent = 'Checking...';
             btn.disabled = true;
             
             if (authToken) {
@@ -1125,7 +1125,7 @@ curl -X POST http://localhost:3000/api/rpc \
             }
             
             authToken = token;
-            localStorage.setItem('jwt_token', token);
+            sessionStorage.setItem('jwt_token', token);
             isAuthenticated = true;
             updateTokenStatus('Token set successfully!', 'success');
             updateTryItSections();
@@ -1136,7 +1136,7 @@ curl -X POST http://localhost:3000/api/rpc \
 
         function clearToken() {
             authToken = '';
-            localStorage.removeItem('jwt_token');
+            sessionStorage.removeItem('jwt_token');
             isAuthenticated = false;
             document.getElementById('jwtToken').value = '';
             updateTokenStatus('Token cleared', 'info');

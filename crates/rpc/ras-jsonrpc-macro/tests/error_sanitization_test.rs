@@ -1,11 +1,7 @@
 #[cfg(test)]
 mod tests {
-    use axum::Router;
-    use reqwest::Client;
     use serde::{Deserialize, Serialize};
-    use serde_json::json;
-    use std::net::SocketAddr;
-    use tokio::net::TcpListener;
+    use serde_json::{Value, json};
 
     // Test types
     #[derive(Serialize, Deserialize, Debug)]
@@ -49,47 +45,38 @@ mod tests {
         }
     }
 
-    async fn setup_test_server() -> (SocketAddr, Router) {
+    fn setup_test_server() -> axum_test::TestServer {
         let router = TestServiceBuilder::new(TestServiceImpl)
             .base_url("/api/rpc")
             .build()
             .expect("Failed to build router");
 
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
+        axum_test::TestServer::builder()
+            .mock_transport()
+            .build(router)
+            .unwrap()
+    }
 
-        (addr, router)
+    async fn rpc(server: &axum_test::TestServer, body: Value) -> Value {
+        server.post("/api/rpc").json(&body).await.json()
     }
 
     #[tokio::test]
     async fn test_internal_error_sanitization() {
-        let (addr, router) = setup_test_server().await;
+        let server = setup_test_server();
 
-        // Spawn the server
-        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-        tokio::spawn(async move {
-            axum::serve(listener, router).await.unwrap();
-        });
-
-        // Give the server a moment to start
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        let client = Client::new();
-        let response = client
-            .post(format!("http://{}/api/rpc", addr))
-            .json(&json!({
+        let json_response = rpc(
+            &server,
+            json!({
                 "jsonrpc": "2.0",
                 "method": "test_internal_error",
                 "params": {
                     "value": "test"
                 },
                 "id": 1
-            }))
-            .send()
-            .await
-            .unwrap();
-
-        let json_response: serde_json::Value = response.json().await.unwrap();
+            }),
+        )
+        .await;
         println!(
             "Response: {}",
             serde_json::to_string_pretty(&json_response).unwrap()
@@ -105,33 +92,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_invalid_params_error_sanitization() {
-        let (addr, router) = setup_test_server().await;
+        let server = setup_test_server();
 
-        // Spawn the server
-        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-        tokio::spawn(async move {
-            axum::serve(listener, router).await.unwrap();
-        });
-
-        // Give the server a moment to start
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        let client = Client::new();
-        let response = client
-            .post(format!("http://{}/api/rpc", addr))
-            .json(&json!({
+        let json_response = rpc(
+            &server,
+            json!({
                 "jsonrpc": "2.0",
                 "method": "test_internal_error",
                 "params": {
                     "wrong_field": "test" // Invalid field name
                 },
                 "id": 2
-            }))
-            .send()
-            .await
-            .unwrap();
-
-        let json_response: serde_json::Value = response.json().await.unwrap();
+            }),
+        )
+        .await;
 
         // Verify error is sanitized
         assert_eq!(json_response["jsonrpc"], "2.0");
@@ -143,35 +117,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_authentication_error_sanitization() {
-        let (addr, router) = setup_test_server().await;
-
-        // Spawn the server
-        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-        tokio::spawn(async move {
-            axum::serve(listener, router).await.unwrap();
-        });
-
-        // Give the server a moment to start
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        let client = Client::new();
+        let server = setup_test_server();
 
         // Test missing auth header
-        let response = client
-            .post(format!("http://{}/api/rpc", addr))
-            .json(&json!({
+        let json_response = rpc(
+            &server,
+            json!({
                 "jsonrpc": "2.0",
                 "method": "test_auth_error",
                 "params": {
                     "value": "test"
                 },
                 "id": 3
-            }))
-            .send()
-            .await
-            .unwrap();
-
-        let json_response: serde_json::Value = response.json().await.unwrap();
+            }),
+        )
+        .await;
 
         // Verify error is sanitized
         assert_eq!(json_response["jsonrpc"], "2.0");
@@ -183,31 +143,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_method_not_found_includes_method_name() {
-        let (addr, router) = setup_test_server().await;
+        let server = setup_test_server();
 
-        // Spawn the server
-        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-        tokio::spawn(async move {
-            axum::serve(listener, router).await.unwrap();
-        });
-
-        // Give the server a moment to start
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        let client = Client::new();
-        let response = client
-            .post(format!("http://{}/api/rpc", addr))
-            .json(&json!({
+        let json_response = rpc(
+            &server,
+            json!({
                 "jsonrpc": "2.0",
                 "method": "non_existent_method",
                 "params": {},
                 "id": 4
-            }))
-            .send()
-            .await
-            .unwrap();
-
-        let json_response: serde_json::Value = response.json().await.unwrap();
+            }),
+        )
+        .await;
 
         // Verify error includes method name (this is safe to expose)
         assert_eq!(json_response["jsonrpc"], "2.0");
@@ -222,27 +169,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_parse_error_sanitization() {
-        let (addr, router) = setup_test_server().await;
-
-        // Spawn the server
-        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-        tokio::spawn(async move {
-            axum::serve(listener, router).await.unwrap();
-        });
-
-        // Give the server a moment to start
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        let client = Client::new();
-        let response = client
-            .post(format!("http://{}/api/rpc", addr))
-            .header("Content-Type", "application/json")
-            .body("invalid json {")
-            .send()
+        let server = setup_test_server();
+        let json_response: Value = server
+            .post("/api/rpc")
+            .text("invalid json {")
+            .content_type("application/json")
             .await
-            .unwrap();
-
-        let json_response: serde_json::Value = response.json().await.unwrap();
+            .json();
 
         // Verify error is sanitized
         assert_eq!(json_response["jsonrpc"], "2.0");

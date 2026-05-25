@@ -56,7 +56,6 @@ pub fn generate_static_hosting_code(
     let template_lit = syn::LitStr::new(TEMPLATE_CONTENT, proc_macro2::Span::call_site());
 
     quote! {
-        #[cfg(feature = "server")]
         async fn #docs_handler_name() -> ::axum::response::Html<String> {
             static HTML: ::std::sync::OnceLock<String> = ::std::sync::OnceLock::new();
 
@@ -77,7 +76,6 @@ pub fn generate_static_hosting_code(
             ::axum::response::Html(html.clone())
         }
 
-        #[cfg(feature = "server")]
         async fn openapi_json_handler() -> ::axum::Json<::serde_json::Value> {
             ::axum::Json(#openapi_fn_name())
         }
@@ -101,7 +99,6 @@ pub fn generate_static_routes(
     );
 
     quote! {
-        #[cfg(feature = "server")]
         {
             router = router
                 .route(#docs_path, ::axum::routing::get(#docs_handler_name))

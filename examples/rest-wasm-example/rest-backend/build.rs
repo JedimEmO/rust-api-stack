@@ -6,9 +6,7 @@ fn main() {
     // Import and call the OpenAPI generation function from the API crate
     // This will generate the OpenAPI spec at compile time
     match rest_api::generate_userservice_openapi_to_file() {
-        Ok(()) => {
-            println!("cargo:warning=OpenAPI specification generated successfully at compile time!");
-        }
+        Ok(()) => {}
         Err(e) => {
             println!(
                 "cargo:warning=Failed to generate OpenAPI specification: {}",
@@ -16,5 +14,18 @@ fn main() {
             );
             // Don't fail the build, just warn
         }
+    }
+
+    let manifest = ras_permission_manifest::PermissionManifest::from_services([
+        rest_api::generate_userservice_permission_manifest(),
+    ]);
+    if let Err(e) = ras_permission_manifest::write_manifest(
+        "target/ras-permissions/rest-wasm-example.json",
+        &manifest,
+    ) {
+        println!(
+            "cargo:warning=Failed to generate permission manifest: {}",
+            e
+        );
     }
 }

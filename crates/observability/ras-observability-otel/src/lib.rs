@@ -1,7 +1,7 @@
 //! OpenTelemetry implementation for Rust Agent Stack observability
 //!
-//! This crate provides a production-ready OpenTelemetry implementation
-//! with Prometheus export support and standard metric definitions.
+//! This crate provides an OpenTelemetry implementation with Prometheus export
+//! support and standard metric definitions.
 
 use async_trait::async_trait;
 use axum::{
@@ -193,7 +193,7 @@ impl OtelSetupBuilder {
     /// Build and initialize OpenTelemetry
     pub fn build(self) -> Result<OtelSetup, Box<dyn std::error::Error>> {
         // Create or use existing Prometheus registry
-        let prometheus_registry = self.prometheus_registry.unwrap_or_else(Registry::new);
+        let prometheus_registry = self.prometheus_registry.unwrap_or_default();
 
         // Create Prometheus exporter
         let prometheus_exporter = opentelemetry_prometheus::exporter()
@@ -272,11 +272,11 @@ async fn metrics_handler(
         .encode(&metric_families, &mut buffer)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    Ok(Response::builder()
+    Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", encoder.format_type())
         .body(Body::from(buffer))
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 /// Convenience function to create a standard observability setup

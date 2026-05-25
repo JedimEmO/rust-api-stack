@@ -1,21 +1,11 @@
-use oauth2_demo_api::*;
-use std::fs;
-
 fn main() {
-    // Create target/openrpc directory if it doesn't exist
-    fs::create_dir_all("openrpc").expect("Failed to create directory");
+    println!("cargo:rerun-if-changed=../api/src/lib.rs");
+    oauth2_demo_api::generate_googleoauth2service_openrpc_to_file()
+        .expect("failed to generate OAuth2 demo OpenRPC document");
 
-    // Generate OpenRPC document
-    let openrpc_doc = generate_googleoauth2service_openrpc();
-
-    println!("✅ OpenRPC document generated successfully!");
-    println!("\n📋 Generated OpenRPC content:");
-    println!("{}", serde_json::to_string_pretty(&openrpc_doc).unwrap());
-
-    let file = generate_googleoauth2service_openrpc();
-    fs::write(
-        "openrpc/google-oauth2.openrpc.json",
-        serde_json::to_string_pretty(&file).unwrap(),
-    )
-    .unwrap();
+    let manifest = ras_permission_manifest::PermissionManifest::from_services([
+        oauth2_demo_api::generate_googleoauth2service_permission_manifest(),
+    ]);
+    ras_permission_manifest::write_manifest("target/ras-permissions/oauth2-demo.json", &manifest)
+        .expect("failed to generate OAuth2 demo permission manifest");
 }

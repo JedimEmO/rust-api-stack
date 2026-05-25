@@ -425,12 +425,12 @@ fn draw_chat_screen(frame: &mut Frame, app: &mut AppState, room_name: &str) {
     let mut user_list: Vec<String> = vec!["System".to_string()];
 
     // Add users from room_users for current room
-    if let Some((room_id, _)) = &app.current_room {
-        if let Some(users) = app.room_users.get(room_id) {
-            for user in users {
-                if !user_list.contains(user) {
-                    user_list.push(user.clone());
-                }
+    if let Some((room_id, _)) = &app.current_room
+        && let Some(users) = app.room_users.get(room_id)
+    {
+        for user in users {
+            if !user_list.contains(user) {
+                user_list.push(user.clone());
             }
         }
     }
@@ -557,48 +557,48 @@ fn draw_chat_screen(frame: &mut Frame, app: &mut AppState, room_name: &str) {
         .split(chunks[2]);
 
     // Typing indicator
-    if let Some((room_id, _)) = &app.current_room {
-        if let Some(typing_users) = app.typing_users.get(room_id) {
-            let typing_users: Vec<&String> = typing_users
-                .iter()
-                .filter(|u| app.username.as_ref() != Some(u))
-                .collect();
+    if let Some((room_id, _)) = &app.current_room
+        && let Some(typing_users) = app.typing_users.get(room_id)
+    {
+        let typing_users: Vec<&String> = typing_users
+            .iter()
+            .filter(|u| app.username.as_ref() != Some(u))
+            .collect();
 
-            if !typing_users.is_empty() {
-                let typing_text = if typing_users.len() == 1 {
-                    format!("{} is typing...", typing_users[0])
-                } else if typing_users.len() == 2 {
-                    format!("{} and {} are typing...", typing_users[0], typing_users[1])
-                } else {
-                    format!(
-                        "{} and {} others are typing...",
-                        typing_users[0],
-                        typing_users.len() - 1
-                    )
-                };
+        if !typing_users.is_empty() {
+            let typing_text = if typing_users.len() == 1 {
+                format!("{} is typing...", typing_users[0])
+            } else if typing_users.len() == 2 {
+                format!("{} and {} are typing...", typing_users[0], typing_users[1])
+            } else {
+                format!(
+                    "{} and {} others are typing...",
+                    typing_users[0],
+                    typing_users.len() - 1
+                )
+            };
 
-                // Animated dots based on current time
-                let dots = match std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis()
-                    / 500
-                    % 4
-                {
-                    0 => "",
-                    1 => ".",
-                    2 => "..",
-                    _ => "...",
-                };
+            // Animated dots based on current time
+            let dots = match std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+                / 500
+                % 4
+            {
+                0 => "",
+                1 => ".",
+                2 => "..",
+                _ => "...",
+            };
 
-                let typing_indicator =
-                    Paragraph::new(format!("{}{}", typing_text.trim_end_matches('.'), dots)).style(
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::ITALIC),
-                    );
-                frame.render_widget(typing_indicator, input_chunks[0]);
-            }
+            let typing_indicator =
+                Paragraph::new(format!("{}{}", typing_text.trim_end_matches('.'), dots)).style(
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::ITALIC),
+                );
+            frame.render_widget(typing_indicator, input_chunks[0]);
         }
     }
 

@@ -8,13 +8,13 @@ This crate provides the foundational authentication, authorization, and version 
 
 ## Features
 
-- ✅ **Async Authentication**: Full async/await support for authentication operations
-- ✅ **Permission-Based Authorization**: Fine-grained permission checking
-- ✅ **Flexible Auth Providers**: Support for JWT, API keys, or custom authentication
-- ✅ **Comprehensive Error Handling**: Detailed error types for all authentication scenarios
-- ✅ **Extension Traits**: Optional authentication helpers
-- ✅ **Version Migration**: Re-exports `VersionMigration` for opt-in API compatibility paths
-- ✅ **Integration Ready**: Re-exports JSON-RPC types for convenience
+- **Async authentication**: Full async/await support for authentication operations
+- **Permission-based authorization**: Fine-grained permission checking
+- **Flexible auth providers**: Support for JWT, API keys, or custom authentication
+- **Typed error handling**: Explicit error variants for common authentication scenarios
+- **Permission helpers**: Default `check_permissions` logic on `AuthProvider`
+- **Version migration**: Re-exports `VersionMigration` for opt-in API compatibility paths
+- **Integration ready**: Re-exports JSON-RPC types for convenience
 
 ## Usage
 
@@ -28,56 +28,51 @@ ras-jsonrpc-core = "0.1.2"
 ### Implementing an Auth Provider
 
 ```rust
-use ras_jsonrpc_core::{AuthProvider, AuthenticatedUser, AuthFuture, AuthError};
-use std::collections::HashSet;
+use ras_jsonrpc_core::{AuthError, AuthFuture, AuthProvider, AuthenticatedUser};
+use std::collections::{HashMap, HashSet};
 
-struct JwtAuthProvider {
-    secret_key: String,
+struct DemoAuthProvider {
+    users_by_token: HashMap<String, AuthenticatedUser>,
 }
 
-impl AuthProvider for JwtAuthProvider {
+impl AuthProvider for DemoAuthProvider {
     fn authenticate(&self, token: String) -> AuthFuture<'_> {
         Box::pin(async move {
-            // Validate JWT token (simplified example)
-            if self.validate_jwt(&token)? {
-                let claims = self.decode_jwt(&token)?;
-                
-                Ok(AuthenticatedUser {
-                    user_id: claims.user_id,
-                    permissions: claims.permissions,
-                    metadata: Some(serde_json::json!({
-                        "iat": claims.issued_at,
-                        "exp": claims.expires_at
-                    })),
-                })
-            } else {
-                Err(AuthError::InvalidToken)
-            }
+            self.users_by_token
+                .get(&token)
+                .cloned()
+                .ok_or(AuthError::InvalidToken)
         })
     }
 }
+
+let mut users_by_token = HashMap::new();
+users_by_token.insert(
+    "admin-token".to_string(),
+    AuthenticatedUser {
+        user_id: "admin-user".to_string(),
+        permissions: HashSet::from(["admin".to_string(), "user".to_string()]),
+        metadata: None,
+    },
+);
+
+let auth_provider = DemoAuthProvider { users_by_token };
 ```
 
 ### Using with Permissions
 
 ```rust
-use ras_jsonrpc_core::{AuthProvider, AuthProviderExt};
+use ras_jsonrpc_core::{AuthProvider, AuthResult};
 
-async fn example_usage() {
-    let auth_provider = JwtAuthProvider::new("secret".to_string());
-    
-    // Authenticate and authorize in one step
-    let user = auth_provider
-        .authenticate_and_authorize(
-            "jwt-token".to_string(),
-            vec!["admin".to_string()]
-        )
-        .await?;
-    
-    // Optional authentication
-    let maybe_user = auth_provider
-        .authenticate_optional(Some("jwt-token".to_string()))
-        .await?;
+async fn example_usage(auth_provider: &impl AuthProvider) -> AuthResult<()> {
+    let user = auth_provider.authenticate("admin-token".to_string()).await?;
+
+    auth_provider.check_permissions(
+        &user,
+        &["admin".to_string()]
+    )?;
+
+    Ok(())
 }
 ```
 
@@ -101,18 +96,15 @@ auth_provider.check_permissions(
 )?;
 ```
 
-### 3. Combined Auth + Authz
+### 3. Authenticate Then Authorize
 ```rust
-// Authenticate and authorize in one step
-let user = auth_provider.authenticate_and_authorize(
-    token,
-    vec!["admin".to_string()]
-).await?;
+let user = auth_provider.authenticate(token).await?;
+auth_provider.check_permissions(&user, &["admin".to_string()])?;
 ```
 
 ## Error Types
 
-The crate provides comprehensive error handling:
+The crate provides typed authentication and authorization errors:
 
 ```rust
 use ras_jsonrpc_core::AuthError;
@@ -249,25 +241,94 @@ impl VersionMigration<RenameUserResponseV2, RenameUserResponseV1> for RenameComp
 
 ## Example Auth Providers
 
-### JWT Authentication
+### Bearer Token Authentication
 ```rust
-struct JwtAuthProvider { /* ... */ }
-// Full JWT validation with claims extraction
+use ras_jsonrpc_core::{AuthError, AuthFuture, AuthProvider, AuthenticatedUser};
+use std::collections::{HashMap, HashSet};
+
+struct StaticBearerAuthProvider {
+    users_by_token: HashMap<String, AuthenticatedUser>,
+}
+
+impl AuthProvider for StaticBearerAuthProvider {
+    fn authenticate(&self, token: String) -> AuthFuture<'_> {
+        Box::pin(async move {
+            self.users_by_token
+                .get(&token)
+                .cloned()
+                .ok_or(AuthError::InvalidToken)
+        })
+    }
+}
+
+let mut users_by_token = HashMap::new();
+users_by_token.insert(
+    "admin-token".to_string(),
+    AuthenticatedUser {
+        user_id: "admin-user".to_string(),
+        permissions: HashSet::from(["admin".to_string(), "user".to_string()]),
+        metadata: None,
+    },
+);
+
+let auth_provider = StaticBearerAuthProvider { users_by_token };
 ```
+
+### Browser Cookie Transport
+
+JSON-RPC HTTP services can accept bearer tokens and secure session cookies on
+the same endpoint. The auth provider still validates the token string:
+
+```rust
+use ras_jsonrpc_core::{AuthCookieConfig, CsrfConfig};
+
+let router = MyRpcServiceBuilder::new(service_impl)
+    .auth_provider(auth_provider)
+    .auth_cookie(AuthCookieConfig::default())
+    .csrf_protection(CsrfConfig::default())
+    .build()?;
+```
+
+Bearer auth remains enabled by default and takes precedence when both
+credentials are present. JSON-RPC HTTP uses `POST`, so cookie-authenticated calls
+must include an `x-ras-csrf` header matching the `__Host-ras-csrf`
+double-submit cookie when default CSRF protection is enabled.
 
 ### API Key Authentication
 ```rust
-struct ApiKeyAuthProvider { /* ... */ }
-// Simple API key lookup with rate limiting
+use ras_jsonrpc_core::{AuthError, AuthFuture, AuthProvider, AuthenticatedUser};
+use std::collections::{HashMap, HashSet};
+
+struct ApiKeyAuthProvider {
+    keys: HashMap<String, HashSet<String>>,
+}
+
+impl AuthProvider for ApiKeyAuthProvider {
+    fn authenticate(&self, token: String) -> AuthFuture<'_> {
+        Box::pin(async move {
+            let permissions = self
+                .keys
+                .get(&token)
+                .cloned()
+                .ok_or(AuthError::InvalidToken)?;
+
+            Ok(AuthenticatedUser {
+                user_id: format!("api-key:{}", token),
+                permissions,
+                metadata: None,
+            })
+        })
+    }
+}
 ```
 
 ### Composite Authentication
-```rust
-struct CompositeAuthProvider { /* ... */ }
-// Try multiple auth methods in sequence
-```
+Compose providers by implementing `AuthProvider` on a type that holds several
+providers and tries each one in order, returning the first successful
+`AuthenticatedUser`. Keep the error generic, such as `AuthError::InvalidToken`,
+so clients cannot distinguish which auth method failed.
 
-See the [`examples/`](../../examples/) directory for complete implementations.
+See the [`examples/`](../../../examples/) directory for runnable service examples.
 
 ## Re-exports
 
@@ -277,6 +338,13 @@ For convenience, this crate re-exports all types from `ras-jsonrpc-types`:
 use ras_jsonrpc_core::{JsonRpcRequest, JsonRpcResponse, JsonRpcError};
 ```
 
+## Checks
+
+```bash
+cargo test -p ras-jsonrpc-core --locked
+cargo clippy -p ras-jsonrpc-core --all-targets --all-features --locked -- -D warnings
+```
+
 ## License
 
-This project is licensed under the MIT License.
+This project is licensed under either MIT or Apache-2.0.

@@ -2,10 +2,12 @@
 name = "ras-jsonrpc-macro"
 version = "0.2.0"
 edition = "2024"
+rust-version = "1.88"
 description = "Procedural macro for type-safe JSON-RPC interfaces with auth integration and OpenRPC document generation"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/example/rust-agent-stack"
-homepage = "https://github.com/example/rust-agent-stack"
+repository = "https://github.com/JedimEmO/rust-api-stack"
+homepage = "https://github.com/JedimEmO/rust-api-stack"
+readme = "README.md"
 
 [lib]
 proc-macro = true
@@ -14,6 +16,7 @@ proc-macro = true
 default = ["server", "client"]  # Enable server by default for backward compatibility
 server = ["axum", "ras-jsonrpc-core"]
 client = ["reqwest"]
+permissions = []
 
 [dependencies]
 syn = { workspace = true }
@@ -26,29 +29,29 @@ schemars = { workspace = true }
 
 # Server dependencies
 axum = { workspace = true, optional = true }
-ras-jsonrpc-core = { path = "../ras-jsonrpc-core", optional = true }
+ras-jsonrpc-core = { path = "../ras-jsonrpc-core", version = "0.1.2", optional = true }
 
 # Client dependencies
 reqwest = { workspace = true, optional = true }
 
 # Always needed for types
-ras-jsonrpc-types = { path = "../ras-jsonrpc-types" }
+ras-jsonrpc-types = { path = "../ras-jsonrpc-types", version = "0.1.1" }
 
 [dev-dependencies]
 tokio = { workspace = true }
 reqwest = { workspace = true }
 tower = { workspace = true }
 rand = { workspace = true }
-ras-identity-session = { path = "../../identity/ras-identity-session" }
+ras-identity-session = { path = "../../identity/ras-identity-session", version = "0.2.0" }
 futures = { workspace = true }
 # Server dependencies for tests
 axum = { workspace = true }
-ras-jsonrpc-core = { path = "../ras-jsonrpc-core" }
-ras-auth-core = { path = "../../core/ras-auth-core" }
+ras-jsonrpc-core = { path = "../ras-jsonrpc-core", version = "0.1.2" }
+ras-auth-core = { path = "../../core/ras-auth-core", version = "0.1.0" }
+ras-permission-manifest = { path = "../../specs/ras-permission-manifest", version = "0.1.0" }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-ras-test-helpers = { path = "../../test-utils/ras-test-helpers" }
 axum-test = { workspace = true }
 criterion = { workspace = true, features = ["async_tokio"] }
 

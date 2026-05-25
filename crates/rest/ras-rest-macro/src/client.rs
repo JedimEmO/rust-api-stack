@@ -58,7 +58,6 @@ pub fn generate_client_code(service_def: &ServiceDefinition) -> proc_macro2::Tok
         .flat_map(generate_client_methods_with_timeout_for_endpoint);
 
     let output = quote! {
-        #[cfg(feature = "client")]
         /// Helper function to join URL segments properly
         fn join_url_segments(base: &str, path: &str) -> String {
             let base = base.trim_end_matches('/');
@@ -70,7 +69,6 @@ pub fn generate_client_code(service_def: &ServiceDefinition) -> proc_macro2::Tok
             }
         }
 
-        #[cfg(feature = "client")]
         /// Generated client for the REST service
         #[derive(Clone)]
         pub struct #client_name {
@@ -81,14 +79,12 @@ pub fn generate_client_code(service_def: &ServiceDefinition) -> proc_macro2::Tok
             default_timeout: Option<std::time::Duration>,
         }
 
-        #[cfg(feature = "client")]
         /// Builder for the REST client
         pub struct #client_builder_name {
             server_url: String,
             timeout: Option<std::time::Duration>,
         }
 
-        #[cfg(feature = "client")]
         impl #client_builder_name {
             /// Create a new client builder with the required server URL
             pub fn new(server_url: impl Into<String>) -> Self {
@@ -148,7 +144,6 @@ pub fn generate_client_code(service_def: &ServiceDefinition) -> proc_macro2::Tok
             }
         }
 
-        #[cfg(feature = "client")]
         impl #client_name {
             /// Set the bearer token for authentication
             pub fn set_bearer_token(&mut self, token: Option<impl Into<String>>) {

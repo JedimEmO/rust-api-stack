@@ -238,7 +238,10 @@ async fn test_openrpc_generation() {
 
     // Check create_user method (requires admin permission)
     let create_user_method = methods.iter().find(|m| m["name"] == "create_user").unwrap();
-    assert_eq!(create_user_method["x-authentication"]["required"], true);
+    assert_eq!(
+        create_user_method["x-authentication"]["required"].as_bool(),
+        Some(true)
+    );
     assert_eq!(create_user_method["x-permissions"][0], "admin");
     assert_eq!(create_user_method["summary"], "Create a user account.");
     assert_eq!(

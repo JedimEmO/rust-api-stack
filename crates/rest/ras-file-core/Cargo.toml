@@ -1,0 +1,18 @@
+[package]
+name = "ras-file-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Core runtime types for Rust Agent Stack file upload and download services"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-api-stack"
+homepage = "https://github.com/JedimEmO/rust-api-stack"
+readme = "README.md"
+
+[dependencies]
+bytes = { workspace = true }
+futures-core = { workspace = true }
+futures-util = { workspace = true }
+http = { workspace = true }
+ras-auth-core = { path = "../../core/ras-auth-core", version = "0.1.0" }
+thiserror = { workspace = true }

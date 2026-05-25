@@ -12,6 +12,7 @@ use ras_jsonrpc_types::{JsonRpcRequest, JsonRpcResponse};
 use serde_json::Value;
 use std::{
     collections::HashMap,
+    future::Future,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -41,6 +42,16 @@ pub struct Client {
     request_id_counter: Arc<AtomicU64>,
     shutdown_tx: Arc<RwLock<Option<oneshot::Sender<()>>>>,
     message_tx: Arc<RwLock<Option<mpsc::Sender<BidirectionalMessage>>>>,
+}
+
+struct IncomingMessageContext<'a> {
+    pending_requests: &'a DashMap<Value, PendingRequest>,
+    subscriptions: &'a DashMap<String, Subscription>,
+    notification_handlers: &'a DashMap<String, NotificationHandler>,
+    rpc_request_handlers: &'a DashMap<String, RpcRequestHandler>,
+    connection_event_handlers: &'a DashMap<String, ConnectionEventHandler>,
+    connection_id: &'a RwLock<Option<ConnectionId>>,
+    message_tx: &'a RwLock<Option<mpsc::Sender<BidirectionalMessage>>>,
 }
 
 impl Client {
@@ -348,7 +359,7 @@ impl Client {
         let state = Arc::clone(&self.state);
         let message_tx_clone = Arc::clone(&self.message_tx);
 
-        tokio::spawn(async move {
+        spawn_background(async move {
             let mut receive_interval = tokio::time::interval(Duration::from_millis(10));
 
             loop {
@@ -378,15 +389,18 @@ impl Client {
                         let mut transport = transport_clone.write().await;
                         match transport.receive().await {
                             Ok(Some(message)) => {
+                                let context = IncomingMessageContext {
+                                    pending_requests: &pending_requests,
+                                    subscriptions: &subscriptions,
+                                    notification_handlers: &notification_handlers,
+                                    rpc_request_handlers: &rpc_request_handlers,
+                                    connection_event_handlers: &connection_event_handlers,
+                                    connection_id: &connection_id,
+                                    message_tx: &message_tx_clone,
+                                };
                                 Self::handle_incoming_message(
                                     message,
-                                    &pending_requests,
-                                    &subscriptions,
-                                    &notification_handlers,
-                                    &rpc_request_handlers,
-                                    &connection_event_handlers,
-                                    &connection_id,
-                                    &message_tx_clone,
+                                    context,
                                 ).await;
                             }
                             Ok(None) => {
@@ -408,18 +422,12 @@ impl Client {
 
     async fn handle_incoming_message(
         message: BidirectionalMessage,
-        pending_requests: &DashMap<Value, PendingRequest>,
-        subscriptions: &DashMap<String, Subscription>,
-        notification_handlers: &DashMap<String, NotificationHandler>,
-        rpc_request_handlers: &DashMap<String, RpcRequestHandler>,
-        connection_event_handlers: &DashMap<String, ConnectionEventHandler>,
-        connection_id: &RwLock<Option<ConnectionId>>,
-        message_tx: &RwLock<Option<mpsc::Sender<BidirectionalMessage>>>,
+        context: IncomingMessageContext<'_>,
     ) {
         match message {
             BidirectionalMessage::Response(response) => {
                 if let Some(id) = &response.id {
-                    if let Some((_, pending)) = pending_requests.remove(id) {
+                    if let Some((_, pending)) = context.pending_requests.remove(id) {
                         let _ = pending.sender.send(response);
                     } else {
                         warn!("Received response for unknown request ID: {:?}", id);
@@ -428,49 +436,50 @@ impl Client {
             }
             BidirectionalMessage::ServerNotification(notification) => {
                 // Handle notification with registered handlers
-                if let Some(handler) = notification_handlers.get(&notification.method) {
+                if let Some(handler) = context.notification_handlers.get(&notification.method) {
                     handler(&notification.method, &notification.params);
                 }
             }
             BidirectionalMessage::Broadcast(broadcast) => {
                 // Handle broadcast to subscribed topics
-                if let Some(subscription) = subscriptions.get(&broadcast.topic) {
+                if let Some(subscription) = context.subscriptions.get(&broadcast.topic) {
                     (subscription.value().handler)(&broadcast.method, &broadcast.params);
                 }
             }
             BidirectionalMessage::ConnectionEstablished {
                 connection_id: conn_id,
             } => {
-                *connection_id.write().await = Some(conn_id);
+                *context.connection_id.write().await = Some(conn_id);
                 Self::emit_connection_event_static(
                     ConnectionEvent::Connected {
                         connection_id: conn_id,
                     },
-                    connection_event_handlers,
+                    context.connection_event_handlers,
                 )
                 .await;
             }
             BidirectionalMessage::ConnectionClosed { reason, .. } => {
-                *connection_id.write().await = None;
+                *context.connection_id.write().await = None;
                 Self::emit_connection_event_static(
                     ConnectionEvent::Disconnected { reason },
-                    connection_event_handlers,
+                    context.connection_event_handlers,
                 )
                 .await;
             }
             BidirectionalMessage::Request(request) => {
                 // Handle incoming RPC request from server
                 if let Some(_id) = &request.id {
-                    if let Some(handler) = rpc_request_handlers.get(&request.method) {
+                    if let Some(handler) = context.rpc_request_handlers.get(&request.method) {
                         debug!("Handling RPC request: {}", request.method);
                         let response = handler(request).await;
 
                         // Send response back to server
                         let response_message = BidirectionalMessage::Response(response);
-                        if let Some(tx) = message_tx.read().await.as_ref() {
-                            if let Err(e) = tx.send(response_message).await {
-                                error!("Failed to send RPC response: {}", e);
-                            }
+                        let tx = context.message_tx.read().await.clone();
+                        if let Some(tx) = tx
+                            && let Err(e) = tx.send(response_message).await
+                        {
+                            error!("Failed to send RPC response: {}", e);
                         }
                     } else {
                         warn!("No handler registered for RPC method: {}", request.method);
@@ -484,10 +493,11 @@ impl Client {
                             request.id.clone(),
                         );
                         let response_message = BidirectionalMessage::Response(error_response);
-                        if let Some(tx) = message_tx.read().await.as_ref() {
-                            if let Err(e) = tx.send(response_message).await {
-                                error!("Failed to send error response: {}", e);
-                            }
+                        let tx = context.message_tx.read().await.clone();
+                        if let Some(tx) = tx
+                            && let Err(e) = tx.send(response_message).await
+                        {
+                            error!("Failed to send error response: {}", e);
                         }
                     }
                 } else {
@@ -523,7 +533,7 @@ impl Client {
         let message_tx = Arc::clone(&self.message_tx);
         let state = Arc::clone(&self.state);
 
-        tokio::spawn(async move {
+        spawn_background(async move {
             let mut heartbeat_interval = tokio::time::interval(interval);
             heartbeat_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -573,6 +583,22 @@ impl Client {
             }
         }
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn spawn_background<F>(future: F)
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    tokio::spawn(future);
+}
+
+#[cfg(target_arch = "wasm32")]
+fn spawn_background<F>(future: F)
+where
+    F: Future<Output = ()> + 'static,
+{
+    wasm_bindgen_futures::spawn_local(future);
 }
 
 /// Builder for creating a client with configuration
@@ -708,6 +734,43 @@ impl ClientBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    struct IncomingHarness {
+        pending_requests: DashMap<Value, PendingRequest>,
+        subscriptions: DashMap<String, Subscription>,
+        notification_handlers: DashMap<String, NotificationHandler>,
+        rpc_request_handlers: DashMap<String, RpcRequestHandler>,
+        connection_event_handlers: DashMap<String, ConnectionEventHandler>,
+        connection_id: RwLock<Option<ConnectionId>>,
+        message_tx: RwLock<Option<mpsc::Sender<BidirectionalMessage>>>,
+    }
+
+    impl IncomingHarness {
+        fn new() -> Self {
+            Self {
+                pending_requests: DashMap::new(),
+                subscriptions: DashMap::new(),
+                notification_handlers: DashMap::new(),
+                rpc_request_handlers: DashMap::new(),
+                connection_event_handlers: DashMap::new(),
+                connection_id: RwLock::new(None),
+                message_tx: RwLock::new(None),
+            }
+        }
+
+        fn context(&self) -> IncomingMessageContext<'_> {
+            IncomingMessageContext {
+                pending_requests: &self.pending_requests,
+                subscriptions: &self.subscriptions,
+                notification_handlers: &self.notification_handlers,
+                rpc_request_handlers: &self.rpc_request_handlers,
+                connection_event_handlers: &self.connection_event_handlers,
+                connection_id: &self.connection_id,
+                message_tx: &self.message_tx,
+            }
+        }
+    }
 
     #[tokio::test]
     async fn test_client_builder() {
@@ -817,5 +880,461 @@ mod tests {
 
         // Disconnect-when-already-disconnected is a no-op success.
         client.disconnect().await.expect("disconnect ok");
+    }
+
+    #[tokio::test]
+    async fn notify_subscribe_and_unsubscribe_send_expected_messages_when_connected() {
+        let client = ClientBuilder::new("ws://localhost:8080")
+            .build()
+            .await
+            .expect("build");
+        *client.state.write().await = ClientState::Connected;
+
+        let (tx, mut rx) = mpsc::channel(4);
+        *client.message_tx.write().await = Some(tx);
+
+        client
+            .notify("client.ready", Some(serde_json::json!({"ready": true})))
+            .await
+            .expect("notify");
+        match rx.recv().await.expect("notify message") {
+            BidirectionalMessage::Request(request) => {
+                assert_eq!(request.method, "client.ready");
+                assert_eq!(request.params, Some(serde_json::json!({"ready": true})));
+                assert!(request.id.is_none());
+            }
+            other => panic!("unexpected notify message: {other:?}"),
+        }
+
+        let handler: NotificationHandler = std::sync::Arc::new(|_method, _params| {});
+        client
+            .subscribe("room:1", handler)
+            .await
+            .expect("subscribe");
+        match rx.recv().await.expect("subscribe message") {
+            BidirectionalMessage::Subscribe { topics } => {
+                assert_eq!(topics, vec!["room:1".to_string()]);
+            }
+            other => panic!("unexpected subscribe message: {other:?}"),
+        }
+        assert_eq!(client.active_subscriptions(), vec!["room:1".to_string()]);
+
+        client.unsubscribe("room:1").await.expect("unsubscribe");
+        match rx.recv().await.expect("unsubscribe message") {
+            BidirectionalMessage::Unsubscribe { topics } => {
+                assert_eq!(topics, vec!["room:1".to_string()]);
+            }
+            other => panic!("unexpected unsubscribe message: {other:?}"),
+        }
+        assert!(client.active_subscriptions().is_empty());
+    }
+
+    #[tokio::test]
+    async fn call_sends_request_and_completes_when_pending_response_arrives() {
+        let client = std::sync::Arc::new(
+            ClientBuilder::new("ws://localhost:8080")
+                .build()
+                .await
+                .expect("build"),
+        );
+        *client.state.write().await = ClientState::Connected;
+
+        let (tx, mut rx) = mpsc::channel(4);
+        *client.message_tx.write().await = Some(tx);
+
+        let call_task = {
+            let client = std::sync::Arc::clone(&client);
+            tokio::spawn(async move {
+                client
+                    .call("svc.echo", Some(serde_json::json!({"input": 1})))
+                    .await
+            })
+        };
+
+        let request_id = match rx.recv().await.expect("outgoing request") {
+            BidirectionalMessage::Request(request) => {
+                assert_eq!(request.method, "svc.echo");
+                assert_eq!(request.params, Some(serde_json::json!({"input": 1})));
+                request.id.expect("request id")
+            }
+            other => panic!("unexpected outgoing request: {other:?}"),
+        };
+
+        let (_, pending) = client
+            .pending_requests
+            .remove(&request_id)
+            .expect("pending request registered");
+        pending
+            .sender
+            .send(JsonRpcResponse::success(
+                serde_json::json!({"output": 1}),
+                Some(request_id),
+            ))
+            .expect("deliver response");
+
+        let response = call_task.await.expect("join").expect("call response");
+        assert_eq!(response.result, Some(serde_json::json!({"output": 1})));
+        assert!(client.pending_requests.is_empty());
+    }
+
+    #[tokio::test]
+    async fn call_returns_internal_error_when_pending_request_limit_is_reached() {
+        let mut config = ClientConfig::new("ws://localhost:8080");
+        config.max_pending_requests = 1;
+        let client = Client::new(config).await.expect("client");
+        *client.state.write().await = ClientState::Connected;
+
+        let (message_tx, mut message_rx) = mpsc::channel(1);
+        *client.message_tx.write().await = Some(message_tx);
+        let (pending_tx, _pending_rx) = oneshot::channel();
+        client.pending_requests.insert(
+            serde_json::json!("existing"),
+            PendingRequest {
+                id: serde_json::json!("existing"),
+                sender: pending_tx,
+                created_at: Instant::now(),
+            },
+        );
+
+        let err = client.call("svc.echo", None).await.unwrap_err();
+        assert!(
+            matches!(err, ClientError::Internal(message) if message == "Too many pending requests")
+        );
+        assert!(message_rx.try_recv().is_err());
+        assert_eq!(client.pending_requests.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn cleanup_expired_requests_removes_expired_waiters_and_keeps_fresh_ones() {
+        let mut config = ClientConfig::new("ws://localhost:8080");
+        config.request_timeout = Duration::from_secs(1);
+        let client = Client::new(config).await.expect("client");
+
+        let (expired_tx, expired_rx) = oneshot::channel();
+        client.pending_requests.insert(
+            serde_json::json!("expired"),
+            PendingRequest {
+                id: serde_json::json!("expired"),
+                sender: expired_tx,
+                created_at: Instant::now() - Duration::from_secs(5),
+            },
+        );
+
+        let (fresh_tx, _fresh_rx) = oneshot::channel();
+        client.pending_requests.insert(
+            serde_json::json!("fresh"),
+            PendingRequest {
+                id: serde_json::json!("fresh"),
+                sender: fresh_tx,
+                created_at: Instant::now(),
+            },
+        );
+
+        client.cleanup_expired_requests().await;
+
+        let timeout_response = expired_rx.await.expect("expired waiter notified");
+        assert_eq!(timeout_response.id, Some(serde_json::json!("expired")));
+        assert_eq!(
+            timeout_response.error.expect("timeout error").code,
+            ras_jsonrpc_types::error_codes::INTERNAL_ERROR
+        );
+        assert!(
+            !client
+                .pending_requests
+                .contains_key(&serde_json::json!("expired"))
+        );
+        assert!(
+            client
+                .pending_requests
+                .contains_key(&serde_json::json!("fresh"))
+        );
+    }
+
+    #[tokio::test]
+    async fn disconnect_clears_pending_requests_connection_state_and_emits_event() {
+        let client = ClientBuilder::new("ws://localhost:8080")
+            .build()
+            .await
+            .expect("build");
+        *client.state.write().await = ClientState::Connected;
+        *client.connection_id.write().await = Some(ConnectionId::new());
+
+        let (message_tx, _message_rx) = mpsc::channel(1);
+        *client.message_tx.write().await = Some(message_tx);
+        let (pending_tx, pending_rx) = oneshot::channel();
+        client.pending_requests.insert(
+            serde_json::json!("in-flight"),
+            PendingRequest {
+                id: serde_json::json!("in-flight"),
+                sender: pending_tx,
+                created_at: Instant::now(),
+            },
+        );
+
+        let events = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let event_calls = std::sync::Arc::clone(&events);
+        client.on_connection_event(
+            "recorder",
+            std::sync::Arc::new(move |event| {
+                event_calls.lock().unwrap().push(event);
+            }),
+        );
+
+        client.disconnect().await.expect("disconnect");
+
+        assert_eq!(client.state().await, ClientState::Disconnected);
+        assert!(client.connection_id().await.is_none());
+        assert!(client.message_tx.read().await.is_none());
+        assert!(client.pending_requests.is_empty());
+
+        let failed_response = pending_rx.await.expect("pending waiter notified");
+        assert_eq!(failed_response.id, Some(serde_json::json!("in-flight")));
+        assert_eq!(
+            failed_response.error.expect("disconnect error").code,
+            ras_jsonrpc_types::error_codes::INTERNAL_ERROR
+        );
+        assert!(matches!(
+            events.lock().unwrap().last().cloned().unwrap(),
+            ConnectionEvent::Disconnected { reason: None }
+        ));
+    }
+
+    #[tokio::test]
+    async fn incoming_response_delivers_to_matching_pending_request() {
+        let harness = IncomingHarness::new();
+        let request_id = serde_json::json!(42);
+        let (tx, rx) = oneshot::channel();
+        harness.pending_requests.insert(
+            request_id.clone(),
+            PendingRequest {
+                id: request_id.clone(),
+                sender: tx,
+                created_at: Instant::now(),
+            },
+        );
+
+        Client::handle_incoming_message(
+            BidirectionalMessage::Response(JsonRpcResponse::success(
+                serde_json::json!({"ok": true}),
+                Some(request_id),
+            )),
+            harness.context(),
+        )
+        .await;
+
+        assert!(harness.pending_requests.is_empty());
+        let response = rx.await.expect("pending response delivered");
+        assert_eq!(response.result, Some(serde_json::json!({"ok": true})));
+
+        Client::handle_incoming_message(
+            BidirectionalMessage::Response(JsonRpcResponse::success(
+                serde_json::json!("ignored"),
+                Some(serde_json::json!("unknown")),
+            )),
+            harness.context(),
+        )
+        .await;
+        Client::handle_incoming_message(
+            BidirectionalMessage::Response(JsonRpcResponse::success(
+                serde_json::json!("notification-like"),
+                None,
+            )),
+            harness.context(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn incoming_notifications_and_broadcasts_route_to_registered_handlers() {
+        let harness = IncomingHarness::new();
+        let notifications = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let broadcasts = std::sync::Arc::new(Mutex::new(Vec::new()));
+
+        let notification_calls = std::sync::Arc::clone(&notifications);
+        harness.notification_handlers.insert(
+            "server.event".to_string(),
+            std::sync::Arc::new(move |method, params| {
+                notification_calls
+                    .lock()
+                    .unwrap()
+                    .push((method.to_string(), params.clone()));
+            }),
+        );
+
+        let broadcast_calls = std::sync::Arc::clone(&broadcasts);
+        harness.subscriptions.insert(
+            "room:1".to_string(),
+            Subscription {
+                topic: "room:1".to_string(),
+                handler: std::sync::Arc::new(move |method, params| {
+                    broadcast_calls
+                        .lock()
+                        .unwrap()
+                        .push((method.to_string(), params.clone()));
+                }),
+                created_at: Instant::now(),
+            },
+        );
+
+        Client::handle_incoming_message(
+            BidirectionalMessage::ServerNotification(
+                ras_jsonrpc_bidirectional_types::ServerNotification {
+                    method: "server.event".to_string(),
+                    params: serde_json::json!({"n": 1}),
+                    metadata: None,
+                },
+            ),
+            harness.context(),
+        )
+        .await;
+        Client::handle_incoming_message(
+            BidirectionalMessage::Broadcast(ras_jsonrpc_bidirectional_types::BroadcastMessage {
+                topic: "room:1".to_string(),
+                method: "chat.message".to_string(),
+                params: serde_json::json!({"body": "hi"}),
+                metadata: None,
+            }),
+            harness.context(),
+        )
+        .await;
+        Client::handle_incoming_message(
+            BidirectionalMessage::Broadcast(ras_jsonrpc_bidirectional_types::BroadcastMessage {
+                topic: "room:2".to_string(),
+                method: "chat.message".to_string(),
+                params: serde_json::json!({"body": "ignored"}),
+                metadata: None,
+            }),
+            harness.context(),
+        )
+        .await;
+
+        assert_eq!(
+            *notifications.lock().unwrap(),
+            vec![("server.event".to_string(), serde_json::json!({"n": 1}))]
+        );
+        assert_eq!(
+            *broadcasts.lock().unwrap(),
+            vec![(
+                "chat.message".to_string(),
+                serde_json::json!({"body": "hi"})
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn incoming_connection_lifecycle_updates_id_and_emits_events() {
+        let harness = IncomingHarness::new();
+        let events = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let event_calls = std::sync::Arc::clone(&events);
+        harness.connection_event_handlers.insert(
+            "recorder".to_string(),
+            std::sync::Arc::new(move |event| {
+                event_calls.lock().unwrap().push(event);
+            }),
+        );
+
+        let id = ConnectionId::new();
+        Client::handle_incoming_message(
+            BidirectionalMessage::ConnectionEstablished { connection_id: id },
+            harness.context(),
+        )
+        .await;
+
+        assert_eq!(*harness.connection_id.read().await, Some(id));
+        let first_event = events.lock().unwrap().first().cloned().unwrap();
+        assert!(matches!(
+            first_event,
+            ConnectionEvent::Connected { connection_id } if connection_id == id
+        ));
+
+        Client::handle_incoming_message(
+            BidirectionalMessage::ConnectionClosed {
+                connection_id: id,
+                reason: Some("server shutdown".to_string()),
+            },
+            harness.context(),
+        )
+        .await;
+
+        assert!(harness.connection_id.read().await.is_none());
+        let last_event = events.lock().unwrap().last().cloned().unwrap();
+        assert!(matches!(
+            last_event,
+            ConnectionEvent::Disconnected { reason: Some(reason) } if reason == "server shutdown"
+        ));
+    }
+
+    #[tokio::test]
+    async fn incoming_rpc_request_sends_handler_response_or_method_not_found() {
+        let harness = IncomingHarness::new();
+        let (tx, mut rx) = mpsc::channel(4);
+        *harness.message_tx.write().await = Some(tx);
+
+        let handler: RpcRequestHandler = std::sync::Arc::new(|request| {
+            Box::pin(async move {
+                JsonRpcResponse::success(
+                    serde_json::json!({ "handled": request.method }),
+                    request.id.clone(),
+                )
+            })
+        });
+        harness
+            .rpc_request_handlers
+            .insert("client.echo".to_string(), handler);
+
+        Client::handle_incoming_message(
+            BidirectionalMessage::Request(JsonRpcRequest::new(
+                "client.echo".to_string(),
+                None,
+                Some(serde_json::json!("known")),
+            )),
+            harness.context(),
+        )
+        .await;
+
+        let response = rx.recv().await.expect("handler response sent");
+        match response {
+            BidirectionalMessage::Response(response) => {
+                assert_eq!(response.id, Some(serde_json::json!("known")));
+                assert_eq!(
+                    response.result,
+                    Some(serde_json::json!({"handled": "client.echo"}))
+                );
+            }
+            other => panic!("unexpected outgoing message: {other:?}"),
+        }
+
+        Client::handle_incoming_message(
+            BidirectionalMessage::Request(JsonRpcRequest::new(
+                "client.missing".to_string(),
+                None,
+                Some(serde_json::json!("missing")),
+            )),
+            harness.context(),
+        )
+        .await;
+
+        let response = rx.recv().await.expect("method-not-found response sent");
+        match response {
+            BidirectionalMessage::Response(response) => {
+                assert_eq!(response.id, Some(serde_json::json!("missing")));
+                let error = response.error.expect("error response");
+                assert_eq!(error.code, ras_jsonrpc_types::error_codes::METHOD_NOT_FOUND);
+                assert_eq!(error.message, "Method not found");
+            }
+            other => panic!("unexpected outgoing message: {other:?}"),
+        }
+
+        Client::handle_incoming_message(
+            BidirectionalMessage::Request(JsonRpcRequest::new(
+                "client.echo".to_string(),
+                None,
+                None,
+            )),
+            harness.context(),
+        )
+        .await;
+
+        assert!(rx.try_recv().is_err());
     }
 }

@@ -2,6 +2,10 @@
 
 A procedural macro for creating type-safe REST APIs with authentication integration and OpenAPI document generation.
 
+See the canonical mdBook
+[`rest_service!` guide](../../../documentation/src/macros/rest-service.md) for
+the rationale, auth model, usage flow, and runnable examples.
+
 ## Features
 
 - **Type-safe REST endpoints**: Generate axum-based REST services from macro definitions
@@ -87,7 +91,22 @@ impl UserServiceTrait for UserServiceImpl {
         }))
     }
 
-    // ... implement other endpoints
+    async fn put_users_by_id(
+        &self,
+        _user: &AuthenticatedUser,
+        id: i32,
+        request: CreateUserRequest,
+    ) -> RestResult<User> {
+        Ok(RestResponse::ok(User {
+            id,
+            name: request.name,
+            email: request.email,
+        }))
+    }
+
+    async fn delete_users_by_id(&self, _user: &AuthenticatedUser, _id: i32) -> RestResult<()> {
+        Ok(RestResponse::no_content())
+    }
 }
 
 let service = UserServiceBuilder::new(UserServiceImpl)
@@ -97,6 +116,25 @@ let service = UserServiceBuilder::new(UserServiceImpl)
 // Use with axum
 let app = axum::Router::new().merge(service);
 ```
+
+Cookie auth can be enabled on the same service without changing the
+`AuthProvider`:
+
+```rust
+use ras_auth_core::{AuthCookieConfig, CsrfConfig};
+
+let service = UserServiceBuilder::new(UserServiceImpl)
+    .auth_provider(my_auth_provider)
+    .auth_cookie(AuthCookieConfig::default())
+    .csrf_protection(CsrfConfig::default())
+    .build();
+```
+
+Bearer tokens remain accepted by default. If both bearer and cookie credentials
+are present, bearer takes precedence. The CSRF guard only applies to
+cookie-authenticated `POST`, `PUT`, `PATCH`, and `DELETE` requests.
+`CsrfConfig::default()` requires the `x-ras-csrf` header to match the
+`__Host-ras-csrf` double-submit cookie.
 
 ### OpenAPI Generation
 
@@ -117,12 +155,15 @@ rest_service!({
     service_name: ServiceName,           // Name for the generated trait and builder
     base_path: "/api/v1",               // Base path for all endpoints
     openapi: true,                      // Enable OpenAPI generation (optional)
-    // or: openapi: { output: "path/to/spec.json" },
     endpoints: [
-        // Endpoint definitions...
+        GET UNAUTHORIZED users() -> Vec<User>,
+        POST WITH_PERMISSIONS(["admin"]) users(CreateUserRequest) -> User,
     ]
 });
 ```
+
+Use `openapi: { output: "target/openapi/service.json" }` instead of
+`openapi: true` when you want a custom output path.
 
 ### Endpoint Definition
 
@@ -133,7 +174,8 @@ METHOD AUTH_REQUIREMENT path(RequestType) -> ResponseType,
 - **METHOD**: `GET`, `POST`, `PUT`, `DELETE`, or `PATCH`
 - **AUTH_REQUIREMENT**: 
   - `UNAUTHORIZED`: No authentication required
-  - `WITH_PERMISSIONS(["perm1", "perm2"])`: Requires authentication and specified permissions
+  - `WITH_PERMISSIONS(["perm1", "perm2"])`: Requires authentication and all listed permissions
+  - `WITH_PERMISSIONS(["admin"] | ["moderator", "editor"])`: Allows any matching permission group
 - **path**: URL path with optional parameters in `{param: Type}` format
 - **RequestType**: Optional request body type (omit `()` for no body)
 - **ResponseType**: Response type
@@ -239,13 +281,24 @@ impl ras_rest_core::VersionMigration<RenameUserResponseV2, RenameUserResponseV1>
 The macro integrates with `ras-auth-core::AuthProvider` for authentication:
 
 ```rust
-use ras_auth_core::{AuthFuture, AuthProvider};
+use ras_auth_core::{AuthError, AuthFuture, AuthProvider, AuthenticatedUser};
+use std::collections::HashSet;
 
 struct MyAuthProvider;
 
 impl AuthProvider for MyAuthProvider {
     fn authenticate(&self, token: String) -> AuthFuture<'_> {
-        // Validate JWT token and return authenticated user
+        Box::pin(async move {
+            if token != "admin-token" {
+                return Err(AuthError::InvalidToken);
+            }
+
+            Ok(AuthenticatedUser {
+                user_id: "admin-user".to_string(),
+                permissions: HashSet::from(["admin".to_string()]),
+                metadata: None,
+            })
+        })
     }
 }
 
@@ -291,3 +344,10 @@ let app = axum::Router::new()
 - Permission metadata as OpenAPI extensions
 - Path parameters and request/response schemas
 - Standard HTTP error responses
+
+## Checks
+
+```bash
+cargo test -p ras-rest-macro --locked
+cargo clippy -p ras-rest-macro --all-targets --all-features --locked -- -D warnings
+```

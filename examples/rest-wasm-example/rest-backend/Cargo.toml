@@ -2,16 +2,28 @@
 name = "rest-backend"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
+description = "Backend for the Rust Agent Stack REST OpenAPI usage example"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-api-stack"
+homepage = "https://github.com/JedimEmO/rust-api-stack"
+publish = false
+readme = "README.md"
+
+[features]
+default = []
+client = ["rest-api/client"]
 
 [build-dependencies]
-rest-api = { path = "../rest-api", features = ["server"] }
+rest-api = { path = "../rest-api", version = "0.1.0", features = ["server"] }
+ras-permission-manifest = { path = "../../../crates/specs/ras-permission-manifest", version = "0.1.0" }
 
 [dependencies]
-rest-api = { path = "../rest-api", features = ["server"] }
-ras-auth-core = { path = "../../../crates/core/ras-auth-core" }
-ras-rest-core = { path = "../../../crates/rest/ras-rest-core" }
+rest-api = { path = "../rest-api", version = "0.1.0", features = ["server"] }
+ras-auth-core = { path = "../../../crates/core/ras-auth-core", version = "0.1.0" }
+ras-rest-core = { path = "../../../crates/rest/ras-rest-core", version = "0.1.1" }
 axum = { workspace = true }
-axum-extra.workspace = true
+axum-extra = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tower = { workspace = true }
 tower-http = { workspace = true, features = ["cors"] }

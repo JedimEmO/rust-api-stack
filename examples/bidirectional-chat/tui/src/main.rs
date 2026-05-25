@@ -87,312 +87,265 @@ async fn run_app(
         }
 
         // Check for terminal events
-        if event::poll(Duration::from_millis(10))? {
-            if let Event::Key(key) = event::read()? {
-                let mut app = app_state.lock().await;
+        if event::poll(Duration::from_millis(10))?
+            && let Event::Key(key) = event::read()?
+        {
+            let mut app = app_state.lock().await;
 
-                match app.screen.clone() {
-                    AppScreen::Login | AppScreen::Register => {
-                        match key.code {
-                            KeyCode::Tab => {
-                                app.auth_field_focus = match app.auth_field_focus {
-                                    AuthField::Username => AuthField::Password,
-                                    AuthField::Password => AuthField::Username,
-                                };
-                            }
-                            KeyCode::Enter => {
-                                let username = app.auth_username_input.clone();
-                                let password = app.auth_password_input.clone();
-                                drop(app); // Release lock before async operation
-
-                                // Skip if empty
-                                if username.is_empty() || password.is_empty() {
-                                    app_state.lock().await.error_message =
-                                        Some("Username and password cannot be empty".to_string());
-                                    continue;
-                                }
-
-                                let result = if app_state.lock().await.screen == AppScreen::Login {
-                                    // Login returns LoginResponse
-                                    match auth_client.login(username.clone(), password).await {
-                                        Ok(login_response) => {
-                                            Ok((login_response.token, login_response.user_id))
-                                        }
-                                        Err(e) => Err(e),
-                                    }
-                                } else {
-                                    // Register returns RegisterResponse, but we need to login after registration
-                                    match auth_client
-                                        .register(username.clone(), password.clone())
-                                        .await
-                                    {
-                                        Ok(_register_response) => {
-                                            // After successful registration, login to get the token
-                                            match auth_client
-                                                .login(username.clone(), password)
-                                                .await
-                                            {
-                                                Ok(login_response) => Ok((
-                                                    login_response.token,
-                                                    login_response.user_id,
-                                                )),
-                                                Err(e) => Err(e),
-                                            }
-                                        }
-                                        Err(e) => Err(e),
-                                    }
-                                };
-
-                                match result {
-                                    Ok((token, user_id)) => {
-                                        _jwt_token = Some(token.clone());
-                                        let mut app = app_state.lock().await;
-                                        app.username = Some(user_id);
-                                        app.screen = AppScreen::RoomList;
-                                        app.error_message = None;
-                                        drop(app);
-
-                                        // Connect to WebSocket
-                                        let mut client = chat_client.lock().await;
-                                        if let Err(e) = client.connect(server_url, token).await {
-                                            app_state.lock().await.error_message =
-                                                Some(format!("Failed to connect: {}", e));
-                                        } else {
-                                            // Load room list
-                                            match client.list_rooms().await {
-                                                Ok(rooms) => {
-                                                    app_state.lock().await.rooms = rooms;
-                                                }
-                                                Err(e) => {
-                                                    app_state.lock().await.error_message = Some(
-                                                        format!("Failed to load rooms: {}", e),
-                                                    );
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        app_state.lock().await.error_message = Some(e.to_string());
-                                    }
-                                }
-                            }
-                            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                                app.screen = AppScreen::Register;
-                                app.error_message = None;
-                            }
-                            KeyCode::Esc => {
-                                if app.screen == AppScreen::Register {
-                                    app.screen = AppScreen::Login;
-                                    app.error_message = None;
-                                } else {
-                                    return Ok(());
-                                }
-                            }
-                            KeyCode::Backspace => match app.auth_field_focus {
-                                AuthField::Username => {
-                                    app.auth_username_input.pop();
-                                }
-                                AuthField::Password => {
-                                    app.auth_password_input.pop();
-                                }
-                            },
-                            KeyCode::Char(c) => {
-                                match app.auth_field_focus {
-                                    AuthField::Username => app.auth_username_input.push(c),
-                                    AuthField::Password => app.auth_password_input.push(c),
-                                }
-                                tracing::debug!(
-                                    "Input char: {}, username: {}, password len: {}",
-                                    c,
-                                    app.auth_username_input,
-                                    app.auth_password_input.len()
-                                );
-                            }
-                            _ => {}
+            match app.screen.clone() {
+                AppScreen::Login | AppScreen::Register => {
+                    match key.code {
+                        KeyCode::Tab => {
+                            app.auth_field_focus = match app.auth_field_focus {
+                                AuthField::Username => AuthField::Password,
+                                AuthField::Password => AuthField::Username,
+                            };
                         }
-                    }
-                    AppScreen::RoomList => {
-                        match key.code {
-                            KeyCode::Char('q') | KeyCode::Char('Q') => {
-                                let mut client = chat_client.lock().await;
-                                let _ = client.disconnect().await;
+                        KeyCode::Enter => {
+                            let username = app.auth_username_input.clone();
+                            let password = app.auth_password_input.clone();
+                            drop(app); // Release lock before async operation
+
+                            // Skip if empty
+                            if username.is_empty() || password.is_empty() {
+                                app_state.lock().await.error_message =
+                                    Some("Username and password cannot be empty".to_string());
+                                continue;
+                            }
+
+                            let result = if app_state.lock().await.screen == AppScreen::Login {
+                                // Login returns LoginResponse
+                                match auth_client.login(username.clone(), password).await {
+                                    Ok(login_response) => {
+                                        Ok((login_response.token, login_response.user_id))
+                                    }
+                                    Err(e) => Err(e),
+                                }
+                            } else {
+                                // Register returns RegisterResponse, but we need to login after registration
+                                match auth_client
+                                    .register(username.clone(), password.clone())
+                                    .await
+                                {
+                                    Ok(_register_response) => {
+                                        // After successful registration, login to get the token
+                                        match auth_client.login(username.clone(), password).await {
+                                            Ok(login_response) => {
+                                                Ok((login_response.token, login_response.user_id))
+                                            }
+                                            Err(e) => Err(e),
+                                        }
+                                    }
+                                    Err(e) => Err(e),
+                                }
+                            };
+
+                            match result {
+                                Ok((token, user_id)) => {
+                                    _jwt_token = Some(token.clone());
+                                    let mut app = app_state.lock().await;
+                                    app.username = Some(user_id);
+                                    app.screen = AppScreen::RoomList;
+                                    app.error_message = None;
+                                    drop(app);
+
+                                    // Connect to WebSocket
+                                    let mut client = chat_client.lock().await;
+                                    if let Err(e) = client.connect(server_url, token).await {
+                                        app_state.lock().await.error_message =
+                                            Some(format!("Failed to connect: {}", e));
+                                    } else {
+                                        // Load room list
+                                        match client.list_rooms().await {
+                                            Ok(rooms) => {
+                                                app_state.lock().await.rooms = rooms;
+                                            }
+                                            Err(e) => {
+                                                app_state.lock().await.error_message =
+                                                    Some(format!("Failed to load rooms: {}", e));
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    app_state.lock().await.error_message = Some(e.to_string());
+                                }
+                            }
+                        }
+                        KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            app.screen = AppScreen::Register;
+                            app.error_message = None;
+                        }
+                        KeyCode::Esc => {
+                            if app.screen == AppScreen::Register {
+                                app.screen = AppScreen::Login;
+                                app.error_message = None;
+                            } else {
                                 return Ok(());
                             }
-                            KeyCode::Char('r') | KeyCode::Char('R') => {
-                                drop(app);
-                                let client = chat_client.lock().await;
-                                match client.list_rooms().await {
-                                    Ok(rooms) => {
-                                        app_state.lock().await.rooms = rooms;
-                                    }
-                                    Err(e) => {
-                                        app_state.lock().await.error_message =
-                                            Some(format!("Failed to refresh rooms: {}", e));
-                                    }
-                                }
+                        }
+                        KeyCode::Backspace => match app.auth_field_focus {
+                            AuthField::Username => {
+                                app.auth_username_input.pop();
                             }
-                            KeyCode::Char(c) if c.is_digit(10) => {
-                                let index = c.to_digit(10).unwrap() as usize - 1;
-                                if index < app.rooms.len() {
-                                    let room_name = app.rooms[index].room_name.clone();
-                                    drop(app);
-
-                                    let client = chat_client.lock().await;
-                                    match client.join_room(room_name.clone()).await {
-                                        Ok((room_id, existing_users)) => {
-                                            let mut app = app_state.lock().await;
-                                            app.current_room =
-                                                Some((room_id.clone(), room_name.clone()));
-                                            app.screen = AppScreen::Chat {
-                                                room_id: room_id.clone(),
-                                                room_name,
-                                            };
-                                            app.messages.clear();
-
-                                            // Clear and populate room_users with existing users
-                                            app.room_users
-                                                .entry(room_id.clone())
-                                                .or_insert_with(Vec::new)
-                                                .clear();
-
-                                            tracing::debug!(
-                                                "Existing users in room: {:?}",
-                                                existing_users
-                                            );
-
-                                            app.room_users
-                                                .entry(room_id.clone())
-                                                .or_insert_with(Vec::new)
-                                                .extend(existing_users);
-
-                                            // Add current user to room_users
-                                            if let Some(username) = app.username.clone() {
-                                                tracing::debug!(
-                                                    "Adding current user to room: {}",
-                                                    username
-                                                );
-                                                app.room_users
-                                                    .entry(room_id.clone())
-                                                    .or_insert_with(Vec::new)
-                                                    .push(username);
-                                            }
-
-                                            tracing::debug!(
-                                                "Room users after join: {:?}",
-                                                app.room_users.get(&room_id)
-                                            );
-                                        }
-                                        Err(e) => {
-                                            app_state.lock().await.error_message =
-                                                Some(format!("Failed to join room: {}", e));
-                                        }
-                                    }
-                                }
+                            AuthField::Password => {
+                                app.auth_password_input.pop();
                             }
-                            _ => {}
+                        },
+                        KeyCode::Char(c) => {
+                            match app.auth_field_focus {
+                                AuthField::Username => app.auth_username_input.push(c),
+                                AuthField::Password => app.auth_password_input.push(c),
+                            }
+                            tracing::debug!(
+                                "Input char: {}, username: {}, password len: {}",
+                                c,
+                                app.auth_username_input,
+                                app.auth_password_input.len()
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+                AppScreen::RoomList => match key.code {
+                    KeyCode::Char('q') | KeyCode::Char('Q') => {
+                        let mut client = chat_client.lock().await;
+                        let _ = client.disconnect().await;
+                        return Ok(());
+                    }
+                    KeyCode::Char('r') | KeyCode::Char('R') => {
+                        drop(app);
+                        let client = chat_client.lock().await;
+                        match client.list_rooms().await {
+                            Ok(rooms) => {
+                                app_state.lock().await.rooms = rooms;
+                            }
+                            Err(e) => {
+                                app_state.lock().await.error_message =
+                                    Some(format!("Failed to refresh rooms: {}", e));
+                            }
                         }
                     }
-                    AppScreen::Chat {
-                        room_id: chat_room_id,
-                        ..
-                    } => {
-                        match key.code {
-                            KeyCode::Esc => {
-                                // Stop typing if leaving room
-                                let was_typing = app.is_typing;
-                                if was_typing {
-                                    app.is_typing = false;
-                                    app.last_typing_time = None;
-                                }
+                    KeyCode::Char(c) if c.is_ascii_digit() => {
+                        let index = c.to_digit(10).unwrap() as usize - 1;
+                        if index < app.rooms.len() {
+                            let room_name = app.rooms[index].room_name.clone();
+                            drop(app);
 
-                                let room_id = chat_room_id.clone();
+                            let client = chat_client.lock().await;
+                            match client.join_room(room_name.clone()).await {
+                                Ok((room_id, existing_users)) => {
+                                    let mut app = app_state.lock().await;
+                                    tracing::debug!("Existing users in room: {:?}", existing_users);
+
+                                    app.enter_room(room_id.clone(), room_name, existing_users);
+
+                                    tracing::debug!(
+                                        "Room users after join: {:?}",
+                                        app.room_users.get(&room_id)
+                                    );
+                                }
+                                Err(e) => {
+                                    app_state.lock().await.error_message =
+                                        Some(format!("Failed to join room: {}", e));
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                },
+                AppScreen::Chat {
+                    room_id: chat_room_id,
+                    ..
+                } => {
+                    match key.code {
+                        KeyCode::Esc => {
+                            // Stop typing if leaving room
+                            let was_typing = app.is_typing;
+                            if was_typing {
+                                app.is_typing = false;
+                                app.last_typing_time = None;
+                            }
+
+                            let room_id = chat_room_id.clone();
+                            drop(app);
+
+                            let client = chat_client.lock().await;
+
+                            // Send stop typing if needed
+                            if was_typing {
+                                let _ = client.stop_typing().await;
+                            }
+
+                            if let Err(e) = client.leave_room(room_id.clone()).await {
+                                app_state.lock().await.error_message =
+                                    Some(format!("Failed to leave room: {}", e));
+                            }
+
+                            let mut app = app_state.lock().await;
+                            app.leave_room(&room_id);
+                        }
+                        KeyCode::Enter if !app.input_buffer.is_empty() => {
+                            let text = app.input_buffer.clone();
+                            app.input_buffer.clear();
+
+                            // Check for slash commands
+                            if text.starts_with('/') {
+                                let command = text.trim_start_matches('/').to_lowercase();
+                                match command.as_str() {
+                                    "quit" | "exit" => {
+                                        drop(app);
+                                        let mut client = chat_client.lock().await;
+                                        let _ = client.disconnect().await;
+                                        return Ok(());
+                                    }
+                                    _ => {
+                                        app.error_message =
+                                            Some(format!("Unknown command: /{}", command));
+                                    }
+                                }
+                            } else {
+                                // Stop typing when sending message
+                                app.is_typing = false;
+                                app.last_typing_time = None;
                                 drop(app);
 
                                 let client = chat_client.lock().await;
+                                // Stop typing notification
+                                let _ = client.stop_typing().await;
 
-                                // Send stop typing if needed
-                                if was_typing {
-                                    let _ = client.stop_typing().await;
-                                }
-
-                                if let Err(e) = client.leave_room(room_id.clone()).await {
+                                if let Err(e) = client.send_message(text).await {
                                     app_state.lock().await.error_message =
-                                        Some(format!("Failed to leave room: {}", e));
-                                }
-
-                                let mut app = app_state.lock().await;
-                                app.screen = AppScreen::RoomList;
-                                app.current_room = None;
-                                app.input_buffer.clear();
-                                // Clear room users when leaving
-                                app.room_users.remove(&room_id);
-                            }
-                            KeyCode::Enter => {
-                                if !app.input_buffer.is_empty() {
-                                    let text = app.input_buffer.clone();
-                                    app.input_buffer.clear();
-
-                                    // Check for slash commands
-                                    if text.starts_with('/') {
-                                        let command = text.trim_start_matches('/').to_lowercase();
-                                        match command.as_str() {
-                                            "quit" | "exit" => {
-                                                drop(app);
-                                                let mut client = chat_client.lock().await;
-                                                let _ = client.disconnect().await;
-                                                return Ok(());
-                                            }
-                                            _ => {
-                                                app.error_message =
-                                                    Some(format!("Unknown command: /{}", command));
-                                            }
-                                        }
-                                    } else {
-                                        // Stop typing when sending message
-                                        app.is_typing = false;
-                                        app.last_typing_time = None;
-                                        drop(app);
-
-                                        let client = chat_client.lock().await;
-                                        // Stop typing notification
-                                        let _ = client.stop_typing().await;
-
-                                        if let Err(e) = client.send_message(text).await {
-                                            app_state.lock().await.error_message =
-                                                Some(format!("Failed to send message: {}", e));
-                                        }
-                                    }
+                                        Some(format!("Failed to send message: {}", e));
                                 }
                             }
-                            KeyCode::Backspace => {
-                                app.input_buffer.pop();
-                            }
-                            KeyCode::Char(c) => {
-                                app.input_buffer.push(c);
-
-                                // Track typing state
-                                let now = std::time::Instant::now();
-                                let should_send_typing = if let Some(last_time) =
-                                    app.last_typing_time
-                                {
-                                    !app.is_typing || now.duration_since(last_time).as_secs() >= 4
-                                } else {
-                                    true
-                                };
-
-                                if should_send_typing {
-                                    app.last_typing_time = Some(now);
-                                    app.is_typing = true;
-                                    drop(app);
-
-                                    let client = chat_client.lock().await;
-                                    if let Err(e) = client.start_typing().await {
-                                        tracing::warn!("Failed to send start typing: {}", e);
-                                    }
-                                }
-                            }
-                            _ => {}
                         }
+                        KeyCode::Backspace => {
+                            app.input_buffer.pop();
+                        }
+                        KeyCode::Char(c) => {
+                            app.input_buffer.push(c);
+
+                            // Track typing state
+                            let now = std::time::Instant::now();
+                            let should_send_typing = if let Some(last_time) = app.last_typing_time {
+                                !app.is_typing || now.duration_since(last_time).as_secs() >= 4
+                            } else {
+                                true
+                            };
+
+                            if should_send_typing {
+                                app.last_typing_time = Some(now);
+                                app.is_typing = true;
+                                drop(app);
+
+                                let client = chat_client.lock().await;
+                                if let Err(e) = client.start_typing().await {
+                                    tracing::warn!("Failed to send start typing: {}", e);
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -401,96 +354,22 @@ async fn run_app(
         // Handle app events (non-blocking)
         if let Ok(event) = event_rx.try_recv() {
             let mut app = app_state.lock().await;
-            match event {
-                AppEvent::MessageReceived(message) => {
-                    app.messages.push(message);
-                }
-                AppEvent::UserJoined { username, room_id } => {
-                    // Add user to room_users
-                    app.room_users
-                        .entry(room_id.clone())
-                        .or_insert_with(Vec::new)
-                        .push(username.clone());
-
-                    let msg = app::Message {
-                        id: 0,
-                        username: "System".to_string(),
-                        text: format!("{} joined the room", username),
-                        timestamp: chrono::Local::now(),
-                        room_id,
-                    };
-                    app.messages.push(msg);
-                }
-                AppEvent::UserLeft { username, room_id } => {
-                    // Remove user from room_users
-                    if let Some(users) = app.room_users.get_mut(&room_id) {
-                        users.retain(|u| u != &username);
-                    }
-
-                    let msg = app::Message {
-                        id: 0,
-                        username: "System".to_string(),
-                        text: format!("{} left the room", username),
-                        timestamp: chrono::Local::now(),
-                        room_id,
-                    };
-                    app.messages.push(msg);
-                }
-                AppEvent::SystemAnnouncement { message } => {
-                    if let Some((room_id, _)) = &app.current_room {
-                        let msg = app::Message {
-                            id: 0,
-                            username: "System".to_string(),
-                            text: message,
-                            timestamp: chrono::Local::now(),
-                            room_id: room_id.clone(),
-                        };
-                        app.messages.push(msg);
-                    }
-                }
-                AppEvent::Connected => {
-                    app.connected = true;
-                }
-                AppEvent::Disconnected => {
-                    app.connected = false;
-                    app.screen = AppScreen::Login;
-                    app.error_message = Some("Disconnected from server".to_string());
-                }
-                AppEvent::Error(e) => {
-                    app.error_message = Some(e);
-                }
-                AppEvent::UserStartedTyping { username, room_id } => {
-                    app.typing_users
-                        .entry(room_id)
-                        .or_insert_with(std::collections::HashSet::new)
-                        .insert(username);
-                }
-                AppEvent::UserStoppedTyping { username, room_id } => {
-                    if let Some(typing_users) = app.typing_users.get_mut(&room_id) {
-                        typing_users.remove(&username);
-                        if typing_users.is_empty() {
-                            app.typing_users.remove(&room_id);
-                        }
-                    }
-                }
-                _ => {}
-            }
+            app.apply_event(event);
         }
 
         // Check for typing timeout
         {
             let mut app = app_state.lock().await;
-            if app.is_typing {
-                if let Some(last_typing_time) = app.last_typing_time {
-                    if last_typing_time.elapsed().as_secs() >= 5 {
-                        app.is_typing = false;
-                        app.last_typing_time = None;
-                        drop(app);
+            if app.is_typing
+                && let Some(last_typing_time) = app.last_typing_time
+                && last_typing_time.elapsed().as_secs() >= 5
+            {
+                app.is_typing = false;
+                app.last_typing_time = None;
+                drop(app);
 
-                        let client = chat_client.lock().await;
-                        let _ = client.stop_typing().await;
-                    }
-                }
+                let client = chat_client.lock().await;
+                let _ = client.stop_typing().await;
             }
         }
 

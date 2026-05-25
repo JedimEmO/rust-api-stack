@@ -281,7 +281,7 @@ mod tests {
             ClientError::Bidirectional(_)
         ));
 
-        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "io");
+        let io_err = std::io::Error::other("io");
         assert!(matches!(ClientError::from(io_err), ClientError::Io(_)));
 
         let url_err = url::Url::parse("not a url").unwrap_err();

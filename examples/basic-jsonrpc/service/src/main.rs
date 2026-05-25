@@ -278,14 +278,14 @@ impl MyServiceTrait for MyServiceImpl {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
     // Initialize observability with the new crates
     info!("Initializing OpenTelemetry with unified observability...");
     let otel = OtelSetupBuilder::new("basic-jsonrpc-service")
         .build()
-        .expect("Failed to set up OpenTelemetry");
+        .map_err(|e| anyhow::anyhow!("Failed to set up OpenTelemetry: {e}"))?;
 
     // Note about OTLP: For OTLP export, you would typically run this service
     // alongside an OpenTelemetry Collector that scrapes the /metrics endpoint
@@ -349,7 +349,7 @@ async fn main() {
     })
     .auth_provider(MyAuthProvider)
     .build()
-    .expect("Failed to build JSON-RPC router");
+    .map_err(|e| anyhow::anyhow!("Failed to build JSON-RPC router: {e}"))?;
 
     // Create the main app with metrics endpoint
     let app = Router::new().merge(rpc_router).merge(otel.metrics_router());
@@ -369,6 +369,238 @@ async fn main() {
     println!();
     println!("{}", otlp_note);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn service() -> MyServiceImpl {
+        MyServiceImpl {
+            storage: Arc::new(TaskStorage::new()),
+        }
+    }
+
+    fn auth_user(user_id: &str, permissions: &[&str]) -> AuthenticatedUser {
+        AuthenticatedUser {
+            user_id: user_id.to_string(),
+            permissions: permissions
+                .iter()
+                .map(|permission| (*permission).to_string())
+                .collect(),
+            metadata: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn auth_provider_maps_user_and_admin_tokens() {
+        let provider = MyAuthProvider;
+
+        let user = provider
+            .authenticate("valid_token".to_string())
+            .await
+            .expect("valid user token");
+        assert_eq!(user.user_id, "user123");
+        assert!(user.permissions.contains("user"));
+        assert!(!user.permissions.contains("admin"));
+
+        let admin = provider
+            .authenticate("admin_token".to_string())
+            .await
+            .expect("valid admin token");
+        assert_eq!(admin.user_id, "admin123");
+        assert!(admin.permissions.contains("user"));
+        assert!(admin.permissions.contains("admin"));
+    }
+
+    #[tokio::test]
+    async fn auth_provider_rejects_unknown_tokens() {
+        let provider = MyAuthProvider;
+
+        let error = provider
+            .authenticate("bad_token".to_string())
+            .await
+            .expect_err("unknown token should be rejected");
+
+        assert!(matches!(error, ras_jsonrpc_core::AuthError::InvalidToken));
+    }
+
+    #[tokio::test]
+    async fn sign_in_returns_documented_demo_tokens() {
+        let service = service();
+
+        let admin = service
+            .sign_in(SignInRequest::WithCredentials {
+                username: "admin".to_string(),
+                password: "secret".to_string(),
+            })
+            .await
+            .expect("admin sign in");
+        assert!(matches!(
+            admin,
+            SignInResponse::Success { ref jwt } if jwt == "admin_token"
+        ));
+
+        let user = service
+            .sign_in(SignInRequest::WithCredentials {
+                username: "user".to_string(),
+                password: "password".to_string(),
+            })
+            .await
+            .expect("user sign in");
+        assert!(matches!(
+            user,
+            SignInResponse::Success { ref jwt } if jwt == "valid_token"
+        ));
+
+        let failure = service
+            .sign_in(SignInRequest::WithCredentials {
+                username: "user".to_string(),
+                password: "wrong".to_string(),
+            })
+            .await
+            .expect("failed sign in response");
+        assert!(matches!(
+            failure,
+            SignInResponse::Failure { ref msg } if msg == "Invalid credentials"
+        ));
+    }
+
+    #[tokio::test]
+    async fn task_lifecycle_updates_dashboard_stats() {
+        let service = service();
+        let user = auth_user("user123", &["user"]);
+
+        let high = service
+            .create_task(
+                &user,
+                CreateTaskRequest {
+                    title: "Write docs".to_string(),
+                    description: "Document the JSON-RPC example".to_string(),
+                    priority: TaskPriority::High,
+                },
+            )
+            .await
+            .expect("create high priority task");
+        let low = service
+            .create_task(
+                &user,
+                CreateTaskRequest {
+                    title: "Tidy examples".to_string(),
+                    description: "Remove misleading snippets".to_string(),
+                    priority: TaskPriority::Low,
+                },
+            )
+            .await
+            .expect("create low priority task");
+
+        let updated = service
+            .update_task(
+                &user,
+                UpdateTaskRequest {
+                    id: high.id.clone(),
+                    title: Some("Write verified docs".to_string()),
+                    description: None,
+                    completed: Some(true),
+                    priority: Some(TaskPriority::Medium),
+                },
+            )
+            .await
+            .expect("update task");
+        assert_eq!(updated.title, "Write verified docs");
+        assert!(updated.completed);
+        assert!(matches!(updated.priority, TaskPriority::Medium));
+
+        let stats = service
+            .get_dashboard_stats(&user, ())
+            .await
+            .expect("dashboard stats");
+        assert_eq!(stats.total_tasks, 2);
+        assert_eq!(stats.completed_tasks, 1);
+        assert_eq!(stats.pending_tasks, 1);
+        assert_eq!(stats.high_priority_tasks, 0);
+
+        let list = service.list_tasks(&user, ()).await.expect("list tasks");
+        assert_eq!(list.total, 2);
+
+        assert!(
+            service
+                .delete_task(&user, low.id)
+                .await
+                .expect("delete task")
+        );
+        let after_delete = service
+            .get_dashboard_stats(&user, ())
+            .await
+            .expect("stats after delete");
+        assert_eq!(after_delete.total_tasks, 1);
+    }
+
+    #[tokio::test]
+    async fn updating_missing_task_returns_not_found_error() {
+        let service = service();
+        let user = auth_user("user123", &["user"]);
+
+        let error = service
+            .update_task(
+                &user,
+                UpdateTaskRequest {
+                    id: "missing".to_string(),
+                    title: Some("Missing".to_string()),
+                    description: None,
+                    completed: None,
+                    priority: None,
+                },
+            )
+            .await
+            .expect_err("missing task should be rejected");
+
+        assert_eq!(error.to_string(), "Task not found");
+    }
+
+    #[tokio::test]
+    async fn missing_task_lookup_and_delete_are_non_error_absences() {
+        let service = service();
+        let user = auth_user("user123", &["user"]);
+
+        let task = service
+            .get_task(&user, "missing".to_string())
+            .await
+            .expect("missing get should be a successful absence");
+        assert!(task.is_none());
+
+        let deleted = service
+            .delete_task(&user, "missing".to_string())
+            .await
+            .expect("missing delete should report false");
+        assert!(!deleted);
+    }
+
+    #[tokio::test]
+    async fn profile_methods_use_authenticated_user_and_requested_email() {
+        let service = service();
+        let admin = auth_user("admin123", &["admin", "user"]);
+
+        let profile = service
+            .get_profile(&admin, ())
+            .await
+            .expect("profile response");
+        assert_eq!(profile.username, "admin");
+        assert_eq!(profile.email, "admin123@example.com");
+        assert!(profile.permissions.contains(&"admin".to_string()));
+
+        let updated = service
+            .update_profile(
+                &admin,
+                UpdateProfileRequest {
+                    email: Some("admin@example.test".to_string()),
+                },
+            )
+            .await
+            .expect("profile update");
+        assert_eq!(updated.email, "admin@example.test");
+    }
 }

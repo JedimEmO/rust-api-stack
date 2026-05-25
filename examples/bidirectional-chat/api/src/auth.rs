@@ -78,3 +78,121 @@ rest_service!({
         GET UNAUTHORIZED health() -> HealthResponse,
     ]
 });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn login_request_omits_default_provider_when_absent() {
+        let request = LoginRequest {
+            username: "alice".to_string(),
+            password: "alice123".to_string(),
+            provider: None,
+        };
+
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            json!({
+                "username": "alice",
+                "password": "alice123"
+            })
+        );
+    }
+
+    #[test]
+    fn register_response_omits_display_name_when_absent() {
+        let response = RegisterResponse {
+            message: "User registered successfully".to_string(),
+            username: "alice".to_string(),
+            display_name: None,
+        };
+
+        assert_eq!(
+            serde_json::to_value(response).unwrap(),
+            json!({
+                "message": "User registered successfully",
+                "username": "alice"
+            })
+        );
+    }
+
+    #[test]
+    fn login_response_serializes_token_expiry_and_user_id() {
+        let response = LoginResponse {
+            token: "jwt-token".to_string(),
+            expires_at: 1_779_552_000,
+            user_id: "alice".to_string(),
+        };
+
+        assert_eq!(
+            serde_json::to_value(response).unwrap(),
+            json!({
+                "token": "jwt-token",
+                "expires_at": 1779552000,
+                "user_id": "alice"
+            })
+        );
+    }
+
+    #[test]
+    fn register_request_omits_absent_profile_fields() {
+        let request = RegisterRequest {
+            username: "alice".to_string(),
+            password: "alice123".to_string(),
+            email: None,
+            display_name: None,
+        };
+
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            json!({
+                "username": "alice",
+                "password": "alice123"
+            })
+        );
+    }
+
+    #[cfg(feature = "server")]
+    fn operation<'a>(
+        doc: &'a serde_json::Value,
+        path: &str,
+        method: &str,
+    ) -> &'a serde_json::Value {
+        &doc["paths"][path][method]
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn generated_openapi_documents_public_auth_routes() {
+        let doc = generate_chatauthservice_openapi();
+
+        assert_eq!(doc["openapi"], "3.0.3");
+        assert_eq!(doc["info"]["title"], "ChatAuthService REST API");
+
+        let login = operation(&doc, "/auth/login", "post");
+        assert!(login.is_object());
+        assert!(login.get("security").is_none());
+        assert_eq!(
+            login["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/LoginRequest"
+        );
+        assert_eq!(
+            login["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/LoginResponse"
+        );
+
+        let register = operation(&doc, "/auth/register", "post");
+        assert!(register.is_object());
+        assert!(register.get("security").is_none());
+        assert_eq!(
+            register["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/RegisterRequest"
+        );
+
+        let health = operation(&doc, "/health", "get");
+        assert!(health.is_object());
+        assert!(health.get("security").is_none());
+    }
+}

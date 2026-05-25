@@ -1,17 +1,19 @@
 [package]
 name = "ras-identity-local"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
+rust-version = "1.88"
 description = "Local username/password authentication provider with Argon2 hashing"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/example/rust-agent-stack"
-homepage = "https://github.com/example/rust-agent-stack"
+repository = "https://github.com/JedimEmO/rust-api-stack"
+homepage = "https://github.com/JedimEmO/rust-api-stack"
+readme = "README.md"
 
 [features]
 timing-tests = []
 
 [dependencies]
-ras-identity-core = { path = "../../core/ras-identity-core" }
+ras-identity-core = { path = "../../core/ras-identity-core", version = "0.1.1" }
 
 async-trait = { workspace = true }
 argon2 = { workspace = true }
@@ -19,6 +21,3 @@ rand_core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
-
-[dev-dependencies]
-tokio-test = { workspace = true }

@@ -1,41 +1,39 @@
-# rust-identity-oauth2
+# ras-identity-oauth2
 
-OAuth2 identity provider implementation with PKCE support for the rust-agent-stack.
+OAuth2 identity provider implementation with PKCE support for Rust Agent Stack.
 
 ## Features
 
 - **OAuth2 Authorization Code Flow** with PKCE (Proof Key for Code Exchange) 
 - **CSRF Protection** via state parameters
 - **Generic OAuth2 Provider Support** (Google, GitHub, Microsoft, etc.)
-- **Secure Implementation** with comprehensive security tests
+- **Security-Focused Tests** for PKCE, state handling, and OAuth2 error paths
 - **Thread-Safe** state management
 - **Configurable User Info Mapping** for different provider schemas
 - **Integration** with existing `IdentityProvider` trait
 
 ## Security Features
 
-- **PKCE Support**: Prevents authorization code interception attacks
+- **PKCE Support**: Mitigates authorization code interception attacks
 - **State Parameter**: CSRF protection using cryptographically random UUIDs
-- **Timing Attack Resistance**: Constant-time operations where applicable
 - **Input Validation**: Robust handling of malformed responses
-- **Session Tracking**: Stateful session management for revocation
+- **Single-Use State**: Callback state is removed after successful retrieval
 
 ## Usage
 
 ### Basic Setup
 
 ```rust
-use rust_identity_oauth2::{
-    OAuth2Config, OAuth2Provider, OAuth2ProviderConfig, InMemoryStateStore
+use ras_identity_oauth2::{
+    InMemoryStateStore, OAuth2Config, OAuth2Provider, OAuth2ProviderConfig, UserInfoMapping,
 };
-use std::sync::Arc;
-use std::collections::HashMap;
+use std::{collections::HashMap, env, sync::Arc};
 
 // Configure OAuth2 provider (e.g., Google)
 let google_config = OAuth2ProviderConfig {
     provider_id: "google".to_string(),
-    client_id: "your-google-client-id".to_string(),
-    client_secret: "your-google-client-secret".to_string(),
+    client_id: env::var("GOOGLE_CLIENT_ID")?,
+    client_secret: env::var("GOOGLE_CLIENT_SECRET")?,
     authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
     token_endpoint: "https://oauth2.googleapis.com/token".to_string(),
     userinfo_endpoint: Some("https://www.googleapis.com/oauth2/v1/userinfo".to_string()),
@@ -60,12 +58,13 @@ let oauth2_provider = OAuth2Provider::new(config, state_store);
 ### Integration with Session Service
 
 ```rust
-use rust_identity_session::SessionService;
-use rust_identity_core::IdentityProvider;
+use ras_identity_core::{IdentityError, IdentityProvider};
+use ras_identity_oauth2::OAuth2Response;
+use ras_identity_session::{SessionConfig, SessionError, SessionService};
 
 // Register with session service
-let session_config = SessionConfig::default();
-let session_service = SessionService::new(session_config);
+let session_config = SessionConfig::new("use-at-least-32-bytes-of-random-secret")?;
+let session_service = SessionService::new(session_config)?;
 
 session_service.register_provider(Box::new(oauth2_provider)).await;
 
@@ -84,9 +83,13 @@ match session_service.begin_session("oauth2", start_payload).await {
                 // Redirect user to `url`
                 println!("Redirect to: {}", url);
             }
+            OAuth2Response::Error { message } => {
+                eprintln!("OAuth2 start-flow failed: {message}");
+            }
         }
     }
-    _ => panic!("Unexpected response"),
+    Ok(_) => eprintln!("OAuth2 start flow completed without a redirect"),
+    Err(err) => eprintln!("OAuth2 start flow failed: {err}"),
 }
 
 // Handle callback
@@ -165,7 +168,7 @@ OAuth2ProviderConfig {
     redirect_uri: "http://localhost:3000/auth/github/callback".to_string(),
     scopes: vec!["user:email".to_string()],
     auth_params: HashMap::new(),
-    use_pkce: false, // GitHub doesn't support PKCE yet
+    use_pkce: false, // Set according to provider support and client type.
     user_info_mapping: Some(UserInfoMapping {
         subject_field: Some("id".to_string()),
         email_field: Some("email".to_string()),
@@ -180,11 +183,18 @@ OAuth2ProviderConfig {
 For production use, implement a custom state store:
 
 ```rust
-use rust_identity_oauth2::{OAuth2State, OAuth2StateStore, OAuth2Result};
+use ras_identity_oauth2::{OAuth2Error, OAuth2Result, OAuth2State, OAuth2StateStore};
 use async_trait::async_trait;
 
 pub struct RedisStateStore {
     // Redis client implementation
+}
+
+impl RedisStateStore {
+    async fn pop_state(&self, _state: &str) -> OAuth2Result<OAuth2State> {
+        // Retrieve and delete state from Redis with your Redis client.
+        Err(OAuth2Error::StateNotFound)
+    }
 }
 
 #[async_trait]
@@ -195,8 +205,7 @@ impl OAuth2StateStore for RedisStateStore {
     }
 
     async fn retrieve(&self, state: &str) -> OAuth2Result<OAuth2State> {
-        // Retrieve and delete state from Redis
-        todo!()
+        self.pop_state(state).await
     }
 
     async fn cleanup_expired(&self) -> OAuth2Result<usize> {
@@ -218,19 +227,26 @@ impl OAuth2StateStore for RedisStateStore {
 
 ## Testing
 
-The crate includes comprehensive tests covering:
+The crate includes tests covering:
 
 - PKCE generation and validation
 - State parameter security
 - Concurrent request handling
 - Error cases and edge conditions
 - Full OAuth2 flow simulation
-- Security attack scenarios
+- Callback state reuse and expiration scenarios
 
 Run tests with:
 
 ```bash
-cargo test -p rust-identity-oauth2
+cargo test -p ras-identity-oauth2 --locked
+```
+
+## Checks
+
+```bash
+cargo test -p ras-identity-oauth2 --locked
+cargo clippy -p ras-identity-oauth2 --all-targets --all-features --locked -- -D warnings
 ```
 
 ## Dependencies

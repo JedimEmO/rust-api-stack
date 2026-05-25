@@ -2,22 +2,28 @@
 name = "ras-jsonrpc-bidirectional-types"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
+description = "Shared types for bidirectional JSON-RPC clients and servers"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-api-stack"
+homepage = "https://github.com/JedimEmO/rust-api-stack"
+readme = "README.md"
 
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true }
+tokio = { version = "1.0", default-features = false, features = ["sync"] }
 futures = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }
-ras-auth-core = { path = "../../../core/ras-auth-core" }
-ras-jsonrpc-types = { path = "../../ras-jsonrpc-types" }
-uuid = { workspace = true }
+ras-auth-core = { path = "../../../core/ras-auth-core", version = "0.1.0" }
+ras-jsonrpc-types = { path = "../../ras-jsonrpc-types", version = "0.1.1" }
+uuid = { version = "1.11", features = ["v4", "serde", "js"] }
 chrono = { workspace = true }
 
-# WebSocket dependencies
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio-tungstenite = { workspace = true }
 
 [dev-dependencies]
-tokio-test = { workspace = true }
+tokio = { version = "1.0", default-features = false, features = ["macros", "rt", "sync"] }

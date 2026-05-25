@@ -1,55 +1,82 @@
-import { fileService } from './fileClient';
+import {
+  downloadDownloadFileId,
+  downloadDownloadSecureFileId,
+  uploadUpload,
+  uploadUploadProfilePicture,
+} from './generated';
+import type { BinaryFileResponse, UploadResponse } from './generated';
 
-/**
- * Example usage of the generated TypeScript file service client
- */
-export async function exampleUsage() {
-  try {
-    // Example: Upload a file
-    const fileInput = document.createElement('input');
-    fileInput.type = 'file';
-    
-    fileInput.onchange = async (event) => {
-      const target = event.target as HTMLInputElement;
-      const file = target.files?.[0];
-      
-      if (!file) return;
+const BASE_URL = 'http://localhost:3000/api/documents';
 
-      console.log('Uploading file:', file.name);
-      
-      // Upload file (no auth required)
-      const uploadResult = await fileService.uploadFile(file);
-      console.log('Upload successful:', uploadResult);
-      
-      // Download the same file
-      console.log('Downloading file:', uploadResult.file_id);
-      await fileService.downloadAndSave(uploadResult.file_id, uploadResult.file_name);
-      
-      // Example with authentication
-      fileService.setBearerToken('your-jwt-token-here');
-      
-      // Upload profile picture (requires auth)
-      try {
-        const profileResult = await fileService.uploadProfilePicture(file);
-        console.log('Profile picture upload successful:', profileResult);
-      } catch (error) {
-        console.error('Profile upload failed (expected without valid token):', error);
-      }
-    };
-    
-    // Trigger file picker
-    fileInput.click();
-    
-  } catch (error) {
-    console.error('File operation failed:', error);
+type ApiResponse<T> = {
+  data?: T;
+  error?: unknown;
+};
+
+function requireData<T>(operation: string, response: ApiResponse<T>): T {
+  if (response.error) {
+    throw new Error(`${operation} failed: ${JSON.stringify(response.error)}`);
   }
+
+  if (response.data === undefined) {
+    throw new Error(`${operation} returned no data`);
+  }
+
+  return response.data;
 }
 
-// Auto-run example if in browser
-if (typeof window !== 'undefined') {
-  window.addEventListener('load', () => {
-    console.log('File service client ready! Call exampleUsage() to test.');
-    // Uncomment to auto-run:
-    // exampleUsage();
+export async function uploadFile(
+  file: Blob | File,
+  baseUrl = BASE_URL,
+): Promise<UploadResponse> {
+  const response = await uploadUpload({
+    baseUrl,
+    body: { file },
   });
+
+  return requireData('POST /upload', response);
+}
+
+export async function uploadProfilePicture(
+  file: Blob | File,
+  bearerToken: string,
+  baseUrl = BASE_URL,
+): Promise<UploadResponse> {
+  const response = await uploadUploadProfilePicture({
+    baseUrl,
+    headers: {
+      Authorization: `Bearer ${bearerToken}`,
+    },
+    body: { file },
+  });
+
+  return requireData('POST /upload_profile_picture', response);
+}
+
+export async function downloadFile(
+  fileId: string,
+  baseUrl = BASE_URL,
+): Promise<BinaryFileResponse> {
+  const response = await downloadDownloadFileId({
+    baseUrl,
+    path: { file_id: fileId },
+  });
+
+  return requireData('GET /download/{file_id}', response);
+}
+
+export async function downloadSecureFile(
+  fileId: string,
+  bearerToken: string,
+  baseUrl = BASE_URL,
+): Promise<BinaryFileResponse> {
+  const response = await downloadDownloadSecureFileId({
+    baseUrl,
+    headers: {
+      Authorization: `Bearer ${bearerToken}`,
+    },
+    path: { file_id: fileId },
+  });
+
+  return requireData('GET /download_secure/{file_id}', response);
 }

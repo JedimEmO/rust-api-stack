@@ -9,6 +9,8 @@ use rand_core::OsRng;
 use ras_identity_core::{IdentityError, IdentityProvider, IdentityResult, VerifiedIdentity};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -25,6 +27,41 @@ pub struct LocalUser {
 pub struct LocalAuthPayload {
     pub username: String,
     pub password: String,
+}
+
+/// Errors returned when managing local users.
+#[derive(Debug)]
+pub enum LocalUserError {
+    /// A user with the requested username already exists.
+    UserAlreadyExists { username: String },
+    /// Password hashing failed while creating the user.
+    PasswordHash(argon2::password_hash::Error),
+}
+
+impl fmt::Display for LocalUserError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UserAlreadyExists { username } => {
+                write!(f, "user '{username}' already exists")
+            }
+            Self::PasswordHash(error) => write!(f, "failed to hash password: {error}"),
+        }
+    }
+}
+
+impl Error for LocalUserError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::PasswordHash(error) => Some(error),
+            Self::UserAlreadyExists { .. } => None,
+        }
+    }
+}
+
+impl From<argon2::password_hash::Error> for LocalUserError {
+    fn from(error: argon2::password_hash::Error) -> Self {
+        Self::PasswordHash(error)
+    }
 }
 
 #[derive(Clone)]
@@ -47,7 +84,14 @@ impl LocalUserProvider {
         password: String,
         email: Option<String>,
         display_name: Option<String>,
-    ) -> Result<(), argon2::password_hash::Error> {
+    ) -> Result<(), LocalUserError> {
+        {
+            let users = self.users.read().await;
+            if users.contains_key(&username) {
+                return Err(LocalUserError::UserAlreadyExists { username });
+            }
+        }
+
         let argon2 = Argon2::default();
         let salt = SaltString::generate(&mut OsRng);
         let password_hash = argon2
@@ -63,6 +107,9 @@ impl LocalUserProvider {
         };
 
         let mut users = self.users.write().await;
+        if users.contains_key(&username) {
+            return Err(LocalUserError::UserAlreadyExists { username });
+        }
 
         users.insert(username, user);
 
@@ -75,17 +122,19 @@ impl LocalUserProvider {
     }
 
     async fn verify_user(&self, username: &str, password: &str) -> IdentityResult<LocalUser> {
-        let _semlock = self.semaphore.clone().acquire_owned().await.unwrap();
+        let _semlock =
+            self.semaphore.clone().acquire_owned().await.map_err(|_| {
+                IdentityError::ProviderError("local auth limiter closed".to_string())
+            })?;
         let users = self.users.read().await;
 
-        // Use a dummy hash to prevent timing attacks
-        // This is a real Argon2 hash of "dummy_password" to ensure consistent timing
-        const DUMMY_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$9QsJRKgzJkKaOUvlp7gl2Q$qmE3qIFBNJ6nZYbLYXEI2uo0zZc7T0Q8LU1ZsqsZ3QE";
+        // Verify missing users against a fixed sentinel hash to keep timing consistent.
+        const SENTINEL_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$9QsJRKgzJkKaOUvlp7gl2Q$qmE3qIFBNJ6nZYbLYXEI2uo0zZc7T0Q8LU1ZsqsZ3QE";
 
-        let (user_exists, password_hash) = if let Some(user) = users.get(username) {
-            (true, user.password_hash.as_str())
+        let (user, password_hash) = if let Some(user) = users.get(username) {
+            (Some(user.clone()), user.password_hash.as_str())
         } else {
-            (false, DUMMY_HASH)
+            (None, SENTINEL_HASH)
         };
 
         let parsed_hash = PasswordHash::new(password_hash)
@@ -95,9 +144,9 @@ impl LocalUserProvider {
             .verify_password(password.as_bytes(), &parsed_hash)
             .is_ok();
 
-        // Only succeed if both user exists AND password is valid
-        if user_exists && password_valid {
-            Ok(users.get(username).unwrap().clone())
+        // Only succeed if both user exists AND password is valid.
+        if password_valid {
+            user.ok_or(IdentityError::InvalidCredentials)
         } else {
             // Always return the same error regardless of whether user exists or password is wrong
             Err(IdentityError::InvalidCredentials)
@@ -184,6 +233,134 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_duplicate_user_is_rejected() {
+        let provider = setup_test_provider().await;
+
+        let result = provider
+            .add_user(
+                "testuser".to_string(),
+                "replacement-password".to_string(),
+                Some("other@example.com".to_string()),
+                Some("Other User".to_string()),
+            )
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(LocalUserError::UserAlreadyExists { username }) if username == "testuser"
+        ));
+
+        let original_password_payload = serde_json::json!({
+            "username": "testuser",
+            "password": "password123"
+        });
+        assert!(provider.verify(original_password_payload).await.is_ok());
+
+        let replacement_password_payload = serde_json::json!({
+            "username": "testuser",
+            "password": "replacement-password"
+        });
+        assert!(matches!(
+            provider.verify(replacement_password_payload).await,
+            Err(IdentityError::InvalidCredentials)
+        ));
+    }
+
+    #[tokio::test]
+    async fn remove_user_deletes_credentials_and_returns_user() {
+        let provider = setup_test_provider().await;
+
+        let removed = provider.remove_user("alice").await.expect("user removed");
+        assert_eq!(removed.username, "alice");
+        assert_eq!(removed.email.as_deref(), Some("alice@example.com"));
+
+        let payload = serde_json::json!({
+            "username": "alice",
+            "password": "supersecret"
+        });
+        let result = provider.verify(payload).await;
+        assert!(matches!(result, Err(IdentityError::InvalidCredentials)));
+        assert!(provider.remove_user("alice").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn default_provider_starts_empty_with_local_provider_id() {
+        let provider = LocalUserProvider::default();
+        assert_eq!(provider.provider_id(), "local");
+
+        let result = provider
+            .verify(serde_json::json!({
+                "username": "missing",
+                "password": "irrelevant"
+            }))
+            .await;
+        assert!(matches!(result, Err(IdentityError::InvalidCredentials)));
+    }
+
+    #[tokio::test]
+    async fn malformed_stored_password_hash_returns_provider_error() {
+        let provider = LocalUserProvider::new();
+        provider.users.write().await.insert(
+            "broken".to_string(),
+            LocalUser {
+                username: "broken".to_string(),
+                password_hash: "not-a-phc-password-hash".to_string(),
+                email: None,
+                display_name: None,
+                metadata: None,
+            },
+        );
+
+        let result = provider
+            .verify(serde_json::json!({
+                "username": "broken",
+                "password": "password123"
+            }))
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(IdentityError::ProviderError(message))
+                if message.contains("password hash") || message.contains("PHC")
+        ));
+    }
+
+    #[tokio::test]
+    async fn closed_limiter_returns_provider_error() {
+        let provider = setup_test_provider().await;
+        provider.semaphore.close();
+
+        let result = provider
+            .verify(serde_json::json!({
+                "username": "testuser",
+                "password": "password123"
+            }))
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(IdentityError::ProviderError(message))
+                if message == "local auth limiter closed"
+        ));
+    }
+
+    #[test]
+    fn local_user_error_display_and_source_are_stable() {
+        use std::error::Error as _;
+
+        let duplicate = LocalUserError::UserAlreadyExists {
+            username: "alice".to_string(),
+        };
+        assert_eq!(duplicate.to_string(), "user 'alice' already exists");
+        assert!(duplicate.source().is_none());
+
+        let parse_error = PasswordHash::new("not-a-phc-password-hash").unwrap_err();
+        let hash_error = LocalUserError::from(parse_error);
+        assert!(hash_error.to_string().contains("failed to hash password"));
+        assert!(hash_error.source().is_some());
+    }
+
+    #[tokio::test]
     async fn test_wrong_password_fails() {
         let provider = setup_test_provider().await;
 
@@ -237,7 +414,7 @@ mod tests {
 
     #[cfg(feature = "timing-tests")]
     #[tokio::test]
-    #[ignore = "Timing test disabled - see issue with Argon2 parameter differences"]
+    #[ignore = "timing-sensitive statistical check; run explicitly on a quiet machine"]
     async fn test_timing_attack_resistance() {
         use std::time::{Duration, Instant};
 
@@ -279,11 +456,7 @@ mod tests {
             wrong_password_times.iter().sum::<Duration>() / NUM_ATTEMPTS as u32;
 
         // The difference should be small (less than 10ms typically for Argon2)
-        let time_diff = if avg_nonexistent > avg_wrong_password {
-            avg_nonexistent - avg_wrong_password
-        } else {
-            avg_wrong_password - avg_nonexistent
-        };
+        let time_diff = avg_nonexistent.abs_diff(avg_wrong_password);
 
         println!("Average time for nonexistent user: {:?}", avg_nonexistent);
         println!("Average time for wrong password: {:?}", avg_wrong_password);
@@ -534,7 +707,7 @@ mod tests {
             }
         }
 
-        // Should have 50 successful and 50 failed
+        // Half of the attempts use valid credentials and half use invalid credentials.
         assert_eq!(successful_auths, CONCURRENT_ATTEMPTS / 2);
         assert_eq!(failed_auths, CONCURRENT_ATTEMPTS / 2);
     }

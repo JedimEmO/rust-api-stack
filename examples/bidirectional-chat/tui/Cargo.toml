@@ -2,6 +2,13 @@
 name = "bidirectional-chat-tui"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
+description = "Terminal chat client for the Rust Agent Stack bidirectional example"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-api-stack"
+homepage = "https://github.com/JedimEmO/rust-api-stack"
+publish = false
+readme = "README.md"
 
 [dependencies]
 # TUI framework
@@ -12,7 +19,7 @@ crossterm = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 
 # Chat API client
-bidirectional-chat-api = { path = "../api" }
+bidirectional-chat-api = { path = "../api", version = "0.1.0", default-features = false, features = ["client"] }
 
 # Error handling
 anyhow = { workspace = true }
@@ -34,3 +41,7 @@ chrono = { workspace = true }
 
 # Configuration
 dotenvy = { workspace = true }
+
+[features]
+default = []
+server-api = ["bidirectional-chat-api/server"]

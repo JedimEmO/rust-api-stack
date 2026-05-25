@@ -97,8 +97,9 @@ pub fn generate_client_code(
                 F: Fn(#request_type) -> Fut + Send + Sync + 'static,
                 Fut: std::future::Future<Output = Result<#response_type, String>> + Send + 'static,
             {
+                let callback = std::sync::Arc::new(handler);
                 let handler = std::sync::Arc::new(move |request: ras_jsonrpc_types::JsonRpcRequest| {
-                    let handler = handler.clone();
+                    let callback = callback.clone();
                     Box::pin(async move {
                         // Parse request parameters
                         let params: #request_type = if let Some(params) = request.params {
@@ -124,7 +125,7 @@ pub fn generate_client_code(
                         };
 
                         // Call handler
-                        match handler(params).await {
+                        match callback(params).await {
                             Ok(result) => {
                                 match serde_json::to_value(result) {
                                     Ok(result_value) => ras_jsonrpc_types::JsonRpcResponse::success(result_value, request.id),
@@ -175,13 +176,11 @@ pub fn generate_client_code(
     });
 
     quote! {
-        #[cfg(feature = "client")]
         /// Generated client for the bidirectional service
         pub struct #client_name {
             client: ras_jsonrpc_bidirectional_client::Client,
         }
 
-        #[cfg(feature = "client")]
         impl #client_name {
             /// Create a new client from a pre-configured Client
             pub fn new(client: ras_jsonrpc_bidirectional_client::Client) -> Self {
@@ -230,7 +229,6 @@ pub fn generate_client_code(
             }
         }
 
-        #[cfg(feature = "client")]
         /// Builder for the bidirectional client
         pub struct #client_builder_name {
             url: String,
@@ -238,7 +236,6 @@ pub fn generate_client_code(
             timeout: Option<std::time::Duration>,
         }
 
-        #[cfg(feature = "client")]
         impl #client_builder_name {
             /// Create a new client builder
             pub fn new(url: impl Into<String>) -> Self {
@@ -278,14 +275,12 @@ pub fn generate_client_code(
             }
         }
 
-        #[cfg(feature = "client")]
         /// Type-safe enum for client-to-server messages
         #[derive(Debug)]
         pub enum #client_to_server_message_name {
             #(#client_to_server_methods)*
         }
 
-        #[cfg(feature = "client")]
         /// Type-safe enum for server-to-client notifications
         #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
         pub enum #server_to_client_notification_name {

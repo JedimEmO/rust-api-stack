@@ -36,10 +36,13 @@ jsonrpc_bidirectional_service!({
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn test_generated_code_compiles() {
-        // This test ensures that the generated code compiles without errors
-        // We can't easily test the runtime behavior without setting up WebSocket connections,
-        // but we can ensure the code generation produces valid Rust code.
+        let request = TestRequest {
+            data: "input".to_string(),
+        };
+        assert_eq!(request.data, "input");
     }
 }

@@ -6,7 +6,7 @@
 //! - JWT authentication via headers or connection params
 //! - Sending JSON-RPC requests and receiving responses
 //! - Receiving server notifications with registered handlers
-//! - Connection lifecycle management (connect, disconnect, reconnect)
+//! - Connection lifecycle management (connect, disconnect, status)
 //! - Subscription management
 //! - Builder pattern for client configuration
 //!
@@ -18,13 +18,13 @@
 //! # Examples
 //!
 //! ```rust,no_run
-//! use ras_jsonrpc_bidirectional_client::{Client, ClientBuilder};
+//! use ras_jsonrpc_bidirectional_client::ClientBuilder;
 //! use serde_json::json;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let client = ClientBuilder::new("ws://localhost:8080/ws")
-//!         .with_jwt_token("your_jwt_token".to_string())
+//!         .with_jwt_token("demo-token".to_string())
 //!         .build()
 //!         .await?;
 //!
@@ -75,16 +75,38 @@ pub type ConnectionEventHandler = Arc<dyn Fn(ConnectionEvent) + Send + Sync>;
 /// Connection lifecycle events
 #[derive(Debug, Clone)]
 pub enum ConnectionEvent {
+    /// Emitted after the server sends a connection-established message.
     Connected { connection_id: ConnectionId },
+    /// Emitted when the server closes the connection or `Client::disconnect` completes.
     Disconnected { reason: Option<String> },
+    /// Reserved for caller-managed reconnect orchestration.
+    ///
+    /// The current client does not spawn a background reconnect loop.
     Reconnecting { attempt: u32 },
+    /// Reserved for caller-managed reconnect orchestration.
+    ///
+    /// The current client does not spawn a background reconnect loop.
     ReconnectFailed { attempt: u32, error: String },
+    /// Reserved for transports or wrappers that surface authentication failures as events.
     AuthenticationFailed { error: String },
 }
 
 /// Trait for WebSocket transport implementations
-#[async_trait]
-pub trait WebSocketTransport: Send + Sync {
+#[cfg(not(target_arch = "wasm32"))]
+pub trait TransportThreadBounds: Send + Sync {}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<T: Send + Sync> TransportThreadBounds for T {}
+
+#[cfg(target_arch = "wasm32")]
+pub trait TransportThreadBounds {}
+
+#[cfg(target_arch = "wasm32")]
+impl<T> TransportThreadBounds for T {}
+
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+pub trait WebSocketTransport: TransportThreadBounds {
     /// Connect to the WebSocket server
     async fn connect(&mut self) -> error::ClientResult<()>;
 

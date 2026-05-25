@@ -1,8 +1,9 @@
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::{Ident, LitStr, Token, Type, parse::Parse, parse_macro_input};
 
 mod client;
+mod permissions;
 mod server;
 
 #[cfg(test)]
@@ -116,7 +117,7 @@ impl Parse for BidirectionalServiceDefinition {
 
         let mut server_to_client_calls = Vec::new();
         while !server_to_client_calls_content.is_empty() {
-            let method = server_to_client_calls_content.parse::<MethodDefinition>()?;
+            let method = parse_server_to_client_call(&server_to_client_calls_content)?;
             server_to_client_calls.push(method);
 
             // Handle optional trailing comma
@@ -132,6 +133,33 @@ impl Parse for BidirectionalServiceDefinition {
             server_to_client_calls,
         })
     }
+}
+
+fn parse_server_to_client_call(input: syn::parse::ParseStream) -> syn::Result<MethodDefinition> {
+    let fork = input.fork();
+    if fork.peek(syn::Ident) {
+        let ident = fork.parse::<Ident>()?;
+        match ident.to_string().as_str() {
+            "UNAUTHORIZED" | "WITH_PERMISSIONS" => return input.parse::<MethodDefinition>(),
+            _ => {}
+        }
+    }
+
+    let name = input.parse::<Ident>()?;
+
+    let request_content;
+    syn::parenthesized!(request_content in input);
+    let request_type = request_content.parse::<Type>()?;
+
+    let _ = input.parse::<Token![->]>()?;
+    let response_type = input.parse::<Type>()?;
+
+    Ok(MethodDefinition {
+        auth: AuthRequirement::Unauthorized,
+        name,
+        request_type,
+        response_type,
+    })
 }
 
 impl Parse for MethodDefinition {
@@ -236,15 +264,53 @@ impl Parse for NotificationDefinition {
 fn generate_service_code(
     service_def: BidirectionalServiceDefinition,
 ) -> syn::Result<proc_macro2::TokenStream> {
-    // Generate server code - this will be conditionally compiled by the user
+    let service_name_lower = service_def.service_name.to_string().to_lowercase();
+    let server_mod = format_ident!("__ras_jsonrpc_bidirectional_{}_server", service_name_lower);
+    let client_mod = format_ident!("__ras_jsonrpc_bidirectional_{}_client", service_name_lower);
+
+    // Generate server code only when the macro crate's server feature is enabled.
     let server_code = server::generate_server_code(&service_def);
 
-    // Generate client code - this will be conditionally compiled by the user
+    // Generate client code only when the macro crate's client feature is enabled.
     let client_code = client::generate_client_code(&service_def);
+    let permissions_code = if cfg!(feature = "permissions") {
+        permissions::generate_permissions_code(&service_def)
+    } else {
+        quote! {}
+    };
+
+    let server_output = if cfg!(feature = "server") {
+        quote! {
+        mod #server_mod {
+            use super::*;
+
+            #server_code
+        }
+
+        pub use #server_mod::*;
+        }
+    } else {
+        quote! {}
+    };
+
+    let client_output = if cfg!(feature = "client") {
+        quote! {
+        mod #client_mod {
+            use super::*;
+
+            #client_code
+        }
+
+        pub use #client_mod::*;
+        }
+    } else {
+        quote! {}
+    };
 
     let output = quote! {
-        #server_code
-        #client_code
+        #permissions_code
+        #server_output
+        #client_output
     };
 
     Ok(output)

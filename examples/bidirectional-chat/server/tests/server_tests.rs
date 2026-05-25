@@ -2,9 +2,8 @@
 //!
 //! These tests cover:
 //! - Server startup and health checks
-//! - User registration and authentication
-//! - Basic API endpoint testing
 //! - Configuration validation
+//! - Persistence behavior
 
 use anyhow::Result;
 use axum::Router;
@@ -12,98 +11,33 @@ use bidirectional_chat_server::config::{
     AdminConfig, AdminUser, AuthConfig, ChatConfig, Config, LoggingConfig, RateLimitConfig,
     RoomConfig, ServerConfig,
 };
-use serde_json::json;
-use std::net::SocketAddr;
-use std::time::Duration;
+use config::{Config as FileConfig, File};
+use ras_identity_session::{JwtAlgorithm, SessionConfig};
 use tempfile::TempDir;
-use tokio::net::TcpListener;
-use tokio::time::timeout;
 use tower_http::cors::CorsLayer;
 
 /// Test server instance
 struct TestServer {
-    addr: SocketAddr,
-    shutdown_tx: tokio::sync::oneshot::Sender<()>,
-    handle: tokio::task::JoinHandle<()>,
+    server: axum_test::TestServer,
 }
 
 impl TestServer {
     /// Start a test server with the given configuration
-    async fn start(config: Config) -> Result<Self> {
-        let addr = config.socket_addr();
-
-        // Create a minimal server setup for testing
-        let auth_router = Router::new()
-            .route("/auth/login", axum::routing::post(dummy_login_handler))
-            .route(
-                "/auth/register",
-                axum::routing::post(dummy_register_handler),
-            );
-
+    async fn start(_config: Config) -> Result<Self> {
         let health_router = Router::new().route("/health", axum::routing::get(|| async { "OK" }));
 
         let app = Router::new()
-            .merge(auth_router)
             .merge(health_router)
             .layer(CorsLayer::permissive());
 
-        let listener = TcpListener::bind(addr).await?;
-        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-
-        let handle = tokio::spawn(async move {
-            let server = axum::serve(listener, app);
-            let graceful = server.with_graceful_shutdown(async move {
-                let _ = shutdown_rx.await;
-            });
-            let _ = graceful.await;
-        });
-
-        // Wait for server to start
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
         Ok(Self {
-            addr,
-            shutdown_tx,
-            handle,
+            server: axum_test::TestServer::builder()
+                .mock_transport()
+                .build(app)?,
         })
     }
 
-    fn url(&self) -> String {
-        format!("http://{}", self.addr)
-    }
-
-    async fn shutdown(self) {
-        let _ = self.shutdown_tx.send(());
-        let _ = timeout(Duration::from_secs(5), self.handle).await;
-    }
-}
-
-// Dummy handlers for basic testing
-async fn dummy_login_handler(
-    axum::Json(payload): axum::Json<serde_json::Value>,
-) -> Result<axum::Json<serde_json::Value>, axum::http::StatusCode> {
-    if payload.get("username").is_some() && payload.get("password").is_some() {
-        Ok(axum::Json(json!({
-            "token": "test-token",
-            "expires_at": 1234567890,
-            "user_id": payload["username"]
-        })))
-    } else {
-        Err(axum::http::StatusCode::BAD_REQUEST)
-    }
-}
-
-async fn dummy_register_handler(
-    axum::Json(payload): axum::Json<serde_json::Value>,
-) -> Result<axum::Json<serde_json::Value>, axum::http::StatusCode> {
-    if payload.get("username").is_some() && payload.get("password").is_some() {
-        Ok(axum::Json(json!({
-            "message": "User registered successfully",
-            "username": payload["username"]
-        })))
-    } else {
-        Err(axum::http::StatusCode::BAD_REQUEST)
-    }
+    async fn shutdown(self) {}
 }
 
 // Helper function to create test configuration
@@ -111,15 +45,10 @@ async fn create_test_config() -> Result<(Config, TempDir)> {
     let temp_dir = TempDir::new()?;
     let data_dir = temp_dir.path().join("chat_data");
 
-    // Find available port
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let addr = listener.local_addr()?;
-    drop(listener);
-
     let config = Config {
         server: ServerConfig {
-            host: addr.ip(),
-            port: addr.port(),
+            host: "127.0.0.1".parse().unwrap(),
+            port: 3001,
             cors: Default::default(),
         },
         auth: AuthConfig {
@@ -193,58 +122,39 @@ async fn test_config_validation() {
     assert!(config.validate().is_err());
 }
 
+#[test]
+fn config_example_loads_with_session_compatible_secret() -> Result<()> {
+    let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("config.example.toml");
+    let config: Config = FileConfig::builder()
+        .add_source(File::from(config_path))
+        .build()?
+        .try_deserialize()?;
+
+    config.validate()?;
+
+    let session_config = SessionConfig {
+        jwt_secret: config.auth.jwt_secret,
+        jwt_ttl: chrono::Duration::seconds(config.auth.jwt_ttl_seconds),
+        refresh_enabled: config.auth.refresh_enabled,
+        enforce_active_sessions: true,
+        algorithm: JwtAlgorithm::HS256,
+    };
+
+    session_config.validate()?;
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_server_startup() -> Result<()> {
     let (config, _temp_dir) = create_test_config().await?;
     let server = TestServer::start(config).await?;
 
     // Test health endpoint
-    let client = reqwest::Client::new();
-    let response = client
-        .get(format!("{}/health", server.url()))
-        .send()
-        .await?;
+    let response = server.server.get("/health").await;
 
-    assert_eq!(response.status(), 200);
-    assert_eq!(response.text().await?, "OK");
-
-    server.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_auth_endpoints() -> Result<()> {
-    let (config, _temp_dir) = create_test_config().await?;
-    let server = TestServer::start(config).await?;
-    let client = reqwest::Client::new();
-
-    // Test registration endpoint
-    let response = client
-        .post(format!("{}/auth/register", server.url()))
-        .json(&json!({
-            "username": "testuser",
-            "password": "testpass123"
-        }))
-        .send()
-        .await?;
-
-    assert_eq!(response.status(), 200);
-    let body: serde_json::Value = response.json().await?;
-    assert_eq!(body["username"], "testuser");
-
-    // Test login endpoint
-    let response = client
-        .post(format!("{}/auth/login", server.url()))
-        .json(&json!({
-            "username": "testuser",
-            "password": "testpass123"
-        }))
-        .send()
-        .await?;
-
-    assert_eq!(response.status(), 200);
-    let body: serde_json::Value = response.json().await?;
-    assert!(body.get("token").is_some());
+    response.assert_status_ok();
+    assert_eq!(response.text(), "OK");
 
     server.shutdown().await;
     Ok(())

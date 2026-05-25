@@ -6,4 +6,14 @@ fn main() {
         Ok(_) => println!("Generated OpenAPI specification"),
         Err(e) => eprintln!("Failed to generate OpenAPI spec: {}", e),
     }
+
+    let manifest = ras_permission_manifest::PermissionManifest::from_services([
+        file_service_api::generate_documentservice_permission_manifest(),
+    ]);
+    if let Err(e) = ras_permission_manifest::write_manifest(
+        "target/ras-permissions/file-service-wasm.json",
+        &manifest,
+    ) {
+        eprintln!("Failed to generate permission manifest: {}", e);
+    }
 }

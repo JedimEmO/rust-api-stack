@@ -1,11 +1,15 @@
 //! Authentication and authorization traits for JSON-RPC services.
 
+mod transport;
+
 use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+pub use transport::*;
 
 /// Errors that can occur during authentication or authorization.
 #[derive(Debug, Error, Clone, Serialize, Deserialize)]
@@ -97,5 +101,174 @@ pub trait AuthProvider: Send + Sync + 'static {
                 has: user.permissions.iter().cloned().collect(),
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+    use std::sync::Arc;
+    use std::task::{Context, Poll, Wake, Waker};
+
+    use serde_json::json;
+
+    use super::*;
+
+    struct TestAuthProvider;
+
+    impl AuthProvider for TestAuthProvider {
+        fn authenticate(&self, _token: String) -> AuthFuture<'_> {
+            unreachable!("permission tests only exercise the default helper")
+        }
+    }
+
+    struct TokenAuthProvider;
+
+    impl AuthProvider for TokenAuthProvider {
+        fn authenticate(&self, token: String) -> AuthFuture<'_> {
+            Box::pin(async move {
+                if token != "good-token" {
+                    return Err(AuthError::InvalidToken);
+                }
+
+                Ok(AuthenticatedUser {
+                    user_id: "user-1".to_string(),
+                    permissions: HashSet::from(["widgets:read".to_string()]),
+                    metadata: Some(json!({ "tenant": "acme" })),
+                })
+            })
+        }
+    }
+
+    struct NoopWaker;
+
+    impl Wake for NoopWaker {
+        fn wake(self: Arc<Self>) {}
+    }
+
+    fn poll_auth_future(mut future: AuthFuture<'_>) -> AuthResult {
+        let waker = Waker::from(Arc::new(NoopWaker));
+        let mut context = Context::from_waker(&waker);
+
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(result) => result,
+            Poll::Pending => panic!("test auth future should complete immediately"),
+        }
+    }
+
+    fn user_with_permissions(permissions: &[&str]) -> AuthenticatedUser {
+        AuthenticatedUser {
+            user_id: "user-1".to_string(),
+            permissions: permissions
+                .iter()
+                .map(|permission| permission.to_string())
+                .collect(),
+            metadata: Some(json!({ "tenant": "acme" })),
+        }
+    }
+
+    #[test]
+    fn check_permissions_allows_user_when_all_required_permissions_are_present() {
+        let provider = TestAuthProvider;
+        let user = user_with_permissions(&["users:read", "users:write"]);
+        let required = vec!["users:read".to_string(), "users:write".to_string()];
+
+        let result = provider.check_permissions(&user, &required);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn check_permissions_allows_user_when_no_permissions_are_required() {
+        let provider = TestAuthProvider;
+        let user = user_with_permissions(&[]);
+
+        let result = provider.check_permissions(&user, &[]);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn check_permissions_returns_required_and_actual_permissions_when_one_is_missing() {
+        let provider = TestAuthProvider;
+        let user = user_with_permissions(&["users:read"]);
+        let required = vec!["users:read".to_string(), "users:write".to_string()];
+
+        let result = provider.check_permissions(&user, &required);
+
+        let AuthError::InsufficientPermissions { required, has } = result.unwrap_err() else {
+            panic!("expected insufficient permissions");
+        };
+        assert_eq!(required, vec!["users:read", "users:write"]);
+        assert_eq!(
+            has.into_iter().collect::<HashSet<_>>(),
+            HashSet::from(["users:read".to_string()])
+        );
+    }
+
+    #[test]
+    fn authenticated_user_serializes_permissions_and_metadata() {
+        let user = user_with_permissions(&["users:read", "users:write"]);
+
+        let json = serde_json::to_value(&user).expect("serialize user");
+        let round_trip: AuthenticatedUser = serde_json::from_value(json).expect("deserialize user");
+
+        assert_eq!(round_trip.user_id, "user-1");
+        assert_eq!(round_trip.permissions, user.permissions);
+        assert_eq!(round_trip.metadata, Some(json!({ "tenant": "acme" })));
+    }
+
+    #[test]
+    fn auth_error_display_messages_are_stable_for_clients() {
+        assert_eq!(AuthError::InvalidToken.to_string(), "Invalid token");
+        assert_eq!(AuthError::TokenExpired.to_string(), "Token expired");
+        assert_eq!(
+            AuthError::AuthenticationRequired.to_string(),
+            "Authentication required"
+        );
+        assert_eq!(
+            AuthError::Internal("store unavailable".to_string()).to_string(),
+            "Authentication error: store unavailable"
+        );
+    }
+
+    #[test]
+    fn auth_provider_future_alias_returns_authenticated_user() {
+        let provider = TokenAuthProvider;
+
+        let user = poll_auth_future(provider.authenticate("good-token".to_string()))
+            .expect("token authenticates");
+
+        assert_eq!(user.user_id, "user-1");
+        assert!(user.permissions.contains("widgets:read"));
+        assert_eq!(user.metadata, Some(json!({ "tenant": "acme" })));
+
+        assert!(poll_auth_future(provider.authenticate("bad-token".to_string())).is_err());
+    }
+
+    #[test]
+    fn auth_error_serializes_structured_permission_details() {
+        let error = AuthError::InsufficientPermissions {
+            required: vec!["admin".to_string()],
+            has: vec!["user".to_string()],
+        };
+
+        let value = serde_json::to_value(&error).expect("serialize auth error");
+        assert_eq!(
+            value,
+            json!({
+                "InsufficientPermissions": {
+                    "required": ["admin"],
+                    "has": ["user"]
+                }
+            })
+        );
+
+        let decoded: AuthError = serde_json::from_value(value).expect("deserialize auth error");
+        let AuthError::InsufficientPermissions { required, has } = decoded else {
+            panic!("expected insufficient permissions");
+        };
+        assert_eq!(required, vec!["admin"]);
+        assert_eq!(has, vec!["user"]);
     }
 }

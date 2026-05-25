@@ -152,7 +152,7 @@ async fn test_metrics_handler() {
     let app = setup.metrics_router();
 
     // Make a request to the metrics endpoint
-    let server = TestServer::new(app).unwrap();
+    let server = TestServer::builder().mock_transport().build(app).unwrap();
     let response = server.get("/metrics").await;
 
     // Basic checks that the endpoint works

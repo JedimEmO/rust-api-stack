@@ -14,7 +14,7 @@ The example consists of three crates:
 
 1. **bidirectional-chat-api**: Shared types and data structures
 2. **bidirectional-chat-server**: WebSocket server with room management
-3. **bidirectional-chat-client**: Interactive terminal client
+3. **bidirectional-chat-tui**: Interactive terminal client
 
 ## Features
 
@@ -24,7 +24,7 @@ The example consists of three crates:
 - Role-based permissions (user, moderator, admin)
 - Real-time message broadcasting
 - User presence tracking
-- Kick/ban functionality for moderators
+- Kick functionality for moderators
 - System-wide announcements for admins
 - Automatic cleanup on disconnect
 
@@ -33,14 +33,14 @@ The example consists of three crates:
 - Real-time message display
 - Room navigation commands
 - Colored output for better readability
-- Cross-platform WebSocket support (native + WASM)
+- Uses the shared bidirectional client library; this example includes the native TUI client
 
 ## Quick Start
 
 ### 1. Start the Server
 
 ```bash
-cargo run -p bidirectional-chat-server
+cargo run -p bidirectional-chat-server --locked
 ```
 
 The server will start on `http://localhost:3000` with WebSocket endpoint at `ws://localhost:3000/ws`.
@@ -49,30 +49,25 @@ The server will start on `http://localhost:3000` with WebSocket endpoint at `ws:
 
 Register a new user:
 ```bash
-cargo run -p bidirectional-chat-client register --username alice
-# Enter password when prompted
+cargo run -p bidirectional-chat-tui --locked
+# Press Ctrl+R on the login screen, then enter username and password
 ```
 
-Pre-configured users:
-- `admin` / `admin123` - Full admin privileges
-- `moderator` / `mod123` - Moderator privileges
+Development users created by debug builds:
 - `alice` / `alice123` - Regular user
 - `bob` / `bob123` - Regular user
+
+Admin users from `server/config.example.toml`, if you load that file with
+`CHAT_CONFIG_FILE`:
+- `admin` / `admin123456` - Full admin privileges
+- `moderator` / `moderator123` - Moderator privileges
 
 ### 3. Start Chatting
 
 Login and start the interactive chat:
 ```bash
-cargo run -p bidirectional-chat-client chat
-# Select "Login with username/password"
+cargo run -p bidirectional-chat-tui --locked
 # Enter credentials
-```
-
-Or use a saved token:
-```bash
-cargo run -p bidirectional-chat-client chat
-# Select "Use existing token"
-# Paste your JWT token
 ```
 
 ## Chat Commands
@@ -130,17 +125,24 @@ The chat uses bidirectional JSON-RPC 2.0 over WebSockets:
 ### Configuration
 
 The server supports configuration through:
-1. Configuration file (`config.toml`)
-2. Environment variables (take precedence)
-3. Command-line arguments (for future extension)
+1. Configuration file (`config.toml`, or the path in `CHAT_CONFIG_FILE`)
+2. Environment variables, which take precedence over file values
 
 #### Configuration File
 
-Copy `config.example.toml` to `config.toml` and modify as needed:
+From the repository root, copy the example config and point the server at it
+when starting with `cargo run -p bidirectional-chat-server --locked`:
 
 ```bash
-cp config.example.toml config.toml
+cp examples/bidirectional-chat/server/config.example.toml examples/bidirectional-chat/server/config.toml
+CHAT_CONFIG_FILE=examples/bidirectional-chat/server/config.toml \
+CHAT_DATA_DIR=examples/bidirectional-chat/server/chat_data \
+cargo run -p bidirectional-chat-server --locked
 ```
+
+`config.toml` and `chat_data/` are ignored local runtime files. When starting
+from the workspace root, set `CHAT_DATA_DIR` if you want persisted chat state
+under the example directory rather than `./chat_data` at the root.
 
 Key configuration sections:
 - **Server**: Host, port, and CORS settings
@@ -152,15 +154,17 @@ Key configuration sections:
 
 #### Environment Variables
 
-Create a `.env` file in the server directory:
+Create a `.env` file in the directory you run the server from. For workspace
+root commands, use paths relative to the repository root:
 ```env
 # Core settings
-JWT_SECRET=your-secret-key-here
+JWT_SECRET=change-this-to-at-least-32-random-bytes
 HOST=0.0.0.0
 PORT=3000
+CHAT_CONFIG_FILE=examples/bidirectional-chat/server/config.toml
 
 # Chat settings
-CHAT_DATA_DIR=./chat_data
+CHAT_DATA_DIR=examples/bidirectional-chat/server/chat_data
 CHAT__CHAT__MAX_MESSAGE_LENGTH=1000
 CHAT__CHAT__MAX_USERS_PER_ROOM=50
 
@@ -172,7 +176,13 @@ CHAT__ADMIN__USERS__0__USERNAME=admin
 CHAT__ADMIN__USERS__0__PASSWORD=secure_password
 ```
 
-See `config.example.toml` for a complete list of environment variables.
+`JWT_SECRET` must be at least 32 bytes. Generate a random value for shared
+or long-running environments.
+
+Nested values use the `CHAT__SECTION__FIELD` form, for example
+`CHAT__SERVER__CORS__ALLOW_ANY_ORIGIN=false`. See
+`examples/bidirectional-chat/server/config.example.toml` for the supported
+environment variables.
 
 ### Production Configuration
 
@@ -189,7 +199,7 @@ For production deployments:
    allowed_origins = ["https://yourchatapp.com"]
    ```
 
-2. **Rate Limiting**:
+2. **Chat Message Rate Limiting**:
    ```toml
    [rate_limit]
    enabled = true
@@ -197,6 +207,7 @@ For production deployments:
    connections_per_ip = 5
    login_attempts_per_hour = 10
    ```
+   `messages_per_minute` is enforced for authenticated `send_message` calls. The connection and login-attempt fields are validated configuration hooks for deployment-level throttling.
 
 3. **Persistence**:
    ```toml
@@ -213,21 +224,33 @@ You can run multiple client instances to simulate multiple users:
 
 ```bash
 # Terminal 1
-cargo run -p bidirectional-chat-client chat
+cargo run -p bidirectional-chat-tui --locked
 # Login as alice
 
 # Terminal 2  
-cargo run -p bidirectional-chat-client chat
+cargo run -p bidirectional-chat-tui --locked
 # Login as bob
 ```
 
 ### Testing Admin Features
 
+Copy `examples/bidirectional-chat/server/config.example.toml` to
+`examples/bidirectional-chat/server/config.toml`, then start the server with
+the config path set:
+
+```bash
+CHAT_CONFIG_FILE=examples/bidirectional-chat/server/config.toml \
+CHAT_DATA_DIR=examples/bidirectional-chat/server/chat_data \
+cargo run -p bidirectional-chat-server --locked
+```
+
+The configured admin users are created on startup.
+
 Login as admin to test moderation features:
 ```bash
-cargo run -p bidirectional-chat-client chat
+cargo run -p bidirectional-chat-tui --locked
 # Username: admin
-# Password: admin123
+# Password: admin123456
 ```
 
 Then in another terminal as a regular user, you can be kicked by the admin.

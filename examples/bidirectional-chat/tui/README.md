@@ -2,9 +2,18 @@
 
 A terminal user interface (TUI) client for the bidirectional chat server, built with Ratatui and using the generated API client from the chat API crate.
 
-## Default Test Credentials
+## Test Credentials
 
-The server comes with default admin users configured:
+Debug server builds create these regular test users:
+- **Alice**: Username: `alice`, Password: `alice123`
+- **Bob**: Username: `bob`, Password: `bob123`
+
+If you copy `examples/bidirectional-chat/server/config.example.toml` to
+`examples/bidirectional-chat/server/config.toml` and start the server with
+`CHAT_CONFIG_FILE` pointing at that file, the server also creates these
+configured admin users. For workspace-root server commands, also set
+`CHAT_DATA_DIR=examples/bidirectional-chat/server/chat_data` if you want
+runtime chat state under the example directory.
 - **Admin**: Username: `admin`, Password: `admin123456`
 - **Moderator**: Username: `moderator`, Password: `moderator123`
 
@@ -22,21 +31,25 @@ The server comes with default admin users configured:
 ## Prerequisites
 
 - The bidirectional chat server must be running (see `examples/bidirectional-chat/server`)
-- Rust 1.75+ (for edition 2024 support)
+- Rust 1.88+ for Rust 2024 edition crates
 
 ## Running the Client
 
 1. Start the chat server:
    ```bash
-   cd examples/bidirectional-chat/server
-   cargo run
+   cargo run -p bidirectional-chat-server --locked
    ```
 
 2. In a new terminal, run the TUI client:
    ```bash
-   cd examples/bidirectional-chat-tui
-   cargo run
+   cargo run -p bidirectional-chat-tui --locked
    ```
+
+## Checks
+
+```bash
+cargo test -p bidirectional-chat-tui --locked
+```
 
 ## Usage
 

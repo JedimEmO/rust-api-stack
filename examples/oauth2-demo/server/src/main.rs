@@ -11,7 +11,7 @@ use ras_identity_oauth2::{
     InMemoryStateStore, OAuth2AuthPayload, OAuth2Config, OAuth2Provider, OAuth2ProviderConfig,
     OAuth2Response,
 };
-use ras_identity_session::{JwtAuthProvider, SessionConfig, SessionService};
+use ras_identity_session::{JwtAlgorithm, JwtAuthProvider, SessionConfig, SessionService};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -160,7 +160,7 @@ fn create_session_service(config: &AppConfig) -> Result<SessionService> {
         jwt_ttl: chrono::Duration::hours(24),
         refresh_enabled: true,
         enforce_active_sessions: false,
-        algorithm: jsonwebtoken::Algorithm::HS256,
+        algorithm: JwtAlgorithm::HS256,
     };
 
     let permissions_provider = Arc::new(GoogleOAuth2Permissions::new());
@@ -256,39 +256,15 @@ async fn oauth2_callback_handler(
 
     info!("OAuth2 callback successful, redirecting with token");
 
-    // Redirect to success page with token (in a real app, you'd handle this more securely)
+    // The success page immediately moves the token into sessionStorage and
+    // clears it from the URL. A production app should use its own token
+    // delivery policy.
     Ok(Redirect::to(&format!("/success?token={}", token)))
 }
 
-/// Handler for success page
-async fn success_handler(Query(params): Query<HashMap<String, String>>) -> Html<String> {
-    let token = params.get("token").cloned().unwrap_or_default();
-    let html = format!(
-        r#"
-<!DOCTYPE html>
-<html>
-<head>
-    <title>OAuth2 Success</title>
-    <style>
-        body {{ font-family: Arial, sans-serif; margin: 40px; }}
-        .token {{ background: #f0f0f0; padding: 20px; margin: 20px 0; word-break: break-all; }}
-        .button {{ background: #4285f4; color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px; }}
-    </style>
-</head>
-<body>
-    <h1>OAuth2 Authentication Successful!</h1>
-    <p>You have successfully authenticated with Google OAuth2.</p>
-    <p><strong>JWT Token:</strong></p>
-    <div class="token">{}</div>
-    <p>You can now use this token to make authenticated requests to the JSON-RPC API.</p>
-    <a href="/" class="button">Back to Home</a>
-    <a href="/api-docs" class="button">View API Documentation</a>
-</body>
-</html>
-        "#,
-        token
-    );
-    Html(html)
+/// Handler for success page.
+async fn success_handler() -> Html<&'static str> {
+    Html(include_str!("../static/success.html"))
 }
 
 /// Handler for error page
@@ -325,8 +301,12 @@ async fn main() -> Result<()> {
     // Initialize tracing
     tracing_subscriber::fmt::init();
 
-    // Load environment variables from .env file if present
-    let _ = dotenvy::dotenv();
+    // Load the example-local .env when run from the workspace root with
+    // `cargo run --locked -p oauth2-demo-server`; fall back to the current directory.
+    let manifest_env = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".env");
+    if dotenvy::from_path(&manifest_env).is_err() {
+        let _ = dotenvy::dotenv();
+    }
 
     // Load configuration
     let config = AppConfig::from_env()?;
@@ -371,12 +351,9 @@ async fn main() -> Result<()> {
         )
         .with_state(app_state);
 
-    // Add the JSON-RPC API routes to a separate router that will run on a different port
-    // or integrate them directly into the main app
+    // Build the JSON-RPC API router and mount it under the same Axum app.
     let api_router = service::create_api_router(auth_provider);
 
-    // For this example, let's run both on the same server by merging them manually
-    // We'll create a new combined router
     let combined_app = Router::new().merge(app).nest("/api", api_router);
 
     // Start the server
@@ -396,4 +373,33 @@ async fn main() -> Result<()> {
         .context("Server error")?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod static_page_tests {
+    const INDEX_HTML: &str = include_str!("../static/index.html");
+    const API_DOCS_HTML: &str = include_str!("../static/api-docs.html");
+    const SUCCESS_HTML: &str = include_str!("../static/success.html");
+
+    #[test]
+    fn oauth_static_pages_do_not_persist_jwt_in_local_storage() {
+        for (name, html) in [
+            ("index", INDEX_HTML),
+            ("api-docs", API_DOCS_HTML),
+            ("success", SUCCESS_HTML),
+        ] {
+            assert!(
+                !html.contains("localStorage.getItem('jwt_token')")
+                    && !html.contains("localStorage.setItem('jwt_token'")
+                    && !html.contains("localStorage.removeItem('jwt_token'"),
+                "{name} must not persist JWTs in localStorage"
+            );
+        }
+    }
+
+    #[test]
+    fn success_page_api_docs_action_preserves_session_token() {
+        assert!(SUCCESS_HTML.contains("sessionStorage.setItem('jwt_token', jwtToken)"));
+        assert!(SUCCESS_HTML.contains("onclick=\"storeAndRedirect()\">Interactive API Docs"));
+    }
 }

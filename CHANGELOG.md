@@ -4,6 +4,103 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed - 2026-05-24
+- Specification types crate now uses the `ras-openrpc-types` package name and `ras_openrpc_types` import path.
+- Package metadata, clone instructions, and documentation links now point to the moved `rust-api-stack` repository.
+
+### Fixed - 2026-05-23
+- `ras-identity-local`: Duplicate local user creation now fails with `LocalUserError::UserAlreadyExists` instead of silently overwriting credentials.
+- Bumped `ras-identity-local` from `0.1.1` to `0.2.0` because `LocalUserProvider::add_user` now returns the crate-specific `LocalUserError`.
+- Bumped `ras-identity-oauth2` from `0.1.1` to `0.1.2` for the additive `UserInfoMapping` root re-export and updated OAuth2 docs.
+- Bumped `ras-identity-session` from `0.1.1` to `0.2.0` because replacing `jsonwebtoken` exposes the crate-local `JwtAlgorithm` and string-backed JWT errors in the public API.
+- `documentation/ras-identity.md`: Identity examples now use the current `UserPermissions`, `SessionService`, JWT claims, session revocation, and Axum 0.8 server APIs.
+- `ras-identity-local`: README testing/security notes now distinguish default tests from optional timing-sensitive checks.
+- `ras-identity-session`: JWT signing now uses local HMAC-SHA implementations for HS256/HS384/HS512 instead of pulling in the broader `jsonwebtoken` RustCrypto/RSA dependency path.
+- `ras-openrpc-types`: Restored the original `Extensions::insert`, `Extensions::with`, and `Extensions::from_map` signatures for compatibility; checked variants are now available as `try_insert`, `try_with`, and `try_from_map`.
+- `ras-jsonrpc-macro`: Version labels such as `"1.0.0"` and `"v1-beta"` now generate sanitized client method suffixes instead of invalid Rust identifiers.
+- Supply-chain policy now passes on current `cargo-deny`; vulnerable `rand`, `time`, `tracing-subscriber`, `protobuf`, and related OpenTelemetry/Prometheus dependencies were updated, and unmaintained `wee_alloc` was removed from the WASM UI example.
+- `examples/bidirectional-chat`: Auth lifecycle tests now verify login after registration, duplicate registration rejection, and permission-bearing JWT claims.
+- `examples/bidirectional-chat`: Removed fake auth endpoint checks from `server_tests.rs`; auth endpoint coverage now lives in the in-memory lifecycle suite that wires the real identity/session stack.
+- `examples/bidirectional-chat`: Configuration docs now match the implemented config-file and environment-variable loading behavior.
+- `examples/bidirectional-chat`: README commands now use the actual `bidirectional-chat-tui` package and current example credentials.
+- `examples/bidirectional-chat`: TUI README now states the correct Rust 1.88+ requirement for Rust 2024 edition crates.
+- `examples/file-service-wasm`: README now names the real `wasm-client` feature.
+- `ras-openrpc-types` and `ras-jsonrpc-types`: README dependency snippets now match the current crate versions.
+- REST and JSON-RPC macro documentation dependency snippets now match the workspace Axum, Tokio, and schemars versions.
+- `ras-rest-macro` and `ras-jsonrpc-macro`: HTTP integration tests now use in-memory `axum-test` mock transport instead of binding local TCP sockets.
+- `ras-jsonrpc-macro`: Generated-client compile/config coverage no longer attempts requests against an unused localhost port.
+- CI now treats clippy warnings as failures with `cargo clippy --workspace --all-targets --all-features -- -D warnings`.
+- Removed unused workspace dependency declarations left behind by older local tooling and UI experiments.
+- Narrowed JSON ignore rules so TypeScript example `tsconfig` files are visible for version control while generated OpenRPC/OpenAPI and runtime data stay ignored.
+- `examples/file-service-wasm` and `examples/rest-wasm-example`: TypeScript generated-client samples are now plain usage examples instead of standalone npm apps.
+- CI now verifies the generated OpenAPI specs used by the TypeScript usage samples without installing npm dependencies for those samples.
+- `examples/wasm-ui-demo`: Added a local README and fixed the browser client/proxy path to match the basic JSON-RPC service's `/rpc` route.
+- `examples/wasm-ui-demo`: Build scripts and ignore rules now match the actual Rollup `dist/` output.
+- CI now builds the `wasm-ui-demo` WebAssembly bundle with the `wasm32-unknown-unknown` target.
+- CI now enforces the tracked `deny.toml` supply-chain policy with `cargo-deny`.
+- `examples/file-service-example`: Added a local README with run instructions, curl examples, and token behavior.
+- Root and bidirectional JSON-RPC README examples now match the current generated client/server APIs and avoid overstating retry behavior.
+- `ras-jsonrpc-bidirectional-client`: The documented WASM feature check now compiles with `wasm32-unknown-unknown` and keeps native WebSocket dependencies out of the WASM dependency graph.
+- `ras-identity-oauth2`: OAuth2 integration tests now use in-memory `axum-test` mock transport instead of socket-bound mock HTTP servers.
+- `ras-jsonrpc-bidirectional-server` and `ras-jsonrpc-bidirectional-macro`: WebSocket handler, generated-service, and round-trip benchmark coverage now run through an in-memory socket adapter instead of binding local TCP ports.
+- `ras-jsonrpc-bidirectional-server`: Request handler failures now return JSON-RPC error responses and keep the WebSocket loop alive for later requests.
+- `ras-jsonrpc-bidirectional-client`: Native transport request construction and disconnected send/receive behavior now have socketless unit coverage.
+- `ras-identity-oauth2`: Added fake-transport client tests for state mismatch, provider callback errors, PKCE-disabled token exchange parameters, and missing userinfo endpoint handling.
+- `examples/bidirectional-chat`: Added runtime `messages_per_minute` enforcement for authenticated `send_message` calls, plus socketless WebSocket flow tests for room join, list, leave, profile update/readback, moderator kick, admin announcement broadcast, generated permission denial, request-error recovery, disconnect cleanup, typing cleanup, message rate limiting, and multi-user message broadcast through the generated handler, in-memory adapter, and in-memory connection manager; profile avatar persistence now uses the same snake_case strings as the API.
+- `examples/file-service-wasm`: Corrected the documented 100 MB upload limit and generated OpenAPI path in the TypeScript usage sample.
+- Root README quick start now keeps the first-run path Rust-only and points to frontend examples as optional follow-ups.
+- REST macro docs now describe the built-in API explorer and point to the actual `/docs/openapi.json` route.
+- TypeScript client docs now describe OpenAPI-generated fetch-client usage without implying a framework or npm app scaffold.
+- Changelog history no longer implies the current `.cargo/config.toml` configures Kellnr as the default registry.
+- `examples/bidirectional-chat`: Server test README now describes remaining WebSocket coverage as in-memory handler testing.
+- `examples/wasm-ui-demo`: Removed an unused placeholder resources directory.
+- `ras-jsonrpc-bidirectional-macro`: README feature docs now match the actual `server`/`client` feature set, and documented `server_to_client_calls` syntax is covered by parser and compile tests.
+- `ras-jsonrpc-bidirectional-macro`: Generated server-to-client RPC handlers now wrap callbacks in `Arc` instead of requiring an undocumented `Clone` bound.
+- `ras-jsonrpc-bidirectional-server`: Manager tests no longer reference the deleted socket-bound integration test file.
+- Root, REST macro, and observability docs no longer contain placeholder implementation comments or undefined sample variables in their primary setup snippets.
+- Package README test commands now consistently use `--locked`, and the OAuth2 demo's focused test example names a real current test.
+- OAuth2 README and demo landing-page copy now use current project naming and avoid implying unimplemented response caching or active-session token revocation.
+- Example run/check/build snippets now consistently use the checked-in lockfile.
+- Root, example overview, and local example quick-start commands now use workspace-root package invocations where practical instead of mixing `cd`-based forms.
+- `examples/bidirectional-chat`: Workspace-root server commands now set `CHAT_DATA_DIR` alongside `CHAT_CONFIG_FILE` so persisted chat state lands under the ignored example runtime directory.
+- Root, examples, Playwright, and CI metadata now state the Rust 1.88+ and Node.js 22.13+ prerequisites consistently.
+- Cargo package manifests now declare `rust-version = "1.88"` to match the locked workspace dependency graph.
+- File-service macro installation docs now list the native and WASM dependencies required by the generated server and clients.
+- REST and JSON-RPC macro installation snippets now wire consumer crate `server` and `client` features to the macro features and optional dependencies.
+- Bidirectional client docs now describe caller-managed reconnect behavior instead of claiming an automatic reconnect loop, and example snippets use concrete demo tokens and real package commands.
+- File-service macro docs and example READMEs now use current generated trait names, concrete upload/download snippets, and checked-in backend links instead of placeholder storage/auth code.
+- REST macro docs now use the current `AuthProvider`/`AuthFuture` shape, concrete demo auth providers, valid OpenAPI configuration examples, and complete generated trait method lists instead of placeholder code.
+- JSON-RPC macro and core docs now use concrete method definitions, generated builder declarations, and current `AuthProvider` permission-checking examples instead of placeholder helper APIs.
+- `ras-observability-core`: Added `RequestContext::websocket(method)` and updated observability/identity examples to use concrete env-backed configuration instead of placeholder credentials and pseudo-code.
+- Bidirectional JSON-RPC and OpenRPC type docs now use concrete validation/sender examples, and `ras-jsonrpc-bidirectional-types` re-exports `MessageSenderExt` from the crate root to match the documented API.
+- Identity, observability, bidirectional WebSocket, and JSON-RPC types docs now avoid broad "everything"/"complete"/"high-performance" claims unless the text is tied to a concrete implemented API.
+- REST macro TypeScript snippets now avoid ambiguous ellipsis-style config spreading in favor of explicit request option construction.
+- `examples/rest-wasm-example/rest-backend`: Added a backend-local README with run commands, demo tokens, generated OpenAPI locations, endpoint map, and focused test commands.
+- `examples/rest-wasm-example/rest-api`: Added a shared-contract README covering generated server/client features and related example files.
+- `examples/bidirectional-chat/server`: Added a server-local README with run commands, configuration behavior, REST auth endpoints, WebSocket auth options, and socketless test guidance.
+- Example API crates now have package-local READMEs that describe their generated contracts, feature flags, related runnable examples, and focused check commands.
+- Playwright fixture crates now have local READMEs that document their browser-test role, socket-bound ports, routes, test tokens, and focused check commands.
+- `examples/wasm-ui-demo`: Trimmed direct npm build dependencies by using Node's built-in directory removal and removing the extra terser Rollup plugin from the example build.
+- `examples/wasm-ui-demo` and `ras-rest-macro`: Removed stale direct Cargo dependency declarations that are no longer used by the example UI or REST macro tests.
+- REST macro installation docs now list the consumer-side `axum-extra` dependency required by generated query-parameter extractors.
+- Public guides now avoid broad "complete" claims for examples and use concrete labels such as runnable service, task API example, and file API example.
+- Example READMEs now use correct relative paths for backticked local file references that are not covered by Markdown link checking.
+- `basic-jsonrpc-api` and `rest-api`: Added direct contract tests for generated OpenRPC/OpenAPI documents and important wire shapes used by generated clients.
+- `oauth2-demo-api` and `bidirectional-chat-api`: Added direct contract tests for generated OpenRPC permissions, schema metadata, and bidirectional notification/avatar wire shapes.
+- Playwright fixture crates now have socketless contract tests for generated OpenRPC/OpenAPI methods, routes, docs, auth metadata, query parameters, and version metadata.
+- `ras-jsonrpc-core`: Added re-export contract tests for auth types, JSON-RPC protocol types, and version migration traits.
+- CI now checks Cargo package README targets and local Markdown links without adding repository scripts.
+- Root README now documents the documentation-hygiene checks that CI runs for package README targets and local Markdown links.
+- Security and observability docs now describe concrete mitigations and setup hooks instead of broad constant-time or zero-configuration claims.
+
+### Removed - 2026-05-23
+- Removed stale local development artifacts: the `ras-file-macro` debug proc-macro stub, the bidirectional chat `test-config` diagnostic binary, and a tracked runtime chat log.
+- Removed tracked local-agent and scratch artifacts from `.claude/`, `agent-research/`, `docs_and_help/`, and `sketchpad/`; these paths are now ignored for local use only.
+- Removed socket-bound HTTP mock dev-dependencies left behind by older OAuth2 and macro test suites.
+- Removed unused `tokio-test` dev-dependencies and the stale bidirectional chat server `reqwest` dev-dependency left behind after the socketless test cleanup.
+- Removed scaffold-style placeholder comments from `deny.toml` so the tracked supply-chain policy is project-specific.
+- Added the current `Unicode-3.0` SPDX license identifier to `deny.toml`.
+
 ### Added - 2026-05-10
 - Added `ras-version-core` `0.1.0` with the shared `VersionMigration<From, To>` trait for opt-in API compatibility migrations.
 - `ras-jsonrpc-macro`: Added opt-in versioned JSON-RPC methods. Legacy wire methods can migrate legacy requests into canonical request types, call the canonical trait method, and migrate canonical responses back to legacy response types.
@@ -24,6 +121,9 @@ All notable changes to this project will be documented in this file.
 
 ### Documentation - 2026-05-10
 - Updated JSON-RPC, REST, identity, observability, example, and Playwright documentation for trait-backed service setup, current auth syntax, current crate names, and versioned API migration examples.
+
+### Removed - 2026-05-22
+- Removed the `openrpc-to-bruno` tool crate from the workspace.
 
 ### Added - 2026-05-09
 - Established repository versioning and changelog policy in `VERSIONING.md`.
@@ -78,19 +178,17 @@ All notable changes to this project will be documented in this file.
 - Bidirectional chat terminal client foundation (Sprint 2 Day 1)
   - Modular architecture with separate ui, client, auth, and config modules
   - Complete ratatui-based terminal UI with message area, user list, and input field
-  - Placeholder implementations for WebSocket client integration
+  - Initial WebSocket client integration scaffolding
   - Configuration system supporting environment variables and TOML files
   - JWT token management infrastructure for authentication
 
 ### Updated - 2025-01-14
-- Simplified CLAUDE.md build commands to use generic examples instead of listing all crates
+- Simplified local development guidance to use generic examples instead of listing all crates
 - Added bidirectional chat client architecture details to documentation
   - Terminal UI layout and components
   - State management and WebSocket integration
   - Authentication and configuration details
-- Updated TASK.md to mark completed Sprint 2 terminal client implementation tasks
-- Archived Sprint 3 retrospective to scraim/retroed/ folder
-  - Documented successful completion of bidirectional chat server and client foundation
+- Documented successful completion of the bidirectional chat server and client foundation
 
 ### Added - 2025-01-13
 - Comprehensive configuration system for bidirectional chat server
@@ -120,17 +218,13 @@ All notable changes to this project will be documented in this file.
   - Operation metrics for state loading/saving
 
 ### Added - 2025-01-13
-- Added ideate command for interactive brainstorming and execution planning
-  - New .claude/commands/ideate.md facilitates collaborative idea development
-  - Updated plan.md to emphasize brainstorming before work breakdown
-
 - Bidirectional chat example demonstrating real-time WebSocket communication
   - Complete chat server with room management and message persistence
   - CLI client with register/login/chat commands for interactive sessions
   - JWT-based authentication with role-based permissions (user/admin)
   - Persistent chat history using JSON file storage
   - Type-safe bidirectional RPC using generated client/server code
-  - Updated CLAUDE.md with bidirectional macro implementation notes
+  - Added bidirectional macro implementation notes
 
 - User profile system with cat avatar customization
   - Added profile management endpoints (get_profile, update_profile)
@@ -167,26 +261,10 @@ All notable changes to this project will be documented in this file.
   - Comprehensive test coverage for client generation and HTTP communication patterns
 
 ### Fixed - 2025-01-09
-- Improved Bruno auth enum formatting for better code consistency
-  - Fixed formatting of BrunoAuth enum to use consistent brace style
-  - Enhanced readability with proper field alignment for Bearer and Basic auth types
-  - Maintained proper code formatting standards throughout bruno.rs module
-
-### Fixed - 2025-01-09
 - Fixed OpenRPC schema generation to comply with JSON-RPC specification
   - Schema definitions now properly use components/schemas instead of $defs
   - Service-specific helper functions prevent naming conflicts in generated code
   - All schema references updated to use standard #/components/schemas/ format
-
-### Added - 2025-01-09
-- New OpenRPC-to-Bruno conversion tool for generating Bruno API collections from OpenRPC specifications
-  - Complete CLI tool `openrpc-to-bruno` for converting OpenRPC 1.3.2 documents to Bruno collections
-  - Supports authentication extraction with Bearer token configuration
-  - Generates environment variables and collection metadata automatically
-  - Comprehensive test suite with integration tests for conversion accuracy
-  - Handles method parameter conversion with proper JSON schema validation
-  - Bruno collection format support with proper .bru file generation
-  - Command-line interface with configurable output directories and collection naming
 
 ### Refactored - 2025-01-09
 - Restructured Google OAuth example into multi-crate architecture for better separation of concerns
@@ -199,31 +277,23 @@ All notable changes to this project will be documented in this file.
 
 ### Enhanced - 2025-01-09
 - Updated workspace configuration and dependencies to support new tooling and improved development experience
-  - Added clap workspace dependency for consistent CLI tooling across the project
   - Updated schemars to 1.0.0-alpha.20 for improved JSON Schema Draft 7 compatibility
-  - Enhanced workspace member organization with tools and multi-crate example structure
+  - Enhanced workspace member organization for multi-crate example structure
   - Fixed import ordering in integration tests following Rust style guidelines
   - Improved Cargo.lock with new dependencies for CLI tools and testing infrastructure
 
 ### Fixed - 2025-01-09
 - Fixed OpenRPC specification parsing to support extension fields and JSON Schema compatibility
-  - Removed deny_unknown_fields restrictions from Method and Schema structs in openrpc-types crate
+  - Removed deny_unknown_fields restrictions from Method and Schema structs in ras-openrpc-types crate
   - Added $schema field support to Schema struct for proper JSON Schema Draft 7 compatibility
   - Enables proper parsing of OpenRPC documents with x-authentication and x-permissions extensions
-  - Bruno API collection generator now properly supports OpenRPC files with custom authentication metadata
 
 ### Enhanced - 2025-01-09
 - Enhanced OpenRPC document generation functionality to actually generate files
-  - Modified google-oauth-example to call OpenRPC generation functions during service creation
+  - Modified the OAuth2 demo to call OpenRPC generation functions during service creation
   - Added JsonSchema derives to all request/response types for proper schema generation
   - Created test infrastructure to verify end-to-end OpenRPC generation works correctly
   - OpenRPC documents now properly written to target/openrpc/ directory when enabled
-
-### Fixed - 2025-01-09
-- Fixed Bruno API collection JSON formatting to be properly indented and valid
-  - Corrected JSON body indentation in .bru files to use proper 2-space indentation within body:json blocks
-  - Generated Bruno collections are now properly formatted and compatible with Bruno API client
-  - Resolves validation errors when importing generated collections into Bruno
 
 ### Documentation - 2025-01-09
 - Added comprehensive OpenRPC generation documentation to ras-jsonrpc-macro README
@@ -268,28 +338,28 @@ All notable changes to this project will be documented in this file.
 - Comprehensive HTTP integration test suites for both JSON-RPC and REST macro crates
   - Complete JSON-RPC integration tests covering all authentication patterns (UNAUTHORIZED, WITH_PERMISSIONS with various levels)
   - Full REST API integration tests with CRUD operations, path parameters, and HTTP method validation
-  - Real HTTP server testing using random port binding with tokio TcpListener for concurrent test execution
+  - HTTP integration coverage for generated routers and clients
   - Authentication and authorization testing across all permission levels with JWT token validation
   - Security testing including timing attack resistance and proper error handling scenarios
   - Concurrent request testing validating thread safety and performance under load
   - OpenRPC and OpenAPI document generation testing ensuring specification compliance
   - Test infrastructure supporting both positive and negative scenarios with comprehensive error validation
-  - Fixed unused import warnings in rust-identity-local during test infrastructure development
+  - Fixed unused import warnings in `ras-identity-local` during test infrastructure development
 
 ### Enhanced - 2025-01-08
 - Added comprehensive testing dependencies for HTTP integration testing across macro crates
-  - Added wiremock, reqwest, tower, hyper, rand, and futures to workspace dependencies for robust HTTP testing infrastructure
-  - Enhanced rust-jsonrpc-macro and rust-rest-macro with testing dependencies for real server integration tests
-  - Established foundation for comprehensive integration testing with random port binding and concurrent request handling
+  - Added HTTP client, router, concurrency, and async helper dependencies for robust HTTP testing infrastructure
+  - Enhanced `ras-jsonrpc-macro` and `ras-rest-macro` with testing dependencies for real server integration tests
+  - Established foundation for comprehensive integration testing and concurrent request handling
   - Dependencies support both JSON-RPC and REST API testing patterns with authentication validation
 
 ### Refactored - 2025-01-08
 - Architectural refactoring to eliminate coupling between RPC and REST macro crates
-  - Created new `rust-auth-core` crate as shared foundation for authentication types and traits
-  - Moved `AuthProvider`, `AuthenticatedUser`, `AuthError`, and related types from `rust-jsonrpc-core` to `rust-auth-core`
-  - Updated `rust-rest-macro` to depend on `rust-auth-core` instead of `rust-jsonrpc-core`, eliminating unwanted cross-dependencies
-  - Updated `rust-identity-session` and other affected crates to use shared authentication types
-  - Maintained full backward compatibility through re-exports in `rust-jsonrpc-core`
+  - Created new `ras-auth-core` crate as shared foundation for authentication types and traits
+  - Moved `AuthProvider`, `AuthenticatedUser`, `AuthError`, and related types from `ras-jsonrpc-core` to `ras-auth-core`
+  - Updated `ras-rest-macro` to depend on `ras-auth-core` instead of `ras-jsonrpc-core`, eliminating unwanted cross-dependencies
+  - Updated `ras-identity-session` and other affected crates to use shared authentication types
+  - Maintained full backward compatibility through re-exports in `ras-jsonrpc-core`
   - Enhanced codebase maintainability with clear separation of concerns between authentication logic and protocol-specific implementations
   - Improved workspace architecture enabling future protocol extensions (gRPC, etc.) without introducing coupling
   - Updated documentation and build commands to reflect new crate structure
@@ -304,7 +374,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed - 2025-01-08
 - Fixed REST API documentation schema display for optional fields showing as empty objects
-  - Enhanced OpenAPI schema generation to convert `"type": ["string", "null"]` format to `"type": "string", "nullable": true"` for better Swagger UI compatibility
+  - Enhanced OpenAPI schema generation to convert `"type": ["string", "null"]` format to `"type": "string", "nullable": true"` for better explorer compatibility
   - Improved JavaScript schema processing in documentation UI to handle array type definitions (e.g., `["string", "null"]`)
   - Added recursive schema normalization for all nested objects and definitions
   - Optional fields like `email` and `display_name` now display as proper string input fields with meaningful examples
@@ -313,15 +383,15 @@ All notable changes to this project will be documented in this file.
 ### Enhanced - 2025-01-08
 - Sprint retrospective update covering Static API Documentation Hosting & Explorer UI implementation
   - Documented strategic orchestration approach with successful role delegation (Architect → Backend Coder → UX Designer)
-  - Noted seamless integration with existing rust-rest-macro patterns without breaking changes
-  - Recognized custom API explorer UI success replacing generic Swagger UI with tailored features
+  - Noted seamless integration with existing `ras-rest-macro` patterns without breaking changes
+  - Recognized custom API explorer UI success with tailored features
   - Highlighted zero-overhead implementation design for optional features
   - Identified opportunity for smaller proof-of-concept approach in future complex implementations
 
 ### Added - 2025-01-08
 - Static API documentation hosting with embedded explorer UI for REST services
-  - Complete static file hosting support integrated into rust-rest-macro crate
-  - Interactive API documentation with custom-built explorer UI replacing generic Swagger UI
+  - Complete static file hosting support integrated into the `ras-rest-macro` crate
+  - Interactive API documentation with custom-built explorer UI
   - Embedded static assets using rust-embed for zero-dependency deployment
   - JWT authentication integration directly in the explorer interface
   - Responsive documentation UI with multiple theme support (default theme included)
@@ -332,16 +402,16 @@ All notable changes to this project will be documented in this file.
 
 ### Enhanced - 2025-01-08
 - Sprint retrospective process with enhanced development guidelines based on observed patterns
-  - Added Critical Development Rules section to CLAUDE.md based on sprint observation analysis
+  - Added critical development rules based on sprint observation analysis
   - Five new rules: Test Early/Often, Specification First, Incremental Implementation, Macro Testing, End-to-End Validation
   - Enhanced Common Pitfalls with string type mismatches and move semantics guidance
-  - Updated crate listings to include rust-rest-macro and build commands
-  - Archived sprint-2 retrospective notes covering OpenRPC generation, registry setup, and REST macro implementation
+  - Updated crate listings to include `ras-rest-macro` and build commands
+  - Captured retrospective notes covering OpenRPC generation, registry setup, and REST macro implementation
   - Systematic approach to learning from development patterns and preventing recurring issues
 
 ### Enhanced - 2025-01-08
 - REST service example now demonstrates complete local authentication integration with comprehensive security features
-  - Full JWT-based authentication using rust-identity-local and rust-identity-session crates
+  - Full JWT-based authentication using `ras-identity-local` and `ras-identity-session` crates
   - Complete auth endpoints: user registration, login, logout, and user info retrieval
   - Role-based permission system with admin and user access levels (admin users inherit user permissions)
   - Two-phase authentication flow: LocalUserProvider for credential validation → SessionService for JWT issuance
@@ -352,24 +422,23 @@ All notable changes to this project will be documented in this file.
 
 ### Added - 2025-01-08
 - REST macro crate implementation with comprehensive REST API generation capabilities
-  - Complete rust-rest-macro procedural macro crate for type-safe REST endpoints with authentication integration
+  - Complete `ras-rest-macro` procedural macro crate for type-safe REST endpoints with authentication integration
   - Supports all HTTP methods (GET, POST, PUT, DELETE, PATCH) with path parameters and request bodies
   - OpenAPI 3.0 document generation using schemars with configurable output paths
   - Permission-based access control with JWT authentication through AuthProvider integration
   - Generated service traits, builders, and axum router integration following JSON-RPC macro patterns
-  - Example application (rest-service-example) demonstrating comprehensive REST service implementation
+  - Example application demonstrating comprehensive REST service implementation
   - Full workspace integration with proper dependency management and testing infrastructure
 
 ### Added - 2025-01-08
-- Kellnr registry configuration for local crate publishing
-  - Configured kellnr as default registry in `.cargo/config.toml`
-  - Registry URL set to `http://localhost:8000/api/v1/crates/`
-  - Created comprehensive release command at `.claude/commands/kellnr-release.md`
+- Kellnr registry notes for local crate publishing
+  - Recorded the local registry URL `http://localhost:8000/api/v1/crates/`
+  - Created comprehensive release checklist
   - Includes A-Z release process with dependency order management
   - All internal dependencies already properly configured with path + version
 
 ### Added - 2025-01-08
-- Complete OpenRPC 1.3.2 specification types crate (openrpc-types) with full type safety and validation
+- Complete OpenRPC 1.3.2 specification types crate (ras-openrpc-types) with full type safety and validation
   - Comprehensive implementation of all OpenRPC specification types with serde serialization support
   - Ergonomic builder patterns using bon crate for fluent API construction
   - Extensive validation system for OpenRPC documents, method names, error codes, and component references
@@ -385,19 +454,8 @@ All notable changes to this project will be documented in this file.
   - Generates complete JSON Schema definitions using schemars crate for all request/response types
   - Includes authentication metadata with OpenRPC extensions (`x-authentication`, `x-permissions`)
   - Added comprehensive test coverage and examples demonstrating all features
-  - Updated CLAUDE.md documentation with usage examples and requirements
+  - Updated JSON-RPC macro documentation with usage examples and requirements
   - Requires types to implement `schemars::JsonSchema` trait when OpenRPC generation is enabled
-
-### Added - 2025-01-07
-- Sprint retrospective implementation with project guidelines optimization
-  - Streamlined CLAUDE.md documentation from verbose descriptions to concise guidelines
-  - Added testing guidelines based on sprint observations (security-first, end-to-end testing)
-  - Enhanced orchestrate command with key execution principles to prevent observed mistakes
-  - Archived sprint-1 retrospective notes to scraim/retroed/ for historical tracking
-  
-- Added raitro command for automated sprint retrospectives
-  - Command analyzes sprint observations and optimizes project guidelines
-  - Provides framework for continuous improvement of development processes
 
 ### Fixed - 2025-01-07
 - Fixed JSON-RPC macro routing issue causing 404 errors when accessing service endpoints
@@ -428,7 +486,7 @@ All notable changes to this project will be documented in this file.
   - Custom user info field mapping for flexible OAuth2 provider integration
   - Comprehensive error handling with OAuth2-specific error types and detailed context
   - Full test suite covering PKCE generation, authorization URLs, state management, and security scenarios
-  - Production-ready implementation with proper HTTP timeouts and robust error recovery
+  - HTTP timeouts and error handling for the provider client
 - Enhanced JwtAuthProvider with Clone trait for improved service compatibility and architecture flexibility
 
 ### Added - 2025-01-07
@@ -437,7 +495,7 @@ All notable changes to this project will be documented in this file.
   - Complete Rust backend integration using Axum server with JSON-RPC API endpoints
   - Sophisticated permission system with role-based access control based on email domains and user attributes
   - Six different API endpoints showcasing permission-based access (user info, documents, admin, system status, beta features)
-  - Production-ready OAuth2 flow with PKCE, state validation, JWT session management, and comprehensive error handling
+  - OAuth2 flow with PKCE, state validation, JWT session management, and error handling
   - Interactive API documentation with built-in testing capabilities and JWT token management
   - Comprehensive test suite covering permission logic and service compilation validation
   - Complete setup documentation with Google Cloud Console integration instructions
@@ -449,11 +507,11 @@ All notable changes to this project will be documented in this file.
   - Includes protection for production, staging, and local environment configurations
 
 ### Documentation - 2025-01-07
-- Updated CLAUDE.md with comprehensive Google OAuth2 example documentation and usage instructions
+- Updated Google OAuth2 example documentation and usage instructions
   - Added quick start guide with Google Cloud Console setup steps and environment configuration
   - Documented sophisticated permission system with role-based access control examples
   - Comprehensive API endpoint documentation with permission requirements and functionality descriptions
-  - Added oauth2 provider status update from stub to full production-ready implementation
+  - Added oauth2 provider status update from stub to implemented provider
   - Enhanced development commands with example application execution instructions
   - Added Common Pitfalls section documenting Axum router nesting syntax issues
 - Updated sprint reflection documentation with Google OAuth2 full-stack implementation learnings and coordination insights
@@ -461,7 +519,7 @@ All notable changes to this project will be documented in this file.
   - Documented lessons learned about testing end-to-end flows and examining generated code
 
 ### Security - 2025-01-07
-- Enhanced authentication security in rust-identity-local with comprehensive attack vector protection
+- Enhanced authentication security in `ras-identity-local` with comprehensive attack vector protection
   - Fixed username enumeration vulnerability - consistent errors for non-existent users and wrong passwords
   - Implemented timing attack resistance using constant-time authentication with real Argon2 dummy hash
   - Added robust input validation for malformed payloads, empty credentials, and special characters
@@ -472,10 +530,10 @@ All notable changes to this project will be documented in this file.
 
 ### Added - 2025-01-07
 - Identity management system with pluggable authentication providers
-  - rust-identity-core: Core traits for IdentityProvider and UserPermissions with default implementations
-  - rust-identity-local: Local username/password authentication with Argon2 password hashing
-  - rust-identity-oauth2: OAuth2 provider framework (stub implementation for future completion)
-  - rust-identity-session: JWT-based session management with configurable secrets and permission lookup
+  - `ras-identity-core`: Core traits for IdentityProvider and UserPermissions with default implementations
+  - `ras-identity-local`: Local username/password authentication with Argon2 password hashing
+  - `ras-identity-oauth2`: Initial OAuth2 provider framework for external-provider authentication
+  - `ras-identity-session`: JWT-based session management with configurable secrets and permission lookup
 - Two-stage authentication flow: identity verification followed by JWT session creation
 - Permission system with UserPermissions trait enabling flexible RBAC patterns
 - JwtAuthProvider implementing AuthProvider trait for seamless JSON-RPC integration
@@ -488,23 +546,20 @@ All notable changes to this project will be documented in this file.
 
 ### Added - 2025-01-07
 - Complete JSON-RPC library ecosystem with three core crates
-  - rust-jsonrpc-types: Pure JSON-RPC 2.0 protocol types and utilities
-  - rust-jsonrpc-core: Authentication and authorization framework with AuthProvider trait
-  - rust-jsonrpc-macro: Procedural macro for generating type-safe RPC interfaces with axum integration
+  - `ras-jsonrpc-types`: Pure JSON-RPC 2.0 protocol types and utilities
+  - `ras-jsonrpc-core`: Authentication and authorization framework with AuthProvider trait
+  - `ras-jsonrpc-macro`: Procedural macro for generating type-safe RPC interfaces with axum integration
 - Comprehensive test suite and integration tests for macro functionality
 - Workspace-level dependency management with shared crate versions
 - Example applications demonstrating JSON-RPC service implementation
   - basic-jsonrpc-service: Complete working example with authentication and multiple endpoints
   - Usage examples showing macro-generated service builders
 - Enhanced project documentation and development guidelines
-  - Updated CLAUDE.md with comprehensive crate organization patterns
+  - Updated crate organization patterns
   - Added development workflow instructions and dependency management guidelines
-  - Improved orchestration commands for better AI-assisted development
 - Sprint reflection system for tracking development progress and learnings
 
 ### Added - 2025-01-06
 - Initial project setup with Cargo workspace structure
-- Created rust-jsonrpc-macro procedural macro crate foundation
+- Created `ras-jsonrpc-macro` procedural macro crate foundation
 - Added .gitignore for Rust and IDE artifacts
-- Configured MCP integration with Context7 for enhanced documentation
-- Added CLAUDE.md for AI-assisted development guidance
