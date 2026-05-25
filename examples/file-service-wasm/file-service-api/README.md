@@ -16,13 +16,16 @@ The backend implementation is documented in [../file-service-backend/README.md](
 ## Features
 
 - `server` - marker feature used by the backend package when depending on this shared API crate.
-- `wasm-client` - re-exports the macro-generated WASM client on `wasm32`.
+- `client` - enables the macro-generated upload/download client for native or `wasm32` callers.
+- `wasm-client` - compatibility alias that also enables the extra WASM helper dependencies.
 
 ## Checks
 
 ```bash
 cargo check -p file-service-api --locked
 cargo check -p file-service-api --features server --locked
+cargo check -p file-service-api --features client --locked
 cargo test -p file-service-api --locked
+cargo test -p file-service-api --features server --locked
 cargo clippy -p file-service-api --all-targets --all-features --locked -- -D warnings
 ```

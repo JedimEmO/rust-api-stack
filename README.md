@@ -260,16 +260,20 @@ Reactive web UI with Dominator and the generated JSON-RPC client.
 
 ## Documentation
 
-Detailed guides:
-- [REST Macro Guide](documentation/ras-rest-macro.md) - REST API guide
-- [File Service Guide](documentation/ras-file-macro.md) - File upload/download services
-- [Identity Providers](documentation/ras-identity.md) - Authentication system guide
-- [Observability](documentation/ras-observability.md) - Metrics and monitoring
+The canonical documentation is the mdBook source under
+[documentation/src](documentation/src/SUMMARY.md). Start with:
 
-Package-level guides:
-- [JSON-RPC Macro](crates/rpc/ras-jsonrpc-macro/README.md) - JSON-RPC service generation, OpenRPC output, and generated clients
+- [Build A Typed Workspace App](documentation/src/tutorial/index.md)
+- [Why Typed Service Definitions](documentation/src/why-typed-service-definitions.md)
+- [Auth In The API Contract](documentation/src/auth-in-api-contract.md)
+- [`jsonrpc_service!`](documentation/src/macros/jsonrpc-service.md)
+- [`rest_service!`](documentation/src/macros/rest-service.md)
+- [`file_service!`](documentation/src/macros/file-service.md)
+- [`jsonrpc_bidirectional_service!`](documentation/src/macros/bidirectional-jsonrpc-service.md)
+
+Package-level README files remain available for crate-specific details:
+
 - [JSON-RPC Core](crates/rpc/ras-jsonrpc-core/README.md) - runtime auth and JSON-RPC support types
-- [Bidirectional JSON-RPC Macro](crates/rpc/bidirectional/ras-jsonrpc-bidirectional-macro/README.md) - WebSocket service generation
 - [Bidirectional JSON-RPC Server](crates/rpc/bidirectional/ras-jsonrpc-bidirectional-server/README.md) - server-side WebSocket runtime
 - [Bidirectional JSON-RPC Client](crates/rpc/bidirectional/ras-jsonrpc-bidirectional-client/README.md) - native and WASM WebSocket clients
 
@@ -347,6 +351,12 @@ CI also checks that each Cargo package has a local README target and that local
 Markdown links resolve. The checks are implemented directly in
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) so the repository does
 not need separate verification scripts.
+
+The mdBook can be built locally with:
+
+```bash
+mdbook build
+```
 
 ### Supply Chain Policy
 

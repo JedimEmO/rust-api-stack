@@ -54,6 +54,7 @@ Any other bearer token is rejected.
 
 ```bash
 cargo test -p file-service-example --locked
+cargo check -p file-service-example --no-default-features --features server --locked
 cargo clippy -p file-service-example --all-targets --all-features --locked -- -D warnings
 ```
 

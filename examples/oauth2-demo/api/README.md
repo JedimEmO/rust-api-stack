@@ -31,6 +31,9 @@ The server decides how OAuth2 identities map to those permissions.
 
 ```bash
 cargo check -p oauth2-demo-api --locked
+cargo check -p oauth2-demo-api --features server --locked
+cargo check -p oauth2-demo-api --features client --locked
 cargo test -p oauth2-demo-api --locked
+cargo test -p oauth2-demo-api --features server --locked
 cargo clippy -p oauth2-demo-api --all-targets --all-features --locked -- -D warnings
 ```

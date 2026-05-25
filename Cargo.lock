@@ -298,7 +298,6 @@ dependencies = [
  "ras-identity-core",
  "ras-identity-local",
  "ras-identity-session",
- "ras-jsonrpc-bidirectional-macro",
  "ras-jsonrpc-bidirectional-server",
  "ras-jsonrpc-bidirectional-types",
  "ras-jsonrpc-types",
@@ -1075,8 +1074,6 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
- "axum-extra",
- "http",
  "js-sys",
  "ras-auth-core",
  "ras-file-core",
@@ -1089,7 +1086,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
- "tower",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -3126,7 +3122,6 @@ dependencies = [
  "async-trait",
  "axum",
  "axum-extra",
- "http",
  "ras-auth-core",
  "ras-rest-core",
  "ras-rest-macro",
@@ -3136,7 +3131,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
- "tower",
  "tracing",
 ]
 

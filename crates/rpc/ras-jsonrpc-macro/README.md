@@ -2,6 +2,10 @@
 
 Procedural macros for generating type-safe JSON-RPC services with authentication and axum integration.
 
+See the canonical mdBook
+[`jsonrpc_service!` guide](../../../documentation/src/macros/jsonrpc-service.md)
+for the rationale, auth model, usage flow, and runnable examples.
+
 ## Overview
 
 This crate provides the `jsonrpc_service!` procedural macro that generates type-safe JSON-RPC services with built-in authentication, authorization, and axum integration. It transforms a declarative service definition into a JSON-RPC router with compile-time checks for the generated service trait.
@@ -40,15 +44,17 @@ reqwest = { version = "0.12", features = ["json"], optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json"], optional = true }
 
 [features]
-default = ["server"]
+default = []
 server = [
-    "ras-jsonrpc-macro/server",
     "dep:ras-jsonrpc-core",
     "dep:axum",
     "dep:tokio",
 ]
-client = ["ras-jsonrpc-macro/client", "dep:reqwest"]
+client = ["dep:reqwest"]
 ```
+
+Define `server` and `client` on the API crate that invokes the macro. Downstream
+server and client crates enable the API crate feature they need.
 
 ## Quick Start
 

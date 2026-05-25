@@ -12,10 +12,9 @@ readme = "README.md"
 
 [dependencies]
 # Local dependencies
-bidirectional-chat-api = { path = "../api", version = "0.1.0" }
+bidirectional-chat-api = { path = "../api", version = "0.1.0", features = ["server"] }
 ras-auth-core = { path = "../../../crates/core/ras-auth-core", version = "0.1.0" }
 ras-jsonrpc-types = { path = "../../../crates/rpc/ras-jsonrpc-types", version = "0.1.1" }
-ras-jsonrpc-bidirectional-macro = { path = "../../../crates/rpc/bidirectional/ras-jsonrpc-bidirectional-macro", version = "0.1.0" }
 ras-jsonrpc-bidirectional-server = { path = "../../../crates/rpc/bidirectional/ras-jsonrpc-bidirectional-server", version = "0.1.0" }
 ras-jsonrpc-bidirectional-types = { path = "../../../crates/rpc/bidirectional/ras-jsonrpc-bidirectional-types", version = "0.1.0" }
 ras-rest-macro = { path = "../../../crates/rest/ras-rest-macro", version = "0.2.1", features = ["server"] }
@@ -47,4 +46,4 @@ axum-test = { workspace = true }
 
 [features]
 default = ["server"]
-server = ["ras-jsonrpc-bidirectional-macro/server"]
+server = []

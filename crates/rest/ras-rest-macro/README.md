@@ -2,6 +2,10 @@
 
 A procedural macro for creating type-safe REST APIs with authentication integration and OpenAPI document generation.
 
+See the canonical mdBook
+[`rest_service!` guide](../../../documentation/src/macros/rest-service.md) for
+the rationale, auth model, usage flow, and runnable examples.
+
 ## Features
 
 - **Type-safe REST endpoints**: Generate axum-based REST services from macro definitions

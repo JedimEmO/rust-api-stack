@@ -12,6 +12,11 @@ readme = "README.md"
 [lib]
 proc-macro = true
 
+[features]
+default = ["server", "client"]
+server = []
+client = []
+
 [dependencies]
 syn = { workspace = true, features = ["full", "extra-traits", "visit-mut"] }
 quote = { workspace = true }

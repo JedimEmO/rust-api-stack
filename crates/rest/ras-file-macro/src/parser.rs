@@ -457,51 +457,22 @@ fn parse_auth(input: ParseStream) -> Result<AuthRequirement> {
             let content;
             syn::parenthesized!(content in input);
 
-            let perms_content;
-            syn::bracketed!(perms_content in content);
+            let first_group_content;
+            syn::bracketed!(first_group_content in content);
+            let mut permission_groups = vec![parse_permission_group(&first_group_content)?];
 
-            let mut permission_groups = Vec::new();
+            while content.peek(Token![|]) {
+                content.parse::<Token![|]>()?;
 
-            while !perms_content.is_empty() {
-                if perms_content.peek(LitStr) {
-                    let perm: LitStr = perms_content.parse()?;
-                    permission_groups.push(vec![perm.value()]);
-                } else if perms_content.peek(token::Bracket) {
-                    let group_content;
-                    syn::bracketed!(group_content in perms_content);
-
-                    let mut group = Vec::new();
-                    while !group_content.is_empty() {
-                        let perm: LitStr = group_content.parse()?;
-                        group.push(perm.value());
-                        if group_content.peek(Token![,]) {
-                            group_content.parse::<Token![,]>()?;
-                        }
-                    }
-
-                    if group.is_empty() {
-                        return Err(Error::new(
-                            group_content.span(),
-                            "Permission groups cannot be empty",
-                        ));
-                    }
-                    permission_groups.push(group);
-                } else {
-                    return Err(Error::new(
-                        perms_content.span(),
-                        "Expected permission string or group",
-                    ));
-                }
-
-                if perms_content.peek(Token![,]) {
-                    perms_content.parse::<Token![,]>()?;
-                }
+                let group_content;
+                syn::bracketed!(group_content in content);
+                permission_groups.push(parse_permission_group(&group_content)?);
             }
 
-            if permission_groups.is_empty() {
+            if !content.is_empty() {
                 return Err(Error::new(
-                    perms_content.span(),
-                    "WITH_PERMISSIONS requires at least one permission",
+                    content.span(),
+                    "Expected `|` followed by another permission group",
                 ));
             }
 
@@ -512,6 +483,20 @@ fn parse_auth(input: ParseStream) -> Result<AuthRequirement> {
             "Expected UNAUTHORIZED or WITH_PERMISSIONS",
         )),
     }
+}
+
+fn parse_permission_group(input: ParseStream) -> Result<Vec<String>> {
+    let mut group = Vec::new();
+    while !input.is_empty() {
+        let perm: LitStr = input.parse()?;
+        group.push(perm.value());
+
+        if input.peek(Token![,]) {
+            input.parse::<Token![,]>()?;
+        }
+    }
+
+    Ok(group)
 }
 
 fn parse_endpoint_path(input: ParseStream) -> Result<(Ident, LitStr, Vec<PathParam>)> {
@@ -600,6 +585,73 @@ mod tests {
         assert!(
             error.contains(expected),
             "expected parse error to contain `{expected}`, got `{error}`"
+        );
+    }
+
+    fn parse_definition_with_auth(auth: &str) -> FileServiceDefinition {
+        syn::parse_str::<FileServiceDefinition>(&format!(
+            r#"{{
+                service_name: Files,
+                base_path: "/files",
+                endpoints: [
+                    DOWNLOAD {auth} download/{{file_id: String}},
+                ]
+            }}"#
+        ))
+        .expect("definition should parse")
+    }
+
+    #[test]
+    fn parses_permission_group_with_and_semantics() {
+        let definition = parse_definition_with_auth(r#"WITH_PERMISSIONS(["admin", "moderator"])"#);
+        let AuthRequirement::WithPermissions(groups) = &definition.endpoints[0].auth else {
+            panic!("expected permission auth");
+        };
+
+        assert_eq!(
+            groups,
+            &[vec!["admin".to_string(), "moderator".to_string()]]
+        );
+    }
+
+    #[test]
+    fn parses_permission_groups_with_or_semantics() {
+        let definition =
+            parse_definition_with_auth(r#"WITH_PERMISSIONS(["admin"] | ["moderator", "editor"])"#);
+        let AuthRequirement::WithPermissions(groups) = &definition.endpoints[0].auth else {
+            panic!("expected permission auth");
+        };
+
+        assert_eq!(
+            groups,
+            &[
+                vec!["admin".to_string()],
+                vec!["moderator".to_string(), "editor".to_string()],
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_empty_permission_group_as_authenticated_only() {
+        let definition = parse_definition_with_auth("WITH_PERMISSIONS([])");
+        let AuthRequirement::WithPermissions(groups) = &definition.endpoints[0].auth else {
+            panic!("expected permission auth");
+        };
+
+        assert_eq!(groups, &[Vec::<String>::new()]);
+    }
+
+    #[test]
+    fn rejects_legacy_nested_permission_group_syntax() {
+        assert_parse_error_contains(
+            r#"{
+                service_name: Files,
+                base_path: "/files",
+                endpoints: [
+                    DOWNLOAD WITH_PERMISSIONS([["admin", "moderator"]]) download/{file_id: String},
+                ]
+            }"#,
+            "expected string literal",
         );
     }
 

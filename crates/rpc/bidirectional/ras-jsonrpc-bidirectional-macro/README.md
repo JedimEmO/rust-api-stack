@@ -2,6 +2,10 @@
 
 Procedural macro for generating type-safe bidirectional JSON-RPC services over WebSockets.
 
+See the canonical mdBook
+[`jsonrpc_bidirectional_service!` guide](../../../../documentation/src/macros/bidirectional-jsonrpc-service.md)
+for the rationale, auth model, usage flow, and runnable examples.
+
 This crate provides the `jsonrpc_bidirectional_service!` macro that generates both server and client code for bidirectional JSON-RPC communication, including authentication support and type-safe message enums.
 
 ## Features
@@ -29,18 +33,18 @@ ras-jsonrpc-bidirectional-server = { version = "0.1.0", optional = true }
 ras-jsonrpc-bidirectional-client = { version = "0.1.0", optional = true }
 
 [features]
-default = ["server", "client"]
+default = []
 server = [
-    "ras-jsonrpc-bidirectional-macro/server",
     "dep:ras-jsonrpc-bidirectional-server",
 ]
 client = [
-    "ras-jsonrpc-bidirectional-macro/client",
     "dep:ras-jsonrpc-bidirectional-client",
 ]
 ```
 
-The generated code checks the consuming crate's `server` and `client` features, so keep the macro features and optional runtime crates behind the same feature names.
+The generated code checks the API crate's `server` and `client` features.
+Downstream server and client crates select behavior by enabling those features
+on the shared API crate dependency.
 
 If you define `server_to_client_calls`, also add `tokio = { version = "1.0", features = ["sync", "time"], optional = true }` and `uuid = { version = "1", features = ["v4"], optional = true }`, then include `dep:tokio` and `dep:uuid` in the `server` feature. The generated server-side client handle uses them for pending response channels, timeouts, and request IDs.
 
@@ -350,9 +354,10 @@ cargo clippy -p ras-jsonrpc-bidirectional-macro --all-targets --all-features --l
 The macro generates code conditionally compiled based on features:
 
 - `#[cfg(feature = "server")]`: Server traits, handlers, and builders
-- `#[cfg(feature = "client")]`: Client structs, builders, and message enums  
+- `#[cfg(feature = "client")]`: Client structs, builders, and message enums
 
-This allows consuming crates to enable only the functionality they need.
+This allows each API crate to expose only the generated surface its downstream
+server or client crates need.
 
 ## Error Handling
 

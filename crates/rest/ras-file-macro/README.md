@@ -47,8 +47,9 @@ file_service!({
 });
 ```
 
-See [documentation/ras-file-macro.md](../../../documentation/ras-file-macro.md)
-for the usage guide and runnable examples.
+See the canonical mdBook
+[`file_service!` guide](../../../documentation/src/macros/file-service.md) for
+the usage guide and runnable examples.
 
 ## Checks
 

@@ -17,7 +17,7 @@ file_service!({
     base_path: "/integration",
     openapi: true,
     endpoints: [
-        UPLOAD WITH_PERMISSIONS([["admin", "moderator"]]) upload/{bucket: String} multipart {
+        UPLOAD WITH_PERMISSIONS(["admin", "moderator"]) upload/{bucket: String} multipart {
             max_total_bytes: unlimited,
             reject_unknown_fields: false,
             parts: [
@@ -40,7 +40,7 @@ file_service!({
 });
 
 #[test]
-fn generated_openapi_includes_nested_permission_groups_and_unlimited_upload() {
+fn generated_openapi_includes_permission_groups_and_unlimited_upload() {
     let doc = generate_integrationservice_openapi();
 
     let upload = &doc["paths"]["/upload/{bucket}"]["post"];

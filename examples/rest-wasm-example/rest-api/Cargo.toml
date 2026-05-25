@@ -14,28 +14,33 @@ readme = "README.md"
 crate-type = ["rlib"]
 
 [dependencies]
-ras-rest-macro = { path = "../../../crates/rest/ras-rest-macro", version = "0.2.1" }
-ras-auth-core = { path = "../../../crates/core/ras-auth-core", version = "0.1.0" }
-ras-rest-core = { path = "../../../crates/rest/ras-rest-core", version = "0.1.1" }
+ras-rest-macro = { path = "../../../crates/rest/ras-rest-macro", version = "0.2.1", default-features = false }
+ras-auth-core = { path = "../../../crates/core/ras-auth-core", version = "0.1.0", optional = true }
+ras-rest-core = { path = "../../../crates/rest/ras-rest-core", version = "0.1.1", optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 schemars = { workspace = true }
 tracing = { workspace = true }
-async-trait = { workspace = true }
+async-trait = { workspace = true, optional = true }
 thiserror = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-axum = { workspace = true }
-axum-extra = { workspace = true }
-tower = { workspace = true }
-http = { workspace = true }
-reqwest = { workspace = true }
-tokio = { workspace = true }
+axum = { workspace = true, optional = true }
+axum-extra = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json"], optional = true }
 
 [features]
 default = []
-server = ["ras-rest-macro/server"]
-client = ["ras-rest-macro/client"]
+server = [
+    "dep:ras-auth-core",
+    "dep:ras-rest-core",
+    "dep:async-trait",
+    "dep:axum",
+    "dep:axum-extra",
+    "dep:tokio",
+]
+client = ["dep:reqwest"]

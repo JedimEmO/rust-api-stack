@@ -31,36 +31,37 @@ pub fn file_service(input: TokenStream) -> TokenStream {
     let openapi_mod = format_ident!("__ras_file_{}_openapi", service_name_lower);
     let client_mod = format_ident!("__ras_file_{}_client", service_name_lower);
 
-    // Only include server code when not targeting wasm32
     let expanded = quote! {
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(feature = "server")]
         mod #server_mod {
             use super::*;
             #server_code
         }
 
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(feature = "server")]
         pub use #server_mod::*;
 
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(feature = "server")]
         const _: () = {
             #schema_checks
         };
 
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(feature = "server")]
         mod #openapi_mod {
             use super::*;
             #openapi_code
         }
 
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(feature = "server")]
         pub use #openapi_mod::*;
 
+        #[cfg(feature = "client")]
         mod #client_mod {
             use super::*;
             #client_code
         }
 
+        #[cfg(feature = "client")]
         pub use #client_mod::*;
     };
 

@@ -433,70 +433,57 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
         (quote! {}, quote! {})
     };
 
-    // Generate server code only if server feature is enabled in the macro crate
-    let server_code = if cfg!(feature = "server") {
-        let server_impl = generate_server_code(&service_def);
+    let server_impl = generate_server_code(&service_def);
 
-        // Generate explorer code if enabled - only if server feature is enabled
-        let explorer_code = if service_def.explorer.is_some() && service_def.openrpc.is_some() {
-            let explorer_config = match &service_def.explorer {
-                Some(ExplorerConfig::Enabled) => static_hosting::StaticHostingConfig {
-                    serve_explorer: true,
-                    explorer_path: "/explorer".to_string(),
-                },
-                Some(ExplorerConfig::WithPath(path)) => static_hosting::StaticHostingConfig {
-                    serve_explorer: true,
-                    explorer_path: path.clone(),
-                },
-                None => static_hosting::StaticHostingConfig::default(),
-            };
-
-            // JSON-RPC services in this macro expose the explorer next to a single endpoint.
-            // The static host generator still accepts a base path for future reuse.
-            static_hosting::generate_static_hosting_code(
-                &explorer_config,
-                &service_def.service_name,
-                "",
-            )
-        } else {
-            quote! {}
+    let explorer_code = if service_def.explorer.is_some() && service_def.openrpc.is_some() {
+        let explorer_config = match &service_def.explorer {
+            Some(ExplorerConfig::Enabled) => static_hosting::StaticHostingConfig {
+                serve_explorer: true,
+                explorer_path: "/explorer".to_string(),
+            },
+            Some(ExplorerConfig::WithPath(path)) => static_hosting::StaticHostingConfig {
+                serve_explorer: true,
+                explorer_path: path.clone(),
+            },
+            None => static_hosting::StaticHostingConfig::default(),
         };
 
-        // Wrap all server code in a cfg attribute to ensure it's only compiled when server feature is enabled
-        quote! {
-            #[cfg(feature = "server")]
-            mod #server_mod {
-                use super::*;
-
-                #server_impl
-                #explorer_code
-            }
-
-            #[cfg(feature = "server")]
-            pub use #server_mod::*;
-        }
+        // JSON-RPC services in this macro expose the explorer next to a single endpoint.
+        // The static host generator still accepts a base path for future reuse.
+        static_hosting::generate_static_hosting_code(
+            &explorer_config,
+            &service_def.service_name,
+            "",
+        )
     } else {
         quote! {}
     };
 
-    // Generate client code only if client feature is enabled in the macro crate
-    let client_code = if cfg!(feature = "client") {
-        let client_impl = crate::client::generate_client_code(&service_def);
+    let server_code = quote! {
+        #[cfg(feature = "server")]
+        mod #server_mod {
+            use super::*;
 
-        // Wrap all client code in a cfg attribute to ensure it's only compiled when client feature is enabled
-        quote! {
-            #[cfg(feature = "client")]
-            mod #client_mod {
-                use super::*;
-
-                #client_impl
-            }
-
-            #[cfg(feature = "client")]
-            pub use #client_mod::*;
+            #server_impl
+            #explorer_code
         }
-    } else {
-        quote! {}
+
+        #[cfg(feature = "server")]
+        pub use #server_mod::*;
+    };
+
+    let client_impl = crate::client::generate_client_code(&service_def);
+
+    let client_code = quote! {
+        #[cfg(feature = "client")]
+        mod #client_mod {
+            use super::*;
+
+            #client_impl
+        }
+
+        #[cfg(feature = "client")]
+        pub use #client_mod::*;
     };
 
     let output = quote! {

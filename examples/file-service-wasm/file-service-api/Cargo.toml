@@ -14,11 +14,11 @@ readme = "README.md"
 crate-type = ["rlib"]
 
 [dependencies]
-ras-file-macro = { path = "../../../crates/rest/ras-file-macro", version = "0.1.0" }
-ras-file-core = { path = "../../../crates/rest/ras-file-core", version = "0.1.0" }
-ras-auth-core = { path = "../../../crates/core/ras-auth-core", version = "0.1.0" }
+ras-file-macro = { path = "../../../crates/rest/ras-file-macro", version = "0.1.0", default-features = false }
+ras-file-core = { path = "../../../crates/rest/ras-file-core", version = "0.1.0", optional = true }
+ras-auth-core = { path = "../../../crates/core/ras-auth-core", version = "0.1.0", optional = true }
 serde = { workspace = true, features = ["derive"] }
-async-trait = { workspace = true }
+async-trait = { workspace = true, optional = true }
 thiserror = { workspace = true }
 wasm-bindgen = { version = "0.2", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
@@ -27,20 +27,32 @@ web-sys = { version = "0.3", features = ["File", "Blob", "FormData"], optional =
 serde-wasm-bindgen = { version = "0.6", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-axum = { workspace = true }
-axum-extra = { workspace = true }
-tower = { workspace = true }
-http = { workspace = true }
-reqwest = { workspace = true }
-tokio = { workspace = true }
-tokio-util = { workspace = true }
-schemars = { workspace = true }
-serde_json = { workspace = true }
+axum = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+tokio-util = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["json", "multipart"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart"], optional = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
 
 [features]
 default = []
-wasm-client = ["wasm-bindgen", "wasm-bindgen-futures", "js-sys", "web-sys", "serde-wasm-bindgen"]
-server = []
+server = [
+    "dep:ras-file-core",
+    "dep:ras-auth-core",
+    "dep:async-trait",
+    "dep:axum",
+    "dep:schemars",
+    "dep:serde_json",
+]
+client = [
+    "dep:reqwest",
+    "dep:tokio",
+    "dep:tokio-util",
+]
+wasm-client = ["client", "wasm-bindgen", "wasm-bindgen-futures", "js-sys", "web-sys", "serde-wasm-bindgen"]

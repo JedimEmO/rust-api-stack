@@ -10,12 +10,17 @@ homepage = "https://github.com/JedimEmO/rust-api-stack"
 publish = false
 readme = "README.md"
 
+[features]
+default = ["server"]
+server = []
+client = []
+
 [dependencies]
 axum = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-ras-file-macro = { path = "../../crates/rest/ras-file-macro", version = "0.1.0" }
+ras-file-macro = { path = "../../crates/rest/ras-file-macro", version = "0.1.0", default-features = false }
 ras-file-core = { path = "../../crates/rest/ras-file-core", version = "0.1.0" }
 ras-auth-core = { path = "../../crates/core/ras-auth-core", version = "0.1.0" }
 thiserror = { workspace = true }

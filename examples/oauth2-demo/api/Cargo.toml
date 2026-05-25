@@ -11,19 +11,19 @@ publish = false
 readme = "README.md"
 
 [features]
-default = ["server"]
-server = []
-client = []
+default = []
+server = ["dep:axum", "dep:ras-jsonrpc-core"]
+client = ["dep:reqwest"]
 
 [dependencies]
 # JSON-RPC infrastructure
-ras-jsonrpc-macro = { path = "../../../crates/rpc/ras-jsonrpc-macro", version = "0.2.0", features = ["server"] }
-ras-jsonrpc-core = { path = "../../../crates/rpc/ras-jsonrpc-core", version = "0.1.2" }
+ras-jsonrpc-macro = { path = "../../../crates/rpc/ras-jsonrpc-macro", version = "0.2.0", default-features = false }
+ras-jsonrpc-core = { path = "../../../crates/rpc/ras-jsonrpc-core", version = "0.1.2", optional = true }
 ras-jsonrpc-types = { path = "../../../crates/rpc/ras-jsonrpc-types", version = "0.1.1" }
 
 # Web framework and utilities
-axum = { workspace = true }
+axum = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 schemars = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, optional = true }

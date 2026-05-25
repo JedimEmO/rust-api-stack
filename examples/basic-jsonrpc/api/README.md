@@ -15,15 +15,18 @@ The service route is selected by the server crate when it builds the generated r
 
 ## Features
 
-- `server` - enables generated server-side types and Axum integration. This is the default feature.
+- `server` - enables generated server-side types and Axum integration.
 - `client` - enables the generated HTTP client.
+- default: no generated transport code.
 
 ## Checks
 
 ```bash
 cargo check -p basic-jsonrpc-api --locked
+cargo check -p basic-jsonrpc-api --features server --locked
 cargo check -p basic-jsonrpc-api --features client --locked
 cargo test -p basic-jsonrpc-api --locked
+cargo test -p basic-jsonrpc-api --features server --locked
 cargo test -p basic-jsonrpc-api --features client --locked
 cargo clippy -p basic-jsonrpc-api --all-targets --all-features --locked -- -D warnings
 ```

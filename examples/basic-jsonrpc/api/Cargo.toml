@@ -11,12 +11,12 @@ publish = false
 readme = "README.md"
 
 [features]
-default = ["server"]
-server = ["ras-jsonrpc-macro/server", "axum", "ras-jsonrpc-core"]
-client = ["ras-jsonrpc-macro/client", "reqwest"]
+default = []
+server = ["dep:axum", "dep:ras-jsonrpc-core"]
+client = ["dep:reqwest"]
 
 [dependencies]
-ras-jsonrpc-macro = { path = "../../../crates/rpc/ras-jsonrpc-macro", version = "0.2.0" }
+ras-jsonrpc-macro = { path = "../../../crates/rpc/ras-jsonrpc-macro", version = "0.2.0", default-features = false }
 ras-jsonrpc-core = { path = "../../../crates/rpc/ras-jsonrpc-core", version = "0.1.2", optional = true }
 ras-jsonrpc-types = { path = "../../../crates/rpc/ras-jsonrpc-types", version = "0.1.1" }
 serde = { workspace = true }

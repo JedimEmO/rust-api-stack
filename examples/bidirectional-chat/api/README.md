@@ -24,14 +24,16 @@ The runnable server is documented in [../server/README.md](../server/README.md),
 
 - `server` - enables generated server integration and Axum support.
 - `client` - enables the generated bidirectional client.
-- The default feature set enables both.
+- default: no generated transport code.
 
 ## Checks
 
 ```bash
 cargo check -p bidirectional-chat-api --locked
+cargo check -p bidirectional-chat-api --no-default-features --features server --locked
 cargo check -p bidirectional-chat-api --no-default-features --features client --locked
 cargo test -p bidirectional-chat-api --locked
+cargo test -p bidirectional-chat-api --no-default-features --features server --locked
 cargo test -p bidirectional-chat-api --no-default-features --features client --locked
 cargo clippy -p bidirectional-chat-api --all-targets --all-features --locked -- -D warnings
 ```

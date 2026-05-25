@@ -1,10 +1,10 @@
 use ras_file_macro::file_service;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "server")]
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(not(target_arch = "wasm32"), derive(JsonSchema))]
+#[cfg_attr(feature = "server", derive(JsonSchema))]
 pub struct UploadResponse {
     pub file_id: String,
     pub file_name: String,
@@ -12,7 +12,7 @@ pub struct UploadResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(not(target_arch = "wasm32"), derive(JsonSchema))]
+#[cfg_attr(feature = "server", derive(JsonSchema))]
 pub struct FileMetadata {
     pub id: String,
     pub name: String,
@@ -65,7 +65,9 @@ file_service!({
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::{Value, json};
+    #[cfg(feature = "server")]
+    use serde_json::Value;
+    use serde_json::json;
 
     #[test]
     fn upload_response_serializes_file_identity_and_size() {
@@ -143,6 +145,7 @@ mod tests {
         assert_eq!(response.size, 4096);
     }
 
+    #[cfg(feature = "server")]
     fn parameter<'a>(operation: &'a Value, name: &str) -> &'a Value {
         operation["parameters"]
             .as_array()
@@ -152,6 +155,7 @@ mod tests {
             .unwrap_or_else(|| panic!("missing parameter {name}"))
     }
 
+    #[cfg(feature = "server")]
     #[test]
     fn generated_openapi_documents_upload_routes_and_multipart_body() {
         let doc = generate_documentservice_openapi();
@@ -183,6 +187,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "server")]
     #[test]
     fn generated_openapi_documents_download_path_parameters_and_auth() {
         let doc = generate_documentservice_openapi();
@@ -204,6 +209,7 @@ mod tests {
         assert_eq!(secure_download["x-permissions"], json!(["user"]));
     }
 
+    #[cfg(feature = "server")]
     #[test]
     fn generated_openapi_includes_file_operation_component_schemas() {
         let doc = generate_documentservice_openapi();
