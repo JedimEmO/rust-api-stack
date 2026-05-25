@@ -34,12 +34,11 @@ The Rust client and TypeScript usage sample both come from the same API
 definition. Native Rust uploads stream files from disk:
 
 ```rust
-pub async fn upload(
-    &self,
-    file_path: impl AsRef<std::path::Path>,
-    file_name: Option<&str>,
-    content_type: Option<&str>
-) -> Result<UploadResponse, Box<dyn std::error::Error>>
+let form = DocumentServiceUploadMultipart::new()
+    .file("report.pdf", Some("report.pdf"), Some("application/pdf"))
+    .await?;
+
+let response = client.upload(form).await?;
 ```
 
 The TypeScript sample assumes a generated fetch client at

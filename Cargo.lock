@@ -1079,6 +1079,7 @@ dependencies = [
  "http",
  "js-sys",
  "ras-auth-core",
+ "ras-file-core",
  "ras-file-macro",
  "reqwest",
  "schemars",
@@ -1105,6 +1106,7 @@ dependencies = [
  "file-service-api",
  "mime_guess",
  "ras-auth-core",
+ "ras-file-core",
  "tempfile",
  "tokio",
  "tower-http",
@@ -1121,6 +1123,7 @@ dependencies = [
  "axum",
  "axum-test",
  "ras-auth-core",
+ "ras-file-core",
  "ras-file-macro",
  "reqwest",
  "serde",
@@ -2636,6 +2639,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ras-file-core"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "futures-core",
+ "futures-util",
+ "http",
+ "ras-auth-core",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "ras-file-macro"
 version = "0.1.0"
 dependencies = [
@@ -2646,6 +2661,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "ras-auth-core",
+ "ras-file-core",
  "reqwest",
  "schemars",
  "serde",

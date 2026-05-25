@@ -1,5 +1,5 @@
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::{Ident, LitStr, Token, Type, parse::Parse, parse_macro_input};
 
 mod client;
@@ -656,6 +656,9 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
     let service_trait_name = quote::format_ident!("{}Trait", service_name);
     let builder_name = quote::format_ident!("{}Builder", service_name);
     let base_path = &service_def.base_path;
+    let service_name_lower = service_name.to_string().to_lowercase();
+    let server_mod = format_ident!("__ras_rest_{}_server", service_name_lower);
+    let client_mod = format_ident!("__ras_rest_{}_client", service_name_lower);
 
     // Generate OpenAPI code if enabled in the macro input
     let (openapi_code, schema_checks) = if let Some(openapi_config) = &service_def.openapi {
@@ -758,6 +761,10 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
     };
 
     let output = quote! {
+        #[cfg(feature = "server")]
+        mod #server_mod {
+            use super::*;
+
         #[cfg(feature = "server")]
         /// Generated service trait
         #[async_trait::async_trait]
@@ -887,7 +894,20 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
             }
         }
 
-        #client_code
+        }
+
+        #[cfg(feature = "server")]
+        pub use #server_mod::*;
+
+        #[cfg(feature = "client")]
+        mod #client_mod {
+            use super::*;
+
+            #client_code
+        }
+
+        #[cfg(feature = "client")]
+        pub use #client_mod::*;
     };
 
     Ok(output)

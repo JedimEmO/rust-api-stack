@@ -1,5 +1,5 @@
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::parse_macro_input;
 
 mod client;
@@ -26,16 +26,21 @@ pub fn file_service(input: TokenStream) -> TokenStream {
         (quote! {}, quote! {})
     };
 
+    let service_name_lower = definition.service_name.to_string().to_lowercase();
+    let server_mod = format_ident!("__ras_file_{}_server", service_name_lower);
+    let openapi_mod = format_ident!("__ras_file_{}_openapi", service_name_lower);
+    let client_mod = format_ident!("__ras_file_{}_client", service_name_lower);
+
     // Only include server code when not targeting wasm32
     let expanded = quote! {
         #[cfg(not(target_arch = "wasm32"))]
-        mod server_impl {
+        mod #server_mod {
             use super::*;
             #server_code
         }
 
         #[cfg(not(target_arch = "wasm32"))]
-        pub use server_impl::*;
+        pub use #server_mod::*;
 
         #[cfg(not(target_arch = "wasm32"))]
         const _: () = {
@@ -43,15 +48,20 @@ pub fn file_service(input: TokenStream) -> TokenStream {
         };
 
         #[cfg(not(target_arch = "wasm32"))]
-        mod openapi_impl {
+        mod #openapi_mod {
             use super::*;
             #openapi_code
         }
 
         #[cfg(not(target_arch = "wasm32"))]
-        pub use openapi_impl::*;
+        pub use #openapi_mod::*;
 
-        #client_code
+        mod #client_mod {
+            use super::*;
+            #client_code
+        }
+
+        pub use #client_mod::*;
     };
 
     TokenStream::from(expanded)

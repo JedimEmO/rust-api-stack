@@ -1,19 +1,22 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::parser::{Endpoint, FileServiceDefinition, Operation};
+use crate::parser::{Endpoint, FileServiceDefinition, Operation, UploadPartKind};
 
 pub fn generate_client(definition: &FileServiceDefinition) -> TokenStream {
     let service_name = &definition.service_name;
-    let base_path = &definition.base_path;
+    let base_path = definition.base_path.value();
 
     let client_name = format_ident!("{}Client", service_name);
     let builder_name = format_ident!("{}ClientBuilder", service_name);
-
-    let client_methods = generate_client_methods(&definition.endpoints, &base_path.value());
-
-    // Generate WASM client wrapper
-    let wasm_client = generate_wasm_client(definition);
+    let form_builders = definition
+        .endpoints
+        .iter()
+        .filter_map(|endpoint| generate_multipart_builder(definition, endpoint));
+    let client_methods = definition
+        .endpoints
+        .iter()
+        .map(|endpoint| generate_client_method(definition, endpoint, &base_path));
 
     quote! {
         pub struct #client_name {
@@ -28,20 +31,22 @@ pub fn generate_client(definition: &FileServiceDefinition) -> TokenStream {
             }
 
             pub fn set_bearer_token(&self, token: Option<impl Into<String>>) {
-                *self.bearer_token.write().unwrap() = token.map(|t| t.into());
+                *self.bearer_token.write().unwrap() = token.map(|token| token.into());
             }
 
             fn build_request(&self, method: ::reqwest::Method, path: &str) -> ::reqwest::RequestBuilder {
-                let mut req = self.client.request(method, format!("{}{}", self.base_url, path));
+                let base = self.base_url.trim_end_matches('/');
+                let path = path.trim_start_matches('/');
+                let mut request = self.client.request(method, format!("{}/{}", base, path));
 
                 if let Some(token) = self.bearer_token.read().unwrap().as_ref() {
-                    req = req.header("Authorization", format!("Bearer {}", token));
+                    request = request.header("Authorization", format!("Bearer {}", token));
                 }
 
-                req
+                request
             }
 
-            #client_methods
+            #(#client_methods)*
         }
 
         pub struct #builder_name {
@@ -72,7 +77,7 @@ pub fn generate_client(definition: &FileServiceDefinition) -> TokenStream {
                 self
             }
 
-            pub fn build(self) -> Result<#client_name, Box<dyn std::error::Error>> {
+            pub fn build(self) -> Result<#client_name, Box<dyn std::error::Error + Send + Sync>> {
                 let client = match self.client {
                     Some(client) => client,
                     None => {
@@ -95,305 +100,231 @@ pub fn generate_client(definition: &FileServiceDefinition) -> TokenStream {
             }
         }
 
-        #wasm_client
+        #(#form_builders)*
     }
 }
 
-fn generate_client_methods(endpoints: &[Endpoint], base_path: &str) -> TokenStream {
-    let methods = endpoints.iter().flat_map(|endpoint| {
-        let method_name = &endpoint.name;
-        let timeout_method_name = format_ident!("{}_with_timeout", method_name);
+fn generate_client_method(
+    definition: &FileServiceDefinition,
+    endpoint: &Endpoint,
+    base_path: &str,
+) -> TokenStream {
+    let method_name = &endpoint.name;
+    let path = endpoint.path.value();
+    let full_path = format!("{}{}", base_path.trim_end_matches('/'), path);
+    let path_params = endpoint.path_params.iter().map(|param| {
+        let name = &param.name;
+        let ty = &param.ty;
+        quote! { #name: #ty }
+    });
+    let path_replace = endpoint.path_params.iter().map(|param| {
+        let name = &param.name;
+        let placeholder = format!("{{{}}}", name);
+        quote! { .replace(#placeholder, &#name.to_string()) }
+    });
 
-        let path = endpoint.path.as_ref()
-            .map(|p| p.value())
-            .unwrap_or_else(|| endpoint.name.to_string());
-        let full_path = format!("{}/{}", base_path, path);
+    match &endpoint.operation {
+        Operation::Upload { response_type, .. } => {
+            let form_builder = multipart_builder_name(definition, endpoint);
+            quote! {
+                pub async fn #method_name(
+                    &self,
+                    #(#path_params,)*
+                    form: #form_builder,
+                ) -> Result<#response_type, Box<dyn std::error::Error + Send + Sync>> {
+                    let path = #full_path.to_string()#(#path_replace)*;
+                    let response = self
+                        .build_request(::reqwest::Method::POST, &path)
+                        .multipart(form.into_form())
+                        .send()
+                        .await?;
 
-        let path_params: Vec<_> = endpoint.path_params.iter().map(|param| {
-            let name = &param.name;
-            let ty = &param.ty;
-            quote! { #name: #ty }
-        }).collect();
+                    if !response.status().is_success() {
+                        let status = response.status();
+                        let text = response.text().await?;
+                        return Err(format!("Upload failed with status {}: {}", status, text).into());
+                    }
 
-        let path_construction = if endpoint.path_params.is_empty() {
-            quote! { #full_path }
-        } else {
-            let replacements = endpoint.path_params.iter().map(|param| {
-                let name = &param.name;
-                let placeholder = format!("{{{}}}", name);
-                quote! { .replace(#placeholder, &#name.to_string()) }
-            });
-            quote! { #full_path.to_string()#(#replacements)* }
-        };
+                    Ok(response.json().await?)
+                }
+            }
+        }
+        Operation::Download { .. } => quote! {
+            pub async fn #method_name(
+                &self,
+                #(#path_params,)*
+            ) -> Result<::reqwest::Response, Box<dyn std::error::Error + Send + Sync>> {
+                let path = #full_path.to_string()#(#path_replace)*;
+                let response = self
+                    .build_request(::reqwest::Method::GET, &path)
+                    .send()
+                    .await?;
 
-        let path_arg_names: Vec<_> = endpoint.path_params.iter().map(|param| {
-            &param.name
-        }).collect();
+                if !response.status().is_success() {
+                    let status = response.status();
+                    let text = response.text().await?;
+                    return Err(format!("Download failed with status {}: {}", status, text).into());
+                }
 
-        match &endpoint.operation {
-            Operation::Upload => {
-                let response_type = endpoint.response_type.as_ref()
-                    .map(|t| quote! { #t })
-                    .unwrap_or_else(|| quote! { () });
+                Ok(response)
+            }
+        },
+    }
+}
 
-                let main_method = quote! {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    pub async fn #method_name(
-                        &self,
-                        #(#path_params,)*
-                        file_path: impl AsRef<std::path::Path>,
-                        file_name: Option<&str>,
-                        content_type: Option<&str>
-                    ) -> Result<#response_type, Box<dyn std::error::Error>> {
-                        let path = #path_construction;
+fn generate_multipart_builder(
+    definition: &FileServiceDefinition,
+    endpoint: &Endpoint,
+) -> Option<TokenStream> {
+    let Operation::Upload { config, .. } = &endpoint.operation else {
+        return None;
+    };
 
-                        let file = ::tokio::fs::File::open(file_path.as_ref()).await?;
-                        let stream = ::tokio_util::io::ReaderStream::new(file);
-                        let body = ::reqwest::Body::wrap_stream(stream);
+    let builder_name = multipart_builder_name(definition, endpoint);
+    let methods = config.parts.iter().map(|part| {
+        let field_name = part.name.to_string();
+        let method_name = &part.name;
+        let bytes_method_name = format_ident!("{}_bytes", method_name);
 
-                        let file_name = file_name.unwrap_or_else(|| {
-                            file_path.as_ref()
+        match part.kind {
+            UploadPartKind::File => quote! {
+                #[cfg(not(target_arch = "wasm32"))]
+                pub async fn #method_name(
+                    mut self,
+                    file_path: impl AsRef<std::path::Path>,
+                    file_name: Option<&str>,
+                    content_type: Option<&str>,
+                ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+                    let file = ::tokio::fs::File::open(file_path.as_ref()).await?;
+                    let length = file.metadata().await.ok().map(|metadata| metadata.len());
+                    let stream = ::tokio_util::io::ReaderStream::new(file);
+                    let body = ::reqwest::Body::wrap_stream(stream);
+
+                    let file_name = file_name
+                        .map(ToString::to_string)
+                        .or_else(|| {
+                            file_path
+                                .as_ref()
                                 .file_name()
-                                .and_then(|n| n.to_str())
-                                .unwrap_or("file")
-                        });
+                                .and_then(|name| name.to_str())
+                                .map(ToString::to_string)
+                        })
+                        .unwrap_or_else(|| "file".to_string());
 
-                        let part = ::reqwest::multipart::Part::stream(body)
-                            .file_name(file_name.to_string());
+                    let mut part = if let Some(length) = length {
+                        ::reqwest::multipart::Part::stream_with_length(body, length)
+                    } else {
+                        ::reqwest::multipart::Part::stream(body)
+                    }
+                    .file_name(file_name);
 
-                        let part = if let Some(ct) = content_type {
-                            part.mime_str(ct)?
-                        } else {
-                            part
-                        };
-
-                        let form = ::reqwest::multipart::Form::new()
-                            .part("file", part);
-
-                        let response = self.build_request(::reqwest::Method::POST, &path)
-                            .multipart(form)
-                            .send()
-                            .await?;
-
-                        if !response.status().is_success() {
-                            let status = response.status();
-                            let text = response.text().await?;
-                            return Err(format!("Upload failed with status {}: {}", status, text).into());
-                        }
-
-                        Ok(response.json().await?)
+                    if let Some(content_type) = content_type {
+                        part = part.mime_str(content_type)?;
                     }
 
-                    #[cfg(target_arch = "wasm32")]
-                    pub async fn #method_name(
-                        &self,
-                        #(#path_params,)*
-                        file_bytes: Vec<u8>,
-                        file_name: &str,
-                        content_type: Option<&str>
-                    ) -> Result<#response_type, Box<dyn std::error::Error>> {
-                        let path = #path_construction;
+                    self.form = self.form.part(#field_name, part);
+                    Ok(self)
+                }
 
-                        let part = ::reqwest::multipart::Part::bytes(file_bytes)
-                            .file_name(file_name.to_string());
-
-                        let part = if let Some(ct) = content_type {
-                            part.mime_str(ct)?
-                        } else {
-                            part
-                        };
-
-                        let form = ::reqwest::multipart::Form::new()
-                            .part("file", part);
-
-                        let response = self.build_request(::reqwest::Method::POST, &path)
-                            .multipart(form)
-                            .send()
-                            .await?;
-
-                        if !response.status().is_success() {
-                            let status = response.status();
-                            let text = response.text().await?;
-                            return Err(format!("Upload failed with status {}: {}", status, text).into());
-                        }
-
-                        Ok(response.json().await?)
+                pub fn #bytes_method_name(
+                    mut self,
+                    bytes: impl Into<Vec<u8>>,
+                    file_name: impl Into<String>,
+                    content_type: Option<&str>,
+                ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+                    let mut part = ::reqwest::multipart::Part::bytes(bytes.into())
+                        .file_name(file_name.into());
+                    if let Some(content_type) = content_type {
+                        part = part.mime_str(content_type)?;
                     }
-                };
-
-                let timeout_method = quote! {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    pub async fn #timeout_method_name(
-                        &self,
-                        #(#path_params,)*
-                        file_path: impl AsRef<std::path::Path>,
-                        file_name: Option<&str>,
-                        content_type: Option<&str>,
-                        timeout: std::time::Duration
-                    ) -> Result<#response_type, Box<dyn std::error::Error>> {
-                        ::tokio::time::timeout(
-                            timeout,
-                            self.#method_name(#(#path_arg_names,)* file_path, file_name, content_type)
-                        ).await?
+                    self.form = self.form.part(#field_name, part);
+                    Ok(self)
+                }
+            },
+            UploadPartKind::Json => {
+                let ty = part.ty.as_ref().expect("json part type");
+                quote! {
+                    pub fn #method_name(
+                        mut self,
+                        value: &#ty,
+                    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+                        let json = ::serde_json::to_string(value)?;
+                        let part = ::reqwest::multipart::Part::text(json)
+                            .mime_str("application/json")?;
+                        self.form = self.form.part(#field_name, part);
+                        Ok(self)
                     }
-                };
-
-                vec![main_method, timeout_method]
+                }
             }
-            Operation::Download => {
-                let main_method = quote! {
-                    pub async fn #method_name(
-                        &self,
-                        #(#path_params,)*
-                    ) -> Result<::reqwest::Response, Box<dyn std::error::Error>> {
-                        let path = #path_construction;
-
-                        let response = self.build_request(::reqwest::Method::GET, &path)
-                            .send()
-                            .await?;
-
-                        if !response.status().is_success() {
-                            let status = response.status();
-                            let text = response.text().await?;
-                            return Err(format!("Download failed with status {}: {}", status, text).into());
-                        }
-
-                        Ok(response)
-                    }
-                };
-
-                let timeout_method = quote! {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    pub async fn #timeout_method_name(
-                        &self,
-                        #(#path_params,)*
-                        timeout: std::time::Duration
-                    ) -> Result<::reqwest::Response, Box<dyn std::error::Error>> {
-                        ::tokio::time::timeout(
-                            timeout,
-                            self.#method_name(#(#path_arg_names,)*)
-                        ).await?
-                    }
-                };
-
-                vec![main_method, timeout_method]
-            }
+            UploadPartKind::Text => quote! {
+                pub fn #method_name(mut self, value: impl Into<String>) -> Self {
+                    self.form = self.form.part(#field_name, ::reqwest::multipart::Part::text(value.into()));
+                    self
+                }
+            },
         }
     });
 
-    quote! { #(#methods)* }
+    Some(quote! {
+        pub struct #builder_name {
+            form: ::reqwest::multipart::Form,
+        }
+
+        impl #builder_name {
+            pub fn new() -> Self {
+                Self {
+                    form: ::reqwest::multipart::Form::new(),
+                }
+            }
+
+            #(#methods)*
+
+            pub fn into_form(self) -> ::reqwest::multipart::Form {
+                self.form
+            }
+        }
+
+        impl Default for #builder_name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+    })
 }
 
-fn generate_wasm_client(definition: &FileServiceDefinition) -> TokenStream {
-    let service_name = &definition.service_name;
-    let client_name = format_ident!("{}Client", service_name);
-    let wasm_client_name = format_ident!("Wasm{}Client", service_name);
+fn multipart_builder_name(
+    definition: &FileServiceDefinition,
+    endpoint: &Endpoint,
+) -> proc_macro2::Ident {
+    format_ident!(
+        "{}{}Multipart",
+        definition.service_name,
+        pascal_ident_segment(&endpoint.name.to_string())
+    )
+}
 
-    let wasm_methods = generate_wasm_methods(&definition.endpoints);
+fn pascal_ident_segment(value: &str) -> String {
+    let mut out = String::new();
+    let mut uppercase_next = true;
 
-    quote! {
-        #[cfg(target_arch = "wasm32")]
-        pub mod wasm_client {
-            use super::*;
-            use wasm_bindgen::prelude::*;
-            use wasm_bindgen_futures::js_sys;
-            use web_sys::File;
-
-            #[wasm_bindgen]
-            pub struct #wasm_client_name {
-                inner: #client_name,
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            if uppercase_next {
+                out.push(ch.to_ascii_uppercase());
+                uppercase_next = false;
+            } else {
+                out.push(ch);
             }
-
-            #[wasm_bindgen]
-            impl #wasm_client_name {
-                #[wasm_bindgen(constructor)]
-                pub fn new(base_url: String) -> Result<#wasm_client_name, JsValue> {
-                    let client = #client_name::builder(base_url)
-                        .build()
-                        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-
-                    Ok(#wasm_client_name { inner: client })
-                }
-
-                #[wasm_bindgen]
-                pub fn set_bearer_token(&self, token: Option<String>) {
-                    self.inner.set_bearer_token(token);
-                }
-
-                #wasm_methods
-            }
+        } else {
+            uppercase_next = true;
         }
     }
-}
 
-fn generate_wasm_methods(endpoints: &[Endpoint]) -> TokenStream {
-    let methods = endpoints.iter().map(|endpoint| {
-        let method_name = &endpoint.name;
-        let _response_type = endpoint.response_type.as_ref()
-            .map(|t| quote! { #t })
-            .unwrap_or_else(|| quote! { () });
-
-        let path_params: Vec<_> = endpoint.path_params.iter().map(|param| {
-            let name = &param.name;
-            quote! { #name: String }
-        }).collect();
-
-        let path_args: Vec<_> = endpoint.path_params.iter().map(|param| {
-            &param.name
-        }).collect();
-
-        match &endpoint.operation {
-            Operation::Upload => {
-                quote! {
-                    #[wasm_bindgen]
-                    pub async fn #method_name(&self, #(#path_params,)* file: File) -> Result<JsValue, JsValue> {
-                        // Convert File to bytes
-                        let array_buffer = wasm_bindgen_futures::JsFuture::from(file.array_buffer())
-                            .await
-                            .map_err(|e| JsValue::from_str(&format!("Failed to read file: {:?}", e)))?;
-
-                        let uint8_array = js_sys::Uint8Array::new(&array_buffer);
-                        let mut bytes = vec![0; uint8_array.length() as usize];
-                        uint8_array.copy_to(&mut bytes);
-
-                        let file_type = file.type_();
-                        let content_type = if file_type.is_empty() {
-                            None
-                        } else {
-                            Some(file_type.as_str())
-                        };
-
-                        let response = self.inner
-                            .#method_name(#(#path_args,)* bytes, &file.name(), content_type)
-                            .await
-                            .map_err(|e| JsValue::from_str(&e.to_string()))?;
-
-                        // Convert response to JsValue
-                        serde_wasm_bindgen::to_value(&response)
-                            .map_err(|e| JsValue::from_str(&e.to_string()))
-                    }
-                }
-            }
-            Operation::Download => {
-                quote! {
-                    #[wasm_bindgen]
-                    pub async fn #method_name(&self, #(#path_params,)*) -> Result<JsValue, JsValue> {
-                        let response = self.inner
-                            .#method_name(#(#path_args,)*)
-                            .await
-                            .map_err(|e| JsValue::from_str(&e.to_string()))?;
-
-                        // Convert response to blob for browser
-                        let bytes = response.bytes().await
-                            .map_err(|e| JsValue::from_str(&e.to_string()))?;
-
-                        // Convert to JS Uint8Array
-                        Ok(js_sys::Uint8Array::from(&bytes[..]).into())
-                    }
-                }
-            }
-        }
-    });
-
-    quote! { #(#methods)* }
+    if out.is_empty() {
+        "Generated".to_string()
+    } else if out.chars().next().is_some_and(|ch| ch.is_ascii_digit()) {
+        format!("V{out}")
+    } else {
+        out
+    }
 }

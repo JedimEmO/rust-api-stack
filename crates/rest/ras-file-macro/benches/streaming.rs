@@ -3,14 +3,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use axum::{
-    body::Body,
-    http::StatusCode,
-    response::{IntoResponse, Response},
-};
 use axum_test::multipart::{MultipartForm, Part};
 use criterion::{Criterion, criterion_group, criterion_main};
-use ras_auth_core::AuthenticatedUser;
+use ras_file_core::{DownloadResponse, FileRequestContext, JsonResponse};
 use ras_file_macro::file_service;
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Runtime;
@@ -29,8 +24,23 @@ file_service!({
     service_name: BenchSvc,
     base_path: "/files",
     endpoints: [
-        DOWNLOAD UNAUTHORIZED download/{file_id: String}(),
-        UPLOAD WITH_PERMISSIONS(["user"]) upload() -> UploadResponse,
+        DOWNLOAD UNAUTHORIZED download/{file_id: String} {
+            content_types: ["application/octet-stream"],
+            ranges: false,
+        },
+        UPLOAD WITH_PERMISSIONS(["user"]) upload multipart {
+            max_total_bytes: 2097152,
+            reject_unknown_fields: true,
+            parts: [
+                file file {
+                    required: true,
+                    max_count: 1,
+                    max_bytes: 2097152,
+                    content_types: ["application/octet-stream"],
+                    filename: optional,
+                },
+            ],
+        } -> UploadResponse,
     ]
 });
 
@@ -41,43 +51,67 @@ struct BenchImpl {
     storage: Storage,
 }
 
+#[derive(Default)]
+struct UploadState {
+    response: Option<UploadResponse>,
+}
+
 #[async_trait::async_trait]
 impl BenchSvcTrait for BenchImpl {
-    async fn download(&self, file_id: String) -> Result<impl IntoResponse, BenchSvcFileError> {
+    type UploadState = UploadState;
+
+    async fn download_by_file_id(
+        &self,
+        _ctx: &FileRequestContext<'_>,
+        path: BenchSvcDownloadByFileIdPath,
+    ) -> Result<DownloadResponse, BenchSvcFileError> {
         let bytes = self
             .storage
             .lock()
             .unwrap()
             .iter()
-            .find_map(|(id, data)| (id == &file_id).then(|| data.clone()))
+            .find_map(|(id, data)| (id == &path.file_id).then(|| data.clone()))
             .ok_or(BenchSvcFileError::NotFound)?;
-        Ok(Response::builder()
-            .status(StatusCode::OK)
-            .body(Body::from(bytes))
-            .unwrap())
+        Ok(DownloadResponse::bytes(bytes))
     }
 
-    async fn upload(
+    async fn upload_begin(
         &self,
-        _user: &AuthenticatedUser,
-        mut multipart: axum::extract::Multipart,
-    ) -> Result<UploadResponse, BenchSvcFileError> {
-        let field = multipart
-            .next_field()
-            .await
-            .map_err(|e| BenchSvcFileError::UploadFailed(e.to_string()))?
-            .ok_or_else(|| BenchSvcFileError::UploadFailed("no field".into()))?;
-        let data = field
-            .bytes()
-            .await
-            .map_err(|e| BenchSvcFileError::UploadFailed(e.to_string()))?;
+        _ctx: &FileRequestContext<'_>,
+        _path: &BenchSvcUploadPath,
+    ) -> Result<Self::UploadState, BenchSvcFileError> {
+        Ok(UploadState::default())
+    }
+
+    async fn upload_part(
+        &self,
+        _ctx: &FileRequestContext<'_>,
+        _path: &BenchSvcUploadPath,
+        state: &mut Self::UploadState,
+        part: &mut BenchSvcUploadPart<'_>,
+    ) -> Result<(), BenchSvcFileError> {
+        let BenchSvcUploadPart::File(file) = part;
+        let mut data = Vec::new();
+        while let Some(chunk) = file.next_chunk().await? {
+            data.extend_from_slice(&chunk);
+        }
         let id = format!("file-{}", self.storage.lock().unwrap().len());
         let size = data.len() as u64;
-        self.storage
-            .lock()
-            .unwrap()
-            .push((id.clone(), data.to_vec()));
-        Ok(UploadResponse { file_id: id, size })
+        self.storage.lock().unwrap().push((id.clone(), data));
+        state.response = Some(UploadResponse { file_id: id, size });
+        Ok(())
+    }
+
+    async fn upload_finish(
+        &self,
+        _ctx: &FileRequestContext<'_>,
+        _path: &BenchSvcUploadPath,
+        state: Self::UploadState,
+        _summary: ras_file_core::UploadSummary,
+    ) -> Result<JsonResponse<UploadResponse>, BenchSvcFileError> {
+        Ok(JsonResponse::ok(state.response.ok_or_else(|| {
+            BenchSvcFileError::handler_contract("upload finished without a file")
+        })?))
     }
 }
 

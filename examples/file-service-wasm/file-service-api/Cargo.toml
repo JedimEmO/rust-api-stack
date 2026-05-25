@@ -15,6 +15,7 @@ crate-type = ["rlib"]
 
 [dependencies]
 ras-file-macro = { path = "../../../crates/rest/ras-file-macro", version = "0.1.0" }
+ras-file-core = { path = "../../../crates/rest/ras-file-core", version = "0.1.0" }
 ras-auth-core = { path = "../../../crates/core/ras-auth-core", version = "0.1.0" }
 serde = { workspace = true, features = ["derive"] }
 async-trait = { workspace = true }

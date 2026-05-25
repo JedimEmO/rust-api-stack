@@ -21,6 +21,7 @@ tower-http = { workspace = true, features = ["cors", "fs"] }
 
 # Authentication
 ras-auth-core = { path = "../../../crates/core/ras-auth-core", version = "0.1.0" }
+ras-file-core = { path = "../../../crates/rest/ras-file-core", version = "0.1.0" }
 async-trait = { workspace = true }
 
 # Error handling

@@ -181,10 +181,21 @@ use ras_file_macro::file_service;
 file_service!({
     service_name: DocumentService,
     base_path: "/api/documents",
-    body_limit: 52428800,  // 50MB
     endpoints: [
-        UPLOAD WITH_PERMISSIONS(["user"]) upload() -> FileMetadata,
-        DOWNLOAD UNAUTHORIZED download/{file_id: String}(),
+        UPLOAD WITH_PERMISSIONS(["user"]) upload multipart {
+            max_total_bytes: 52428800,
+            parts: [
+                file file {
+                    required: true,
+                    max_bytes: 52428800,
+                    filename: optional,
+                },
+            ],
+        } -> FileMetadata,
+        DOWNLOAD UNAUTHORIZED download/{file_id: String} {
+            content_types: ["application/octet-stream"],
+            ranges: true,
+        },
     ]
 });
 ```

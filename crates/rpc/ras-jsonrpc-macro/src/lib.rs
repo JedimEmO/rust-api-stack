@@ -1,5 +1,5 @@
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::{Ident, LitStr, Token, Type, parse::Parse, parse_macro_input};
 
 mod client;
@@ -419,6 +419,10 @@ impl Parse for MethodVersionDefinition {
 }
 
 fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_macro2::TokenStream> {
+    let service_name_lower = service_def.service_name.to_string().to_lowercase();
+    let server_mod = format_ident!("__ras_jsonrpc_{}_server", service_name_lower);
+    let client_mod = format_ident!("__ras_jsonrpc_{}_client", service_name_lower);
+
     // Generate OpenRPC code if enabled in the macro input
     let (openrpc_code, schema_checks) = if let Some(openrpc_config) = &service_def.openrpc {
         (
@@ -461,7 +465,7 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
         // Wrap all server code in a cfg attribute to ensure it's only compiled when server feature is enabled
         quote! {
             #[cfg(feature = "server")]
-            mod _generated_server {
+            mod #server_mod {
                 use super::*;
 
                 #server_impl
@@ -469,7 +473,7 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
             }
 
             #[cfg(feature = "server")]
-            pub use _generated_server::*;
+            pub use #server_mod::*;
         }
     } else {
         quote! {}
@@ -482,14 +486,14 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
         // Wrap all client code in a cfg attribute to ensure it's only compiled when client feature is enabled
         quote! {
             #[cfg(feature = "client")]
-            mod _generated_client {
+            mod #client_mod {
                 use super::*;
 
                 #client_impl
             }
 
             #[cfg(feature = "client")]
-            pub use _generated_client::*;
+            pub use #client_mod::*;
         }
     } else {
         quote! {}

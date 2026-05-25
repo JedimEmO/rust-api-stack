@@ -25,18 +25,42 @@ file_service!({
     service_name: DocumentService,
     base_path: "/api/documents",
     openapi: true,
-    body_limit: 104857600, // 100 MB
     endpoints: [
-        UPLOAD UNAUTHORIZED upload() -> UploadResponse,
-        UPLOAD WITH_PERMISSIONS(["user"]) upload_profile_picture() -> UploadResponse,
-        DOWNLOAD UNAUTHORIZED download/{file_id:String}() -> (),
-        DOWNLOAD WITH_PERMISSIONS(["user"]) download_secure/{file_id:String}() -> (),
+        UPLOAD UNAUTHORIZED upload multipart {
+            max_total_bytes: 104857600,
+            reject_unknown_fields: true,
+            parts: [
+                file file {
+                    required: true,
+                    max_count: 1,
+                    max_bytes: 104857600,
+                    filename: optional,
+                },
+            ],
+        } -> UploadResponse,
+        UPLOAD WITH_PERMISSIONS(["user"]) upload_profile_picture multipart {
+            max_total_bytes: 104857600,
+            reject_unknown_fields: true,
+            parts: [
+                file file {
+                    required: true,
+                    max_count: 1,
+                    max_bytes: 104857600,
+                    content_types: ["image/png", "image/jpeg", "image/webp"],
+                    filename: required,
+                },
+            ],
+        } -> UploadResponse,
+        DOWNLOAD UNAUTHORIZED download/{file_id:String} {
+            content_types: ["application/octet-stream"],
+            ranges: true,
+        },
+        DOWNLOAD WITH_PERMISSIONS(["user"]) download_secure/{file_id:String} {
+            content_types: ["application/octet-stream"],
+            ranges: true,
+        },
     ]
 });
-
-// Re-export the macro-generated WASM client when the feature is enabled
-#[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
-pub use wasm_client::*;
 
 #[cfg(test)]
 mod tests {
@@ -137,15 +161,26 @@ mod tests {
         assert_eq!(doc["servers"][0]["url"], "/api/documents");
 
         let public_upload = &doc["paths"]["/upload"]["post"];
+        let public_upload_schema =
+            &public_upload["requestBody"]["content"]["multipart/form-data"]["schema"];
         assert_eq!(
-            public_upload["requestBody"]["content"]["multipart/form-data"]["schema"]["$ref"],
-            "#/components/schemas/FileUploadRequest"
+            public_upload_schema["properties"]["file"]["format"],
+            json!("binary")
+        );
+        assert_eq!(public_upload_schema["required"], json!(["file"]));
+        assert_eq!(
+            public_upload["x-ras-file"]["maxTotalBytes"],
+            json!(104857600)
         );
         assert!(public_upload.get("security").is_none());
 
         let profile_upload = &doc["paths"]["/upload_profile_picture"]["post"];
         assert_eq!(profile_upload["security"][0]["bearerAuth"], json!([]));
         assert_eq!(profile_upload["x-permissions"], json!(["user"]));
+        assert_eq!(
+            profile_upload["requestBody"]["content"]["multipart/form-data"]["encoding"]["file"]["contentType"],
+            json!("image/png, image/jpeg, image/webp")
+        );
     }
 
     #[test]
@@ -172,13 +207,6 @@ mod tests {
     #[test]
     fn generated_openapi_includes_file_operation_component_schemas() {
         let doc = generate_documentservice_openapi();
-
-        let upload_schema = &doc["components"]["schemas"]["FileUploadRequest"];
-        assert_eq!(upload_schema["required"], json!(["file"]));
-        assert_eq!(
-            upload_schema["properties"]["file"]["format"],
-            json!("binary")
-        );
 
         let download_schema = &doc["components"]["schemas"]["BinaryFileResponse"];
         assert_eq!(download_schema["type"], json!("string"));

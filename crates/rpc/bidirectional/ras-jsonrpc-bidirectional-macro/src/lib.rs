@@ -1,5 +1,5 @@
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::{Ident, LitStr, Token, Type, parse::Parse, parse_macro_input};
 
 mod client;
@@ -263,6 +263,10 @@ impl Parse for NotificationDefinition {
 fn generate_service_code(
     service_def: BidirectionalServiceDefinition,
 ) -> syn::Result<proc_macro2::TokenStream> {
+    let service_name_lower = service_def.service_name.to_string().to_lowercase();
+    let server_mod = format_ident!("__ras_jsonrpc_bidirectional_{}_server", service_name_lower);
+    let client_mod = format_ident!("__ras_jsonrpc_bidirectional_{}_client", service_name_lower);
+
     // Generate server code - this will be conditionally compiled by the user
     let server_code = server::generate_server_code(&service_def);
 
@@ -270,8 +274,25 @@ fn generate_service_code(
     let client_code = client::generate_client_code(&service_def);
 
     let output = quote! {
-        #server_code
-        #client_code
+        #[cfg(feature = "server")]
+        mod #server_mod {
+            use super::*;
+
+            #server_code
+        }
+
+        #[cfg(feature = "server")]
+        pub use #server_mod::*;
+
+        #[cfg(feature = "client")]
+        mod #client_mod {
+            use super::*;
+
+            #client_code
+        }
+
+        #[cfg(feature = "client")]
+        pub use #client_mod::*;
     };
 
     Ok(output)

@@ -1,38 +1,91 @@
-use axum::extract::Multipart;
-use ras_auth_core::{AuthError, AuthFuture, AuthProvider};
+use ras_file_core::{DownloadResponse, FileRequestContext, JsonResponse};
 use ras_file_macro::file_service;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+struct UploadResponse {
+    id: String,
+}
 
 file_service!({
     service_name: SimpleService,
-    base_path: "/api",
+    base_path: "/simple",
     endpoints: [
-        UPLOAD UNAUTHORIZED upload() -> (),
+        UPLOAD UNAUTHORIZED upload multipart {
+            max_total_bytes: 1024,
+            parts: [
+                text title {
+                    required: true,
+                    max_bytes: 128,
+                },
+            ],
+        } -> UploadResponse,
+        DOWNLOAD UNAUTHORIZED download/{id: String},
     ]
 });
 
-#[derive(Clone)]
-struct SimpleServiceImpl;
+struct SimpleImpl;
 
 #[async_trait::async_trait]
-impl SimpleServiceTrait for SimpleServiceImpl {
-    async fn upload(&self, _multipart: Multipart) -> Result<(), SimpleServiceFileError> {
+impl SimpleServiceTrait for SimpleImpl {
+    type UploadState = Option<String>;
+
+    async fn upload_begin(
+        &self,
+        _ctx: &FileRequestContext<'_>,
+        _path: &SimpleServiceUploadPath,
+    ) -> ras_file_core::FileResult<Self::UploadState> {
+        Ok(None)
+    }
+
+    async fn upload_part(
+        &self,
+        _ctx: &FileRequestContext<'_>,
+        _path: &SimpleServiceUploadPath,
+        state: &mut Self::UploadState,
+        part: &mut SimpleServiceUploadPart<'_>,
+    ) -> ras_file_core::FileResult<()> {
+        match part {
+            SimpleServiceUploadPart::Title(title) => *state = Some(title.clone()),
+            SimpleServiceUploadPart::__Lifetime(_) => {}
+        }
         Ok(())
     }
-}
 
-#[derive(Clone)]
-struct RejectingAuth;
+    async fn upload_finish(
+        &self,
+        _ctx: &FileRequestContext<'_>,
+        _path: &SimpleServiceUploadPath,
+        state: Self::UploadState,
+        _summary: ras_file_core::UploadSummary,
+    ) -> ras_file_core::FileResult<JsonResponse<UploadResponse>> {
+        Ok(JsonResponse::ok(UploadResponse {
+            id: state.unwrap_or_default(),
+        }))
+    }
 
-impl AuthProvider for RejectingAuth {
-    fn authenticate(&self, _token: String) -> AuthFuture<'_> {
-        Box::pin(async move { Err(AuthError::InvalidToken) })
+    async fn download_by_id(
+        &self,
+        _ctx: &FileRequestContext<'_>,
+        _path: SimpleServiceDownloadByIdPath,
+    ) -> ras_file_core::FileResult<DownloadResponse> {
+        Ok(DownloadResponse::bytes("ok"))
     }
 }
 
 #[test]
-fn generated_builder_accepts_unauthenticated_upload_service() {
-    fn assert_trait_impl<T: SimpleServiceTrait>() {}
-    assert_trait_impl::<SimpleServiceImpl>();
+fn v2_simple_service_expands() {
+    let _ = SimpleServiceBuilder::<SimpleImpl, support::NoAuth>::new(SimpleImpl).build();
+}
 
-    let _builder = SimpleServiceBuilder::new(SimpleServiceImpl).auth_provider(RejectingAuth);
+mod support {
+    #[derive(Clone)]
+    pub struct NoAuth;
+
+    impl ras_auth_core::AuthProvider for NoAuth {
+        fn authenticate(&self, _token: String) -> ras_auth_core::AuthFuture<'_> {
+            Box::pin(async { Err(ras_auth_core::AuthError::InvalidToken) })
+        }
+    }
 }
