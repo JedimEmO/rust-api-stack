@@ -2,6 +2,8 @@
 
 A Rust framework for building type-safe, authenticated agent systems with JSON-RPC, REST APIs, and file services.
 
+Published documentation: <https://jedimemo.github.io/rust-api-stack/>
+
 ## Overview
 
 The Rust Agent Stack provides reusable building blocks for distributed agent systems:
@@ -260,7 +262,10 @@ Reactive web UI with Dominator and the generated JSON-RPC client.
 
 ## Documentation
 
-The canonical documentation is the mdBook source under
+Read the published mdBook at
+<https://jedimemo.github.io/rust-api-stack/>.
+
+The source for that book lives under
 [documentation/src](documentation/src/SUMMARY.md). Start with:
 
 - [Build A Typed Workspace App](documentation/src/tutorial/index.md)
