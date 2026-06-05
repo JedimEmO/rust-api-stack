@@ -2995,6 +2995,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-util",
+ "getrandom 0.2.17",
  "http",
  "reqwest",
  "serde",

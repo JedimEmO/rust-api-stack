@@ -12,6 +12,7 @@ readme = "README.md"
 [dependencies]
 async-trait = { workspace = true }
 bytes = { workspace = true }
+getrandom = "0.2"
 futures-core = { workspace = true }
 futures-util = { workspace = true }
 http = { workspace = true }
@@ -28,6 +29,8 @@ tokio-util = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json"], optional = true }
+# `js` lets `getrandom` source entropy from the browser crypto API on wasm.
+getrandom = { version = "0.2", features = ["js"] }
 
 [dev-dependencies]
 tokio = { workspace = true }

@@ -158,8 +158,14 @@ pub fn serialize_query_value<T: Serialize>(
 /// `application/x-www-form-urlencoded` unreserved set (`*` stays raw, `~`
 /// becomes `%7E`, space becomes `+`). Keys are emitted in order, so repeated
 /// keys (from `Vec<T>`) preserve their sequence.
-pub fn serialize_query_pairs(pairs: &[(String, String)]) -> String {
-    serde_urlencoded::to_string(pairs).unwrap_or_default()
+///
+/// Returns [`TransportError::Serialize`] on encoding failure rather than
+/// silently yielding an empty string — generated clients append the result
+/// after a `?`/`&` separator, so a swallowed failure would send a different
+/// (unfiltered) query than the caller asked for.
+pub fn serialize_query_pairs(pairs: &[(String, String)]) -> Result<String, TransportError> {
+    serde_urlencoded::to_string(pairs)
+        .map_err(|e| TransportError::Serialize(serde::ser::Error::custom(e.to_string())))
 }
 
 /// Deserialize JSON bytes into `T`, mapping failures to

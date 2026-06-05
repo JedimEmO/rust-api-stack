@@ -251,15 +251,23 @@ fn flatten_segments(segments: Vec<ByteStream>) -> ByteStream {
     Box::pin(flat)
 }
 
-/// Generate a random-ish boundary. Uses the address of a stack allocation and
-/// a monotonic counter to avoid pulling in `rand`.
+/// Generate an unpredictable multipart boundary from 128 bits of CSPRNG output
+/// (via `getrandom`), hex-encoded.
+///
+/// An unguessable boundary is the only thing protecting the multipart framing
+/// from injection: part bodies are written verbatim and never scanned for the
+/// delimiter, so a caller forwarding attacker-controlled bytes relies on the
+/// attacker being unable to guess the boundary. This matches the entropy
+/// `reqwest::multipart` uses; a predictable (timestamp/counter) boundary would
+/// let an attacker forge or terminate parts.
 fn generate_boundary() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    format!("ras-boundary-{nanos:x}-{n:x}")
+    use std::fmt::Write as _;
+    let mut bytes = [0u8; 16];
+    getrandom::getrandom(&mut bytes).expect("failed to read OS entropy for multipart boundary");
+    let mut s = String::with_capacity("ras-boundary-".len() + bytes.len() * 2);
+    s.push_str("ras-boundary-");
+    for b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
 }

@@ -314,10 +314,10 @@ fn query_value_rejects_unsupported_shapes() {
 
 #[test]
 fn query_pairs_join_and_empty() {
-    assert_eq!(serialize_query_pairs(&[]), "");
+    assert_eq!(serialize_query_pairs(&[]).unwrap(), "");
     let pairs = vec![
         ("a".to_string(), "1".to_string()),
         ("b".to_string(), "two".to_string()),
     ];
-    assert_eq!(serialize_query_pairs(&pairs), "a=1&b=two");
+    assert_eq!(serialize_query_pairs(&pairs).unwrap(), "a=1&b=two");
 }

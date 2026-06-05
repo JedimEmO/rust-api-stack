@@ -31,8 +31,9 @@ schemars = { workspace = true }
 axum = { workspace = true, optional = true }
 ras-jsonrpc-core = { path = "../ras-jsonrpc-core", version = "0.1.2", optional = true }
 
-# Client dependencies
-ras-transport-core = { path = "../../core/ras-transport-core", version = "0.1.0" }
+# Client dependencies (only referenced by generated client code, gated by the
+# `client` feature — see `ras-rest-macro`/`ras-file-macro` for the same wiring).
+ras-transport-core = { path = "../../core/ras-transport-core", version = "0.1.0", optional = true }
 
 # Always needed for types
 ras-jsonrpc-types = { path = "../ras-jsonrpc-types", version = "0.1.1" }

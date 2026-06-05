@@ -76,7 +76,13 @@ impl TransportResponse {
             Ok(self)
         } else {
             let status = self.status;
-            let body = self.text().await.unwrap_or_default();
+            // Surface a failed body read rather than silently blanking the
+            // diagnostic — an empty `http status 500:` hides why the body was
+            // unreadable.
+            let body = match self.text().await {
+                Ok(body) => body,
+                Err(e) => format!("<failed to read response body: {e}>"),
+            };
             Err(TransportError::http_status(status, body))
         }
     }

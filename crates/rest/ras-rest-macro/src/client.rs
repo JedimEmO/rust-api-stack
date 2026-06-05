@@ -100,7 +100,7 @@ pub fn generate_client_code(service_def: &ServiceDefinition) -> proc_macro2::Tok
                 self
             }
 
-            /// Build the client using the default [`ReqwestTransport`].
+            /// Build the client using the default `ReqwestTransport`.
             ///
             /// # Errors
             ///
@@ -116,7 +116,7 @@ pub fn generate_client_code(service_def: &ServiceDefinition) -> proc_macro2::Tok
             /// # Errors
             ///
             /// Currently infallible, but returns a `Result` for forward
-            /// compatibility and parity with [`build`].
+            /// compatibility and parity with [`Self::build`].
             pub fn build_with_transport(
                 self,
                 transport: std::sync::Arc<dyn ::ras_transport_core::HttpTransport>,
@@ -373,7 +373,7 @@ fn generate_client_method_with_timeout(
             if !__query_pairs.is_empty() {
                 // Use '&' if the path template already carried a literal query.
                 url.push(if url.contains('?') { '&' } else { '?' });
-                url.push_str(&::ras_transport_core::serialize_query_pairs(&__query_pairs));
+                url.push_str(&::ras_transport_core::serialize_query_pairs(&__query_pairs)?);
             }
         }
     };

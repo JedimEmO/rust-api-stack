@@ -1,8 +1,9 @@
 //! In-process test transport wrapping an `axum_test::TestServer`.
 //!
-//! This is the only transport that buffers: `axum-test` drives the router
-//! directly and has no streaming request/response API. It exists so generated
-//! clients can be exercised end-to-end against a server with no sockets.
+//! This transport fully buffers both request and response bodies: `axum-test`
+//! drives the router directly and has no streaming request/response API. (The
+//! native `ReqwestTransport` streams both; the wasm one also buffers.) It
+//! exists so generated clients can be exercised end-to-end with no sockets.
 
 #![cfg(all(not(target_arch = "wasm32"), feature = "axum-test"))]
 

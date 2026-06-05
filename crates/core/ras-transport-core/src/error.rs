@@ -15,6 +15,10 @@ pub enum TransportError {
     #[error("connection error: {0}")]
     Connection(String),
 
+    /// The request exceeded its configured timeout before a response arrived.
+    #[error("timeout: {0}")]
+    Timeout(String),
+
     /// The server returned a non-success HTTP status.
     ///
     /// Produced by [`crate::TransportResponse::error_for_status`]; transports
@@ -62,9 +66,12 @@ impl TransportError {
 #[cfg(feature = "reqwest")]
 impl From<reqwest::Error> for TransportError {
     fn from(err: reqwest::Error) -> Self {
-        // Decode failures (including body-read failures) map to `Body`; every
-        // other reqwest failure is treated as a connection-level problem.
-        if err.is_decode() {
+        // Timeouts get their own variant (the per-request timeout this crate
+        // plumbs through surfaces here); decode/body-read failures map to
+        // `Body`; everything else is treated as a connection-level problem.
+        if err.is_timeout() {
+            TransportError::Timeout(err.to_string())
+        } else if err.is_decode() {
             TransportError::Body(err.to_string())
         } else {
             TransportError::Connection(err.to_string())

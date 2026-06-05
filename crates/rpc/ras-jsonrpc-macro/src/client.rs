@@ -55,7 +55,7 @@ pub fn generate_client_code(service_def: &ServiceDefinition) -> proc_macro2::Tok
                 self
             }
 
-            /// Build the client using the default [`ReqwestTransport`].
+            /// Build the client using the default `ReqwestTransport`.
             pub fn build(self) -> Result<#client_name, Box<dyn std::error::Error + Send + Sync>> {
                 let transport = std::sync::Arc::new(::ras_transport_core::ReqwestTransport::new());
                 self.build_with_transport(transport)
