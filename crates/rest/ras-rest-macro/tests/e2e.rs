@@ -9,7 +9,7 @@ use ras_rest_macro::rest_service;
 use serde::{Deserialize, Serialize};
 
 mod support;
-use support::{MockAuthProvider, mock_http_server};
+use support::{MockAuthProvider, axum_transport, mock_http_server, mock_http_server_arc};
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 struct Item {
@@ -269,6 +269,17 @@ fn server() -> axum_test::TestServer {
     mock_http_server(router())
 }
 
+/// A generated `DemoClient` wired over an in-process [`AxumTestTransport`].
+/// The `server_url` is a placeholder origin — the test transport strips the
+/// scheme+authority and routes by path+query against the in-memory router.
+fn client() -> DemoClient {
+    let server = mock_http_server_arc(router());
+    let transport = axum_transport(server);
+    DemoClientBuilder::new("http://in-memory.test")
+        .build_with_transport(transport)
+        .expect("failed to build DemoClient over AxumTestTransport")
+}
+
 #[tokio::test]
 async fn unauth_get_round_trips() {
     let response = server().get("/api/items").await;
@@ -368,102 +379,106 @@ async fn auth_post_with_admin_succeeds_and_user_id_propagates() {
 
 #[tokio::test]
 async fn query_params_required_and_optional_serialize_correctly() {
-    let server = server();
+    // Drive the generated client over the in-process transport so the
+    // serde_urlencoded query path is exercised live (required + Option-skip).
+    let client = client();
 
-    let response = server.get("/api/search?q=hi&limit=3&exact=true").await;
-    response.assert_status_ok();
-    let resp: ItemsResponse = response.json();
+    let resp = client
+        .get_search("hi".to_string(), Some(3), true)
+        .await
+        .expect("get_search with limit failed");
     assert_eq!(resp.items.len(), 3);
     assert_eq!(resp.items[0].name, "exact:hi-0");
     assert_eq!(resp.items[2].name, "exact:hi-2");
 
-    let response = server.get("/api/search?q=zz&exact=false").await;
-    response.assert_status_ok();
-    let resp: ItemsResponse = response.json();
+    // `limit: None` must be skipped from the query string entirely.
+    let resp = client
+        .get_search("zz".to_string(), None, false)
+        .await
+        .expect("get_search without limit failed");
     assert_eq!(resp.items.len(), 2);
     assert_eq!(resp.items[0].name, "fuzzy:zz-0");
 }
 
 #[tokio::test]
 async fn vec_query_params_serialize_as_repeated_keys() {
-    let server = server();
+    // `Vec<T>` and `Option<Vec<T>>` query params must serialize as repeated
+    // keys through the generated client.
+    let client = client();
 
-    let response = server
-        .get("/api/filter?tags=red&tags=blue&optional_tags=featured")
-        .await;
-    response.assert_status_ok();
-    let resp: ItemsResponse = response.json();
+    let resp = client
+        .get_filter(
+            vec!["red".to_string(), "blue".to_string()],
+            Some(vec!["featured".to_string()]),
+        )
+        .await
+        .expect("get_filter with tags failed");
     let names: Vec<_> = resp.items.into_iter().map(|item| item.name).collect();
     assert_eq!(names, vec!["tag:red", "tag:blue", "optional:featured"]);
 
-    let response = server.get("/api/filter?tags=solo").await;
-    response.assert_status_ok();
-    let resp: ItemsResponse = response.json();
+    let resp = client
+        .get_filter(vec!["solo".to_string()], None)
+        .await
+        .expect("get_filter solo failed");
     let names: Vec<_> = resp.items.into_iter().map(|item| item.name).collect();
     assert_eq!(names, vec!["tag:solo"]);
 }
 
 #[tokio::test]
 async fn enum_query_params_use_serde_renames_without_display() {
-    let server = server();
+    // Enum query values must honor `#[serde(rename)]` (asc/desc) rather than
+    // any Display/Debug formatting.
+    let client = client();
 
-    let response = server.get("/api/sorted?order=asc").await;
-    response.assert_status_ok();
-    let resp: ItemsResponse = response.json();
+    let resp = client
+        .get_sorted(SortOrder::Asc)
+        .await
+        .expect("get_sorted asc failed");
     assert_eq!(resp.items[0].name, "order:asc");
 
-    let response = server.get("/api/sorted?order=desc").await;
-    response.assert_status_ok();
-    let resp: ItemsResponse = response.json();
+    let resp = client
+        .get_sorted(SortOrder::Desc)
+        .await
+        .expect("get_sorted desc failed");
     assert_eq!(resp.items[0].name, "order:desc");
 }
 
 #[tokio::test]
 async fn query_params_with_body_and_auth() {
-    let server = server();
+    // Combined: bool query param + JSON body + bearer auth, via the client.
+    let mut client = client();
+    client.set_bearer_token(Some("admin-token"));
 
-    let response = server
-        .post("/api/items/batch?notify=true")
-        .authorization_bearer("admin-token")
-        .json(&CreateItem {
-            name: "alpha".into(),
-        })
-        .await;
-    response.assert_status(StatusCode::CREATED);
-    let item: Item = response.json();
+    let item = client
+        .post_items_batch(true, CreateItem { name: "alpha".into() })
+        .await
+        .expect("post_items_batch notify=true failed");
     assert_eq!(item.name, "alpha(notified)");
 
-    let response = server
-        .post("/api/items/batch?notify=false")
-        .authorization_bearer("admin-token")
-        .json(&CreateItem {
-            name: "beta".into(),
-        })
-        .await;
-    response.assert_status(StatusCode::CREATED);
-    let item: Item = response.json();
+    let item = client
+        .post_items_batch(false, CreateItem { name: "beta".into() })
+        .await
+        .expect("post_items_batch notify=false failed");
     assert_eq!(item.name, "beta(silent)");
 }
 
 #[tokio::test]
 async fn query_params_with_path_param() {
-    let server = server();
+    // Path param substitution + Option query param + bearer auth, via client.
+    let mut client = client();
+    client.set_bearer_token(Some("user-token"));
 
-    let response = server
-        .get("/api/items/42/related?tag=featured")
-        .authorization_bearer("user-token")
-        .await;
-    response.assert_status_ok();
-    let resp: ItemsResponse = response.json();
+    let resp = client
+        .get_items_by_id_related(42, Some("featured".to_string()))
+        .await
+        .expect("get_items_by_id_related with tag failed");
     assert_eq!(resp.items[0].id, 42);
     assert_eq!(resp.items[0].name, "related/featured");
 
-    let response = server
-        .get("/api/items/42/related")
-        .authorization_bearer("user-token")
-        .await;
-    response.assert_status_ok();
-    let resp: ItemsResponse = response.json();
+    let resp = client
+        .get_items_by_id_related(42, None)
+        .await
+        .expect("get_items_by_id_related without tag failed");
     assert_eq!(resp.items[0].name, "related/none");
 }
 

@@ -437,6 +437,22 @@ fn create_rest_test_server() -> TestServer {
     TestServer::builder().mock_transport().build(app).unwrap()
 }
 
+/// `Arc`-wrapped twin of [`create_rest_test_server`] for sharing with an
+/// in-process [`AxumTestTransport`].
+fn create_rest_test_server_arc() -> Arc<TestServer> {
+    Arc::new(create_rest_test_server())
+}
+
+/// Build a generated `TestRestServiceClient` over an in-process transport
+/// backed by the shared `TestServer`.
+fn create_rest_test_client(server: Arc<TestServer>) -> TestRestServiceClient {
+    let transport: Arc<dyn ras_transport_core::HttpTransport> =
+        Arc::new(ras_transport_core::AxumTestTransport::from_arc(server));
+    TestRestServiceClientBuilder::new("http://in-memory.test")
+        .build_with_transport(transport)
+        .expect("failed to build TestRestServiceClient over AxumTestTransport")
+}
+
 fn create_rest_cookie_test_server(csrf: bool) -> TestServer {
     let mut builder = TestRestServiceBuilder::new(TestRestServiceImpl)
         .auth_provider(TestRestAuthProvider::new())
@@ -1098,13 +1114,64 @@ async fn test_new_permission_logic() {
 
 #[tokio::test]
 async fn test_generated_rest_client() {
-    let mut client = TestRestServiceClientBuilder::new("http://example.invalid")
-        .with_timeout(std::time::Duration::from_millis(100))
-        .build()
-        .unwrap();
+    // Real end-to-end test: drive the generated client over the in-process
+    // AxumTestTransport against the live router. Covers unauthenticated GET,
+    // query-param serialization, bearer auth, a unit-type response, and HTTP
+    // error -> TransportError::Status mapping.
+    let server = create_rest_test_server_arc();
+    let mut client = create_rest_test_client(server);
 
-    client.set_bearer_token(Some("superuser-token"));
-    assert_eq!(client.bearer_token(), Some("superuser-token"));
+    // Bearer-token accessors still behave as before.
+    assert_eq!(client.bearer_token(), None);
+
+    // 1. Unauthenticated GET returning a deserialized body.
+    let users = client.get_users().await.expect("get_users failed");
+    assert_eq!(users.total, 2);
+    assert_eq!(users.users[0].name, "John Doe");
+
+    // 2. Query params (required + optional) over the serde_urlencoded path.
+    let search = client
+        .get_search_users("john".to_string(), Some(5), Some(10))
+        .await
+        .expect("get_search_users failed");
+    assert!(search.users[0].name.contains("john"));
+    assert!(search.users[0].name.contains("offset 10"));
+
+    // Optional query params omitted when None.
+    let search = client
+        .get_search_users("jane".to_string(), None, None)
+        .await
+        .expect("get_search_users without optionals failed");
+    assert!(search.users[0].name.contains("jane"));
+
+    // 3. Bearer auth: a permissioned GET succeeds once the token is set.
+    client.set_bearer_token(Some("user-token"));
+    assert_eq!(client.bearer_token(), Some("user-token"));
+    let user = client
+        .get_users_by_id(7)
+        .await
+        .expect("get_users_by_id with user token failed");
+    assert_eq!(user.id, Some(7));
+
+    // 4. Unit-type response (DELETE -> ()) with admin auth.
+    let mut admin_client = create_rest_test_client(create_rest_test_server_arc());
+    admin_client.set_bearer_token(Some("admin-token"));
+    admin_client
+        .delete_users_by_id(5)
+        .await
+        .expect("delete_users_by_id with admin token failed");
+
+    // 5. HTTP error mapping: 404 -> TransportError::Status.
+    let err = client
+        .get_users_by_id(404)
+        .await
+        .expect_err("get_users_by_id(404) should fail");
+    match err {
+        ras_transport_core::TransportError::Status { status, .. } => {
+            assert_eq!(status, ras_transport_core::http::StatusCode::NOT_FOUND);
+        }
+        other => panic!("expected TransportError::Status, got {other:?}"),
+    }
 }
 
 #[tokio::test]

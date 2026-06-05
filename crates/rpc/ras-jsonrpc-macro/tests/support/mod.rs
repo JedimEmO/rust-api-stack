@@ -50,3 +50,15 @@ pub fn mock_http_server(router: Router) -> TestServer {
         .build(router)
         .expect("failed to start axum-test TestServer with in-memory transport")
 }
+
+#[allow(dead_code)]
+pub fn mock_http_server_arc(router: Router) -> std::sync::Arc<TestServer> {
+    std::sync::Arc::new(mock_http_server(router))
+}
+
+#[allow(dead_code)]
+pub fn axum_transport(
+    server: std::sync::Arc<TestServer>,
+) -> std::sync::Arc<dyn ras_transport_core::HttpTransport> {
+    std::sync::Arc::new(ras_transport_core::AxumTestTransport::from_arc(server))
+}

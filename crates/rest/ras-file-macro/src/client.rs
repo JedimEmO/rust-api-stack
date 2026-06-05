@@ -19,10 +19,13 @@ pub fn generate_client(definition: &FileServiceDefinition) -> TokenStream {
         .map(|endpoint| generate_client_method(definition, endpoint, &base_path));
 
     quote! {
+        #[derive(Clone)]
         pub struct #client_name {
-            client: ::reqwest::Client,
+            transport: ::std::sync::Arc<dyn ::ras_transport_core::HttpTransport>,
             base_url: String,
-            bearer_token: ::std::sync::RwLock<Option<String>>,
+            bearer_token: ::std::sync::Arc<::std::sync::RwLock<Option<String>>>,
+            #[cfg(not(target_arch = "wasm32"))]
+            default_timeout: Option<::std::time::Duration>,
         }
 
         impl #client_name {
@@ -34,16 +37,24 @@ pub fn generate_client(definition: &FileServiceDefinition) -> TokenStream {
                 *self.bearer_token.write().unwrap() = token.map(|token| token.into());
             }
 
-            fn build_request(&self, method: ::reqwest::Method, path: &str) -> ::reqwest::RequestBuilder {
+            fn build_request(
+                &self,
+                path: &str,
+            ) -> (String, ::ras_transport_core::http::HeaderMap) {
                 let base = self.base_url.trim_end_matches('/');
                 let path = path.trim_start_matches('/');
-                let mut request = self.client.request(method, format!("{}/{}", base, path));
+                let url = format!("{}/{}", base, path);
 
+                let mut headers = ::ras_transport_core::http::HeaderMap::new();
                 if let Some(token) = self.bearer_token.read().unwrap().as_ref() {
-                    request = request.header("Authorization", format!("Bearer {}", token));
+                    if let Ok(value) = ::ras_transport_core::http::HeaderValue::from_str(
+                        &format!("Bearer {}", token),
+                    ) {
+                        headers.insert(::ras_transport_core::http::header::AUTHORIZATION, value);
+                    }
                 }
 
-                request
+                (url, headers)
             }
 
             #(#client_methods)*
@@ -51,52 +62,64 @@ pub fn generate_client(definition: &FileServiceDefinition) -> TokenStream {
 
         pub struct #builder_name {
             base_url: String,
-            client: Option<::reqwest::Client>,
+            transport: Option<::std::sync::Arc<dyn ::ras_transport_core::HttpTransport>>,
             #[cfg(not(target_arch = "wasm32"))]
-            timeout: Option<std::time::Duration>,
+            timeout: Option<::std::time::Duration>,
         }
 
         impl #builder_name {
             pub fn new(base_url: impl Into<String>) -> Self {
                 Self {
                     base_url: base_url.into(),
-                    client: None,
+                    transport: None,
                     #[cfg(not(target_arch = "wasm32"))]
                     timeout: None,
                 }
             }
 
-            pub fn with_client(mut self, client: ::reqwest::Client) -> Self {
-                self.client = Some(client);
+            pub fn with_transport(
+                mut self,
+                transport: ::std::sync::Arc<dyn ::ras_transport_core::HttpTransport>,
+            ) -> Self {
+                self.transport = Some(transport);
                 self
             }
 
             #[cfg(not(target_arch = "wasm32"))]
-            pub fn with_timeout(mut self, timeout: std::time::Duration) -> Self {
+            pub fn with_timeout(mut self, timeout: ::std::time::Duration) -> Self {
                 self.timeout = Some(timeout);
                 self
             }
 
-            pub fn build(self) -> Result<#client_name, Box<dyn std::error::Error + Send + Sync>> {
-                let client = match self.client {
-                    Some(client) => client,
-                    None => {
-                        let mut builder = ::reqwest::Client::builder();
+            pub fn build(self) -> #client_name {
+                let transport: ::std::sync::Arc<dyn ::ras_transport_core::HttpTransport> =
+                    match self.transport {
+                        Some(transport) => transport,
+                        None => ::std::sync::Arc::new(
+                            ::ras_transport_core::ReqwestTransport::new(),
+                        ),
+                    };
 
-                        #[cfg(not(target_arch = "wasm32"))]
-                        if let Some(timeout) = self.timeout {
-                            builder = builder.timeout(timeout);
-                        }
-
-                        builder.build()?
-                    }
-                };
-
-                Ok(#client_name {
-                    client,
+                #client_name {
+                    transport,
                     base_url: self.base_url,
-                    bearer_token: ::std::sync::RwLock::new(None),
-                })
+                    bearer_token: ::std::sync::Arc::new(::std::sync::RwLock::new(None)),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    default_timeout: self.timeout,
+                }
+            }
+
+            pub fn build_with_transport(
+                self,
+                transport: ::std::sync::Arc<dyn ::ras_transport_core::HttpTransport>,
+            ) -> #client_name {
+                #client_name {
+                    transport,
+                    base_url: self.base_url,
+                    bearer_token: ::std::sync::Arc::new(::std::sync::RwLock::new(None)),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    default_timeout: self.timeout,
+                }
             }
         }
 
@@ -131,21 +154,29 @@ fn generate_client_method(
                     &self,
                     #(#path_params,)*
                     form: #form_builder,
-                ) -> Result<#response_type, Box<dyn std::error::Error + Send + Sync>> {
+                ) -> Result<#response_type, ::ras_transport_core::TransportError> {
                     let path = #full_path.to_string()#(#path_replace)*;
-                    let response = self
-                        .build_request(::reqwest::Method::POST, &path)
-                        .multipart(form.into_form())
-                        .send()
-                        .await?;
+                    let (url, mut headers) = self.build_request(&path);
 
-                    if !response.status().is_success() {
-                        let status = response.status();
-                        let text = response.text().await?;
-                        return Err(format!("Upload failed with status {}: {}", status, text).into());
+                    let (body, content_type) = form.into_body();
+                    if let Ok(value) = ::ras_transport_core::http::HeaderValue::from_str(&content_type) {
+                        headers.insert(::ras_transport_core::http::header::CONTENT_TYPE, value);
                     }
 
-                    Ok(response.json().await?)
+                    let mut request = ::ras_transport_core::TransportRequest::new(
+                        ::ras_transport_core::http::Method::POST,
+                        url,
+                    )
+                    .body(body);
+                    request.headers = headers;
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if let Some(timeout) = self.default_timeout {
+                        request = request.timeout(timeout);
+                    }
+
+                    let response = self.transport.execute(request).await?.error_for_status().await?;
+                    response.json().await
                 }
             }
         }
@@ -153,19 +184,22 @@ fn generate_client_method(
             pub async fn #method_name(
                 &self,
                 #(#path_params,)*
-            ) -> Result<::reqwest::Response, Box<dyn std::error::Error + Send + Sync>> {
+            ) -> Result<::ras_transport_core::TransportResponse, ::ras_transport_core::TransportError> {
                 let path = #full_path.to_string()#(#path_replace)*;
-                let response = self
-                    .build_request(::reqwest::Method::GET, &path)
-                    .send()
-                    .await?;
+                let (url, headers) = self.build_request(&path);
 
-                if !response.status().is_success() {
-                    let status = response.status();
-                    let text = response.text().await?;
-                    return Err(format!("Download failed with status {}: {}", status, text).into());
+                let mut request = ::ras_transport_core::TransportRequest::new(
+                    ::ras_transport_core::http::Method::GET,
+                    url,
+                );
+                request.headers = headers;
+
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(timeout) = self.default_timeout {
+                    request = request.timeout(timeout);
                 }
 
+                let response = self.transport.execute(request).await?.error_for_status().await?;
                 Ok(response)
             }
         },
@@ -188,41 +222,44 @@ fn generate_multipart_builder(
 
         match part.kind {
             UploadPartKind::File => quote! {
-                #[cfg(not(target_arch = "wasm32"))]
+                #[cfg(all(not(target_arch = "wasm32"), feature = "fs"))]
                 pub async fn #method_name(
                     mut self,
                     file_path: impl AsRef<std::path::Path>,
                     file_name: Option<&str>,
                     content_type: Option<&str>,
-                ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-                    let file = ::tokio::fs::File::open(file_path.as_ref()).await?;
-                    let length = file.metadata().await.ok().map(|metadata| metadata.len());
-                    let stream = ::tokio_util::io::ReaderStream::new(file);
-                    let body = ::reqwest::Body::wrap_stream(stream);
+                ) -> Result<Self, ::ras_transport_core::TransportError> {
+                    use ::futures_util::StreamExt as _;
 
-                    let file_name = file_name
-                        .map(ToString::to_string)
-                        .or_else(|| {
-                            file_path
-                                .as_ref()
-                                .file_name()
-                                .and_then(|name| name.to_str())
-                                .map(ToString::to_string)
-                        })
-                        .unwrap_or_else(|| "file".to_string());
+                    let content_type = content_type.unwrap_or("application/octet-stream");
+                    let path_ref = file_path.as_ref();
 
-                    let mut part = if let Some(length) = length {
-                        ::reqwest::multipart::Part::stream_with_length(body, length)
-                    } else {
-                        ::reqwest::multipart::Part::stream(body)
-                    }
-                    .file_name(file_name);
+                    let builder = match file_name {
+                        Some(name) => {
+                            let file = ::tokio::fs::File::open(path_ref).await.map_err(|e| {
+                                ::ras_transport_core::TransportError::Body(e.to_string())
+                            })?;
+                            let stream = ::ras_transport_core::byte_stream_from(
+                                ::tokio_util::io::ReaderStream::new(file).map(|chunk| {
+                                    chunk.map_err(|e| {
+                                        ::ras_transport_core::TransportError::Body(e.to_string())
+                                    })
+                                }),
+                            );
+                            self.builder.stream_part(
+                                #field_name,
+                                name.to_string(),
+                                content_type.to_string(),
+                                stream,
+                            )
+                        }
+                        None => self
+                            .builder
+                            .file_path(#field_name, content_type.to_string(), path_ref)
+                            .await?,
+                    };
 
-                    if let Some(content_type) = content_type {
-                        part = part.mime_str(content_type)?;
-                    }
-
-                    self.form = self.form.part(#field_name, part);
+                    self.builder = builder;
                     Ok(self)
                 }
 
@@ -231,13 +268,15 @@ fn generate_multipart_builder(
                     bytes: impl Into<Vec<u8>>,
                     file_name: impl Into<String>,
                     content_type: Option<&str>,
-                ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-                    let mut part = ::reqwest::multipart::Part::bytes(bytes.into())
-                        .file_name(file_name.into());
-                    if let Some(content_type) = content_type {
-                        part = part.mime_str(content_type)?;
-                    }
-                    self.form = self.form.part(#field_name, part);
+                ) -> Result<Self, ::ras_transport_core::TransportError> {
+                    let content_type = content_type.unwrap_or("application/octet-stream");
+                    let bytes: Vec<u8> = bytes.into();
+                    self.builder = self.builder.bytes_part(
+                        #field_name,
+                        file_name.into(),
+                        content_type.to_string(),
+                        bytes,
+                    );
                     Ok(self)
                 }
             },
@@ -247,18 +286,15 @@ fn generate_multipart_builder(
                     pub fn #method_name(
                         mut self,
                         value: &#ty,
-                    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-                        let json = ::serde_json::to_string(value)?;
-                        let part = ::reqwest::multipart::Part::text(json)
-                            .mime_str("application/json")?;
-                        self.form = self.form.part(#field_name, part);
+                    ) -> Result<Self, ::ras_transport_core::TransportError> {
+                        self.builder = self.builder.json(#field_name, value)?;
                         Ok(self)
                     }
                 }
             }
             UploadPartKind::Text => quote! {
                 pub fn #method_name(mut self, value: impl Into<String>) -> Self {
-                    self.form = self.form.part(#field_name, ::reqwest::multipart::Part::text(value.into()));
+                    self.builder = self.builder.text(#field_name, value.into());
                     self
                 }
             },
@@ -267,20 +303,20 @@ fn generate_multipart_builder(
 
     Some(quote! {
         pub struct #builder_name {
-            form: ::reqwest::multipart::Form,
+            builder: ::ras_transport_core::MultipartBuilder,
         }
 
         impl #builder_name {
             pub fn new() -> Self {
                 Self {
-                    form: ::reqwest::multipart::Form::new(),
+                    builder: ::ras_transport_core::MultipartBuilder::new(),
                 }
             }
 
             #(#methods)*
 
-            pub fn into_form(self) -> ::reqwest::multipart::Form {
-                self.form
+            pub fn into_body(self) -> (::ras_transport_core::RequestBody, String) {
+                self.builder.build()
             }
         }
 

@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 mod support;
+#[cfg(feature = "client")]
+use support::{axum_transport, mock_http_server_arc};
 use support::{MockAuthProvider, mock_http_server};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -162,6 +164,88 @@ fn server() -> axum_test::TestServer {
 fn versioned_client_method_names_sanitize_semver_labels() {
     let _method = DemoClient::rename_user_v1_0_0;
     let _method_with_timeout = DemoClient::rename_user_v1_0_0_with_timeout;
+}
+
+/// Build the generated `DemoClient` wired to drive requests through the
+/// in-process `AxumTestTransport`, exercising the full envelope-build +
+/// transport-execute + error-extraction path of the migrated client.
+#[cfg(feature = "client")]
+fn demo_client() -> DemoClient {
+    let server = mock_http_server_arc(router());
+    let transport = axum_transport(server);
+    DemoClientBuilder::new()
+        // The AxumTestTransport strips scheme+authority, so the host is
+        // irrelevant; only the path "/rpc" matters.
+        .server_url("http://in-memory.test/rpc")
+        .build_with_transport(transport)
+        .expect("build DemoClient over AxumTestTransport")
+}
+
+#[cfg(feature = "client")]
+#[tokio::test]
+async fn generated_client_round_trips_over_axum_transport() {
+    let client = demo_client();
+
+    let resp = client
+        .ping(EchoRequest {
+            msg: "hello-from-client".to_string(),
+        })
+        .await
+        .expect("ping over transport should succeed");
+
+    assert_eq!(resp.msg, "hello-from-client");
+    assert_eq!(resp.user_id, None);
+}
+
+#[cfg(feature = "client")]
+#[tokio::test]
+async fn generated_client_sends_bearer_and_succeeds_with_permission() {
+    let mut client = demo_client();
+    client.set_bearer_token(Some("user-token"));
+
+    let resp = client
+        .add(AddRequest { a: 7, b: 35 })
+        .await
+        .expect("authenticated add should succeed");
+
+    assert_eq!(resp.sum, 42);
+}
+
+#[cfg(feature = "client")]
+#[tokio::test]
+async fn generated_client_surfaces_jsonrpc_error_on_missing_permission() {
+    let client = demo_client();
+
+    let err = client
+        .add(AddRequest { a: 1, b: 2 })
+        .await
+        .expect_err("anonymous add must be rejected as a JSON-RPC error");
+
+    match err {
+        ras_transport_core::TransportError::JsonRpc { message, .. } => {
+            let m = message.to_lowercase();
+            assert!(
+                m.contains("auth") || m.contains("permission"),
+                "expected auth/permission error, got: {message}"
+            );
+        }
+        other => panic!("expected JsonRpc error variant, got: {other:?}"),
+    }
+}
+
+#[cfg(feature = "client")]
+#[tokio::test]
+async fn generated_client_round_trips_versioned_wire_method() {
+    let client = demo_client();
+
+    let resp = client
+        .rename_user_v1_0_0(RenameUserV1 {
+            name: "Ada".to_string(),
+        })
+        .await
+        .expect("legacy versioned method should round-trip via client");
+
+    assert_eq!(resp, RenameUserResponseV1 { name: "Ada".to_string() });
 }
 
 async fn call_rpc<T>(

@@ -72,7 +72,7 @@ pub fn generate_client_code(service_def: &ServiceDefinition) -> proc_macro2::Tok
         /// Generated client for the REST service
         #[derive(Clone)]
         pub struct #client_name {
-            client: reqwest::Client,
+            transport: std::sync::Arc<dyn ::ras_transport_core::HttpTransport>,
             server_url: String,
             base_path: String,
             bearer_token: Option<String>,
@@ -100,42 +100,29 @@ pub fn generate_client_code(service_def: &ServiceDefinition) -> proc_macro2::Tok
                 self
             }
 
-            /// Build the client
+            /// Build the client using the default [`ReqwestTransport`].
             ///
             /// # Errors
             ///
-            /// Returns an error if the underlying HTTP client fails to build
+            /// Returns an error if the underlying transport fails to construct.
             pub fn build(self) -> Result<#client_name, Box<dyn std::error::Error + Send + Sync>> {
-                let mut client_builder = reqwest::Client::builder();
-
-                // Timeout is not supported in WASM builds
-                #[cfg(not(target_arch = "wasm32"))]
-                if let Some(timeout) = self.timeout {
-                    client_builder = client_builder.timeout(timeout);
-                }
-
-                let client = client_builder.build()?;
-
-                Ok(#client_name {
-                    client,
-                    server_url: self.server_url,
-                    base_path: #base_path.to_string(),
-                    bearer_token: None,
-                    default_timeout: self.timeout,
-                })
+                let transport = std::sync::Arc::new(::ras_transport_core::ReqwestTransport::new());
+                self.build_with_transport(transport)
             }
 
-            pub fn build_with_client_builder(self, mut client_builder: ::reqwest::ClientBuilder) -> Result<#client_name, Box<dyn std::error::Error + Send + Sync>> {
-                // Timeout is not supported in WASM builds
-                #[cfg(not(target_arch = "wasm32"))]
-                if let Some(timeout) = self.timeout {
-                    client_builder = client_builder.timeout(timeout);
-                }
-
-                let client = client_builder.build()?;
-
+            /// Build the client over an explicit transport (e.g. an in-process
+            /// test transport). This is the injection point used by tests.
+            ///
+            /// # Errors
+            ///
+            /// Currently infallible, but returns a `Result` for forward
+            /// compatibility and parity with [`build`].
+            pub fn build_with_transport(
+                self,
+                transport: std::sync::Arc<dyn ::ras_transport_core::HttpTransport>,
+            ) -> Result<#client_name, Box<dyn std::error::Error + Send + Sync>> {
                 Ok(#client_name {
-                    client,
+                    transport,
                     server_url: self.server_url,
                     base_path: #base_path.to_string(),
                     bearer_token: None,
@@ -278,7 +265,7 @@ fn generate_client_method(
 
     quote! {
         /// Call the #method_name endpoint
-        pub async fn #method_name(&self, #(#params),*) -> Result<#response_type, Box<dyn std::error::Error + Send + Sync>> {
+        pub async fn #method_name(&self, #(#params),*) -> Result<#response_type, ::ras_transport_core::TransportError> {
             self.#method_name_with_timeout(#(#call_args,)* None).await
         }
     }
@@ -296,11 +283,11 @@ fn generate_client_method_with_timeout(
 ) -> proc_macro2::TokenStream {
     let method_name_with_timeout = quote::format_ident!("{}_with_timeout", method_name);
     let http_method = match method {
-        HttpMethod::Get => quote! { reqwest::Method::GET },
-        HttpMethod::Post => quote! { reqwest::Method::POST },
-        HttpMethod::Put => quote! { reqwest::Method::PUT },
-        HttpMethod::Delete => quote! { reqwest::Method::DELETE },
-        HttpMethod::Patch => quote! { reqwest::Method::PATCH },
+        HttpMethod::Get => quote! { ::ras_transport_core::http::Method::GET },
+        HttpMethod::Post => quote! { ::ras_transport_core::http::Method::POST },
+        HttpMethod::Put => quote! { ::ras_transport_core::http::Method::PUT },
+        HttpMethod::Delete => quote! { ::ras_transport_core::http::Method::DELETE },
+        HttpMethod::Patch => quote! { ::ras_transport_core::http::Method::PATCH },
     };
 
     // Build function parameters
@@ -335,9 +322,11 @@ fn generate_client_method_with_timeout(
     }
 
     // Build query-string handling. Required params are always serialized;
-    // `Option<T>` params are skipped when `None`. Values are serialized by
-    // reqwest's serde-backed `.query()` helper so enum serde renames and other
-    // query wire formats stay aligned with server-side extraction.
+    // `Option<T>` params are skipped when `None`. Values are run through
+    // `ras_transport_core::serialize_query_value`, which mirrors reqwest's old
+    // serde-backed `.query()` behavior: `Vec<T>` produces repeated keys and
+    // enum serde renames are honored. The collected (decoded) pairs are
+    // percent-encoded and appended to the URL via `serialize_query_pairs`.
     let query_handling = if query_params.is_empty() {
         quote! {}
     } else {
@@ -348,30 +337,44 @@ fn generate_client_method_with_timeout(
                 quote! {
                     if let Some(__values) = &#param_name {
                         for __item in __values {
-                            request_builder = request_builder.query(&[(#param_str, __item)]);
+                            __query_pairs.extend(
+                                ::ras_transport_core::serialize_query_value(#param_str, __item)?,
+                            );
                         }
                     }
                 }
             } else if vec_inner_type(&qp.param_type).is_some() {
                 quote! {
                     for __item in &#param_name {
-                        request_builder = request_builder.query(&[(#param_str, __item)]);
+                        __query_pairs.extend(
+                            ::ras_transport_core::serialize_query_value(#param_str, __item)?,
+                        );
                     }
                 }
             } else if option_inner_type(&qp.param_type).is_some() {
                 quote! {
                     if let Some(__v) = &#param_name {
-                        request_builder = request_builder.query(&[(#param_str, __v)]);
+                        __query_pairs.extend(
+                            ::ras_transport_core::serialize_query_value(#param_str, __v)?,
+                        );
                     }
                 }
             } else {
                 quote! {
-                    request_builder = request_builder.query(&[(#param_str, &#param_name)]);
+                    __query_pairs.extend(
+                        ::ras_transport_core::serialize_query_value(#param_str, &#param_name)?,
+                    );
                 }
             }
         });
         quote! {
+            let mut __query_pairs: Vec<(String, String)> = Vec::new();
             #(#query_serializers)*
+            if !__query_pairs.is_empty() {
+                // Use '&' if the path template already carried a literal query.
+                url.push(if url.contains('?') { '&' } else { '?' });
+                url.push_str(&::ras_transport_core::serialize_query_pairs(&__query_pairs));
+            }
         }
     };
 
@@ -383,11 +386,12 @@ fn generate_client_method_with_timeout(
         params.push(quote! { #param_name: #param_type });
     }
 
-    // Add request body parameter if present
+    // Add request body parameter if present. The body is serialized to JSON
+    // (which also sets `Content-Type: application/json`).
     let request_body_handling = if let Some(request_type) = request_type {
         params.push(quote! { body: #request_type });
         quote! {
-            request_builder = request_builder.json(&body);
+            __request = __request.json(&body)?;
         }
     } else {
         quote! {}
@@ -398,24 +402,17 @@ fn generate_client_method_with_timeout(
 
     let response_handling = if is_unit_type {
         quote! {
-            if response.status().is_success() {
-                Ok(())
-            } else {
-                let status = response.status();
-                let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-                Err(format!("HTTP error {}: {}", status, error_text).into())
-            }
+            let __response = self.transport.execute(__request).await?;
+            __response.error_for_status().await?;
+            Ok(())
         }
     } else {
         quote! {
-            if response.status().is_success() {
-                let result = response.json().await?;
-                Ok(result)
-            } else {
-                let status = response.status();
-                let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-                Err(format!("HTTP error {}: {}", status, error_text).into())
-            }
+            let __response = self.transport.execute(__request).await?;
+            let __response = __response.error_for_status().await?;
+            let __bytes = __response.bytes().await?;
+            let __result = ::ras_transport_core::deserialize_json(&__bytes)?;
+            Ok(__result)
         }
     };
 
@@ -425,28 +422,26 @@ fn generate_client_method_with_timeout(
             &self,
             #(#params,)*
             timeout: Option<std::time::Duration>
-        ) -> Result<#response_type, Box<dyn std::error::Error + Send + Sync>> {
-            let url = #url_construction;
-
-            let mut request_builder = self.client
-                .request(#http_method, &url);
-
-            // Add bearer token if available
-            if let Some(token) = &self.bearer_token {
-                request_builder = request_builder.header("Authorization", format!("Bearer {}", token));
-            }
+        ) -> Result<#response_type, ::ras_transport_core::TransportError> {
+            let mut url = #url_construction;
 
             #query_handling
 
-            #request_body_handling
+            let mut __request = ::ras_transport_core::TransportRequest::new(#http_method, url);
 
-            // Override timeout if provided (not supported in WASM builds)
-            #[cfg(not(target_arch = "wasm32"))]
-            if let Some(timeout) = timeout {
-                request_builder = request_builder.timeout(timeout);
+            // Add bearer token if available
+            if let Some(token) = &self.bearer_token {
+                __request = __request.bearer(token);
             }
 
-            let response = request_builder.send().await?;
+            #request_body_handling
+
+            // Apply an explicit per-call timeout, falling back to the client
+            // default. Timeout is honored only on native (ignored on WASM by
+            // the transport).
+            if let Some(timeout) = timeout.or(self.default_timeout) {
+                __request = __request.timeout(timeout);
+            }
 
             #response_handling
         }
