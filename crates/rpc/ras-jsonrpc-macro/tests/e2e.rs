@@ -14,45 +14,45 @@ use support::{MockAuthProvider, mock_http_server};
 use support::{axum_transport, mock_http_server_arc};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-struct EchoRequest {
+pub struct EchoRequest {
     msg: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-struct EchoResponse {
+pub struct EchoResponse {
     msg: String,
     user_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-struct AddRequest {
+pub struct AddRequest {
     a: i64,
     b: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-struct AddResponse {
+pub struct AddResponse {
     sum: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-struct RenameUserV1 {
+pub struct RenameUserV1 {
     name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-struct RenameUserV2 {
+pub struct RenameUserV2 {
     display_name: String,
     notify: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-struct RenameUserResponseV1 {
+pub struct RenameUserResponseV1 {
     name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-struct RenameUserResponseV2 {
+pub struct RenameUserResponseV2 {
     display_name: String,
     notified: bool,
 }

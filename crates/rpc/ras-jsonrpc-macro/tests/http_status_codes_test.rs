@@ -7,12 +7,12 @@ use std::collections::HashSet;
 use tower::ServiceExt;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct TestRequest {
+pub struct TestRequest {
     value: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct TestResponse {
+pub struct TestResponse {
     result: String,
 }
 

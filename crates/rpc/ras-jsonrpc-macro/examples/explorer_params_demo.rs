@@ -6,7 +6,7 @@ use std::collections::HashSet;
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 /// Request to create a new user account
-struct CreateUserRequest {
+pub struct CreateUserRequest {
     /// The desired username for the new account
     username: String,
     /// Email address for the user
@@ -19,20 +19,20 @@ struct CreateUserRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-struct CreateUserResponse {
+pub struct CreateUserResponse {
     user_id: String,
     message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 /// Request to get user details by ID
-struct GetUserRequest {
+pub struct GetUserRequest {
     /// The unique user identifier
     user_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-struct GetUserResponse {
+pub struct GetUserResponse {
     user_id: String,
     username: String,
     email: String,
@@ -42,7 +42,7 @@ struct GetUserResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 /// Search for users by various criteria
-struct SearchUsersRequest {
+pub struct SearchUsersRequest {
     /// Optional username pattern to search for
     #[serde(skip_serializing_if = "Option::is_none")]
     username_pattern: Option<String>,
@@ -62,13 +62,13 @@ fn default_limit() -> u32 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-struct SearchUsersResponse {
+pub struct SearchUsersResponse {
     users: Vec<UserSummary>,
     total_count: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-struct UserSummary {
+pub struct UserSummary {
     user_id: String,
     username: String,
     email: String,

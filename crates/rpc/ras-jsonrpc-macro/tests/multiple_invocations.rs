@@ -2,12 +2,12 @@ use ras_jsonrpc_macro::jsonrpc_service;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-struct PingRequest {
+pub struct PingRequest {
     value: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-struct PingResponse {
+pub struct PingResponse {
     value: String,
 }
 

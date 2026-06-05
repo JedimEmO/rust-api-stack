@@ -3,25 +3,25 @@ use serde::{Deserialize, Serialize};
 
 // Test types for requests and responses
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-struct SignInRequest {
+pub struct SignInRequest {
     email: String,
     password: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-struct SignInResponse {
+pub struct SignInResponse {
     jwt: String,
     user_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-struct CreateUserRequest {
+pub struct CreateUserRequest {
     name: String,
     role: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-struct User {
+pub struct User {
     id: String,
     name: String,
     role: String,
