@@ -61,7 +61,7 @@ async fn file_path_streams_disk_contents_into_a_part() {
         .expect("write temp file");
 
     let (body, _ct) = MultipartBuilder::with_boundary("B")
-        .file_path("doc", "text/plain", &path)
+        .file_path("doc", None, "text/plain", &path)
         .await
         .expect("file_path")
         .build();
@@ -84,7 +84,12 @@ async fn file_path_streams_disk_contents_into_a_part() {
 async fn disposition_params_with_quotes_and_newlines_are_escaped() {
     // A hostile filename must not break the frame: " -> %22, CR/LF -> %0D/%0A.
     let (body, _ct) = MultipartBuilder::with_boundary("B")
-        .bytes_part("field", "ev\"il\r\n.txt", "application/octet-stream", Bytes::from_static(b"x"))
+        .bytes_part(
+            "field",
+            "ev\"il\r\n.txt",
+            "application/octet-stream",
+            Bytes::from_static(b"x"),
+        )
         .build();
     let text = String::from_utf8(collect_body(body).await).unwrap();
     assert!(text.contains("filename=\"ev%22il%0D%0A.txt\""));

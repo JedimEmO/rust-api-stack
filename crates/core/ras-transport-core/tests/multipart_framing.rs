@@ -1,8 +1,8 @@
 //! Multipart framing must produce exact RFC 7578 wire bytes.
 
 use futures_util::StreamExt;
-use ras_transport_core::request::RequestBody;
 use ras_transport_core::multipart::MultipartBuilder;
+use ras_transport_core::request::RequestBody;
 
 async fn collect_body(body: RequestBody) -> Vec<u8> {
     match body {
@@ -49,7 +49,12 @@ async fn text_json_bytes_combo_produces_exact_wire_bytes() {
         .text("field1", "hello")
         .json("meta", &Meta { id: 7 })
         .expect("json part")
-        .bytes_part("file", "a.bin", "application/octet-stream", b"\x00\x01\x02".to_vec());
+        .bytes_part(
+            "file",
+            "a.bin",
+            "application/octet-stream",
+            b"\x00\x01\x02".to_vec(),
+        );
 
     let content_type = builder.content_type();
     assert_eq!(content_type, "multipart/form-data; boundary=BOUND");
@@ -84,10 +89,5 @@ async fn text_json_bytes_combo_produces_exact_wire_bytes() {
 
     expected.extend_from_slice(b"--BOUND--\r\n");
 
-    assert_eq!(
-        bytes,
-        expected,
-        "got:\n{}",
-        String::from_utf8_lossy(&bytes)
-    );
+    assert_eq!(bytes, expected, "got:\n{}", String::from_utf8_lossy(&bytes));
 }

@@ -61,9 +61,7 @@ impl HttpTransport for ReqwestTransport {
             RequestBody::Empty => builder,
             RequestBody::Bytes(bytes) => builder.body(bytes),
             #[cfg(not(target_arch = "wasm32"))]
-            RequestBody::Stream(stream) => {
-                builder.body(reqwest::Body::wrap_stream(stream))
-            }
+            RequestBody::Stream(stream) => builder.body(reqwest::Body::wrap_stream(stream)),
             #[cfg(target_arch = "wasm32")]
             RequestBody::Stream(mut stream) => {
                 // wasm fetch cannot stream request bodies; collect first.
@@ -83,8 +81,10 @@ impl HttpTransport for ReqwestTransport {
         // feature, so collect into a single chunk (response streaming on wasm
         // is bounded by the fetch implementation regardless).
         #[cfg(not(target_arch = "wasm32"))]
-        let body_stream =
-            byte_stream_from(resp.bytes_stream().map(|res| res.map_err(TransportError::from)));
+        let body_stream = byte_stream_from(
+            resp.bytes_stream()
+                .map(|res| res.map_err(TransportError::from)),
+        );
 
         #[cfg(target_arch = "wasm32")]
         let body_stream = {

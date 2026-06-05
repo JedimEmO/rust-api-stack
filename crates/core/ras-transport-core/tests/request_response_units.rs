@@ -62,7 +62,8 @@ fn request_header_drops_invalid_name_or_value() {
 
 #[test]
 fn request_body_direct_and_empty() {
-    let req = TransportRequest::new(Method::PUT, "/x").body(RequestBody::Bytes(Bytes::from_static(b"hi")));
+    let req = TransportRequest::new(Method::PUT, "/x")
+        .body(RequestBody::Bytes(Bytes::from_static(b"hi")));
     assert!(matches!(req.body, RequestBody::Bytes(_)));
 
     assert!(matches!(RequestBody::empty(), RequestBody::Empty));
@@ -179,12 +180,24 @@ fn error_display_and_constructor_cover_all_variants() {
 #[test]
 fn query_value_covers_scalar_kinds_and_percent_decode() {
     // bool / int / float go through encode_scalar + percent_decode.
-    assert_eq!(serialize_query_value("b", &true).unwrap(), vec![("b".into(), "true".into())]);
-    assert_eq!(serialize_query_value("n", &-42i64).unwrap(), vec![("n".into(), "-42".into())]);
-    assert_eq!(serialize_query_value("f", &1.5f64).unwrap(), vec![("f".into(), "1.5".into())]);
+    assert_eq!(
+        serialize_query_value("b", &true).unwrap(),
+        vec![("b".into(), "true".into())]
+    );
+    assert_eq!(
+        serialize_query_value("n", &-42i64).unwrap(),
+        vec![("n".into(), "-42".into())]
+    );
+    assert_eq!(
+        serialize_query_value("f", &1.5f64).unwrap(),
+        vec![("f".into(), "1.5".into())]
+    );
 
     // char '/' encodes to %2F then is percent-decoded back to '/'.
-    assert_eq!(serialize_query_value("c", &'/').unwrap(), vec![("c".into(), "/".into())]);
+    assert_eq!(
+        serialize_query_value("c", &'/').unwrap(),
+        vec![("c".into(), "/".into())]
+    );
     // a string value is taken verbatim (serialize_str path, no encode_scalar).
     assert_eq!(
         serialize_query_value("s", &"a b/c").unwrap(),
@@ -194,7 +207,10 @@ fn query_value_covers_scalar_kinds_and_percent_decode() {
     // newtype struct delegates to inner.
     #[derive(Serialize)]
     struct Wrap(u8);
-    assert_eq!(serialize_query_value("w", &Wrap(9)).unwrap(), vec![("w".into(), "9".into())]);
+    assert_eq!(
+        serialize_query_value("w", &Wrap(9)).unwrap(),
+        vec![("w".into(), "9".into())]
+    );
 }
 
 #[test]
@@ -220,15 +236,24 @@ fn query_value_seq_option_and_unit_variant() {
         vec![("t".into(), "x".into()), ("t".into(), "y".into())]
     );
     // Option::None -> no pairs; Some -> one.
-    assert_eq!(serialize_query_value("o", &Option::<u32>::None).unwrap(), vec![]);
-    assert_eq!(serialize_query_value("o", &Some(3u32)).unwrap(), vec![("o".into(), "3".into())]);
+    assert_eq!(
+        serialize_query_value("o", &Option::<u32>::None).unwrap(),
+        vec![]
+    );
+    assert_eq!(
+        serialize_query_value("o", &Some(3u32)).unwrap(),
+        vec![("o".into(), "3".into())]
+    );
 
     #[derive(Serialize)]
     enum Kind {
         #[serde(rename = "the_one")]
         One,
     }
-    assert_eq!(serialize_query_value("k", &Kind::One).unwrap(), vec![("k".into(), "the_one".into())]);
+    assert_eq!(
+        serialize_query_value("k", &Kind::One).unwrap(),
+        vec![("k".into(), "the_one".into())]
+    );
 }
 
 #[test]
@@ -252,7 +277,10 @@ fn query_value_tuple_newtype_variant_and_unit_shapes() {
     enum E {
         N(u32),
     }
-    assert_eq!(serialize_query_value("e", &E::N(5)).unwrap(), vec![("e".into(), "5".into())]);
+    assert_eq!(
+        serialize_query_value("e", &E::N(5)).unwrap(),
+        vec![("e".into(), "5".into())]
+    );
 
     // Unit and unit struct -> no pairs.
     #[derive(Serialize)]
@@ -287,6 +315,9 @@ fn query_value_rejects_unsupported_shapes() {
 #[test]
 fn query_pairs_join_and_empty() {
     assert_eq!(serialize_query_pairs(&[]), "");
-    let pairs = vec![("a".to_string(), "1".to_string()), ("b".to_string(), "two".to_string())];
+    let pairs = vec![
+        ("a".to_string(), "1".to_string()),
+        ("b".to_string(), "two".to_string()),
+    ];
     assert_eq!(serialize_query_pairs(&pairs), "a=1&b=two");
 }

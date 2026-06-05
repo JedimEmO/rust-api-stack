@@ -8,11 +8,11 @@
 
 use bytes::Bytes;
 use futures_util::StreamExt;
-use futures_util::stream::{self};
 #[cfg(not(target_arch = "wasm32"))]
 use futures_util::stream::BoxStream;
 #[cfg(target_arch = "wasm32")]
 use futures_util::stream::LocalBoxStream;
+use futures_util::stream::{self};
 
 use crate::error::TransportError;
 use crate::request::RequestBody;
@@ -132,20 +132,25 @@ impl MultipartBuilder {
 
     /// Add a part streamed from a file on disk.
     ///
-    /// The `tokio::fs::File` -> `ReaderStream` conversion lives here (under the
-    /// `fs` feature) so consumers need not depend on `tokio-util` themselves.
+    /// The `tokio::fs::File` -> `ReaderStream` conversion (and the `futures_util`
+    /// usage it needs) lives here, under the `fs` feature, so consumers — and
+    /// generated client code — need not depend on `tokio`/`tokio-util`/
+    /// `futures_util` themselves. `filename` overrides the part filename; when
+    /// `None`, it is derived from the path's file name.
     #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
     pub async fn file_path(
         self,
         name: impl Into<String>,
+        filename: Option<String>,
         content_type: impl Into<String>,
         path: impl AsRef<std::path::Path>,
     ) -> Result<Self, TransportError> {
         let path = path.as_ref();
-        let filename = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "file".to_string());
+        let filename = filename.unwrap_or_else(|| {
+            path.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "file".to_string())
+        });
         let file = tokio::fs::File::open(path)
             .await
             .map_err(|e| TransportError::Body(e.to_string()))?;

@@ -229,37 +229,19 @@ fn generate_multipart_builder(
                     file_name: Option<&str>,
                     content_type: Option<&str>,
                 ) -> Result<Self, ::ras_transport_core::TransportError> {
-                    use ::futures_util::StreamExt as _;
-
                     let content_type = content_type.unwrap_or("application/octet-stream");
-                    let path_ref = file_path.as_ref();
-
-                    let builder = match file_name {
-                        Some(name) => {
-                            let file = ::tokio::fs::File::open(path_ref).await.map_err(|e| {
-                                ::ras_transport_core::TransportError::Body(e.to_string())
-                            })?;
-                            let stream = ::ras_transport_core::byte_stream_from(
-                                ::tokio_util::io::ReaderStream::new(file).map(|chunk| {
-                                    chunk.map_err(|e| {
-                                        ::ras_transport_core::TransportError::Body(e.to_string())
-                                    })
-                                }),
-                            );
-                            self.builder.stream_part(
-                                #field_name,
-                                name.to_string(),
-                                content_type.to_string(),
-                                stream,
-                            )
-                        }
-                        None => self
-                            .builder
-                            .file_path(#field_name, content_type.to_string(), path_ref)
-                            .await?,
-                    };
-
-                    self.builder = builder;
+                    // The disk -> stream conversion (and its tokio/tokio-util/
+                    // futures-util usage) lives entirely in ras-transport-core,
+                    // so consumers need not depend on those crates.
+                    self.builder = self
+                        .builder
+                        .file_path(
+                            #field_name,
+                            file_name.map(|name| name.to_string()),
+                            content_type.to_string(),
+                            file_path.as_ref(),
+                        )
+                        .await?;
                     Ok(self)
                 }
 

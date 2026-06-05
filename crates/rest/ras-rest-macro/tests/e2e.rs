@@ -450,13 +450,23 @@ async fn query_params_with_body_and_auth() {
     client.set_bearer_token(Some("admin-token"));
 
     let item = client
-        .post_items_batch(true, CreateItem { name: "alpha".into() })
+        .post_items_batch(
+            true,
+            CreateItem {
+                name: "alpha".into(),
+            },
+        )
         .await
         .expect("post_items_batch notify=true failed");
     assert_eq!(item.name, "alpha(notified)");
 
     let item = client
-        .post_items_batch(false, CreateItem { name: "beta".into() })
+        .post_items_batch(
+            false,
+            CreateItem {
+                name: "beta".into(),
+            },
+        )
         .await
         .expect("post_items_batch notify=false failed");
     assert_eq!(item.name, "beta(silent)");

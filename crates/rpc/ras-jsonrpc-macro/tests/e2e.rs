@@ -9,9 +9,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 mod support;
+use support::{MockAuthProvider, mock_http_server};
 #[cfg(feature = "client")]
 use support::{axum_transport, mock_http_server_arc};
-use support::{MockAuthProvider, mock_http_server};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct EchoRequest {
@@ -245,7 +245,12 @@ async fn generated_client_round_trips_versioned_wire_method() {
         .await
         .expect("legacy versioned method should round-trip via client");
 
-    assert_eq!(resp, RenameUserResponseV1 { name: "Ada".to_string() });
+    assert_eq!(
+        resp,
+        RenameUserResponseV1 {
+            name: "Ada".to_string()
+        }
+    );
 }
 
 async fn call_rpc<T>(

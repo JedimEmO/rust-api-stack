@@ -54,7 +54,10 @@ fn transport() -> AxumTestTransport {
 async fn get_with_absolute_url_strips_origin_and_returns_body() {
     let t = transport();
     let resp = t
-        .execute(TransportRequest::new(http::Method::GET, "http://api.example/ping"))
+        .execute(TransportRequest::new(
+            http::Method::GET,
+            "http://api.example/ping",
+        ))
         .await
         .unwrap();
     assert_eq!(resp.status(), http::StatusCode::OK);
@@ -78,7 +81,10 @@ async fn absolute_url_without_path_falls_back_to_root() {
     // Root isn't routed, so we just assert it dispatches and yields a status.
     let t = transport();
     let resp = t
-        .execute(TransportRequest::new(http::Method::GET, "http://api.example"))
+        .execute(TransportRequest::new(
+            http::Method::GET,
+            "http://api.example",
+        ))
         .await
         .unwrap();
     assert_eq!(resp.status(), http::StatusCode::NOT_FOUND);
@@ -128,7 +134,10 @@ async fn empty_body_get_does_not_set_a_body() {
 async fn non_success_maps_through_error_for_status() {
     let t = transport();
     let resp = t
-        .execute(TransportRequest::new(http::Method::GET, "http://api.example/boom"))
+        .execute(TransportRequest::new(
+            http::Method::GET,
+            "http://api.example/boom",
+        ))
         .await
         .unwrap();
     let err = resp.error_for_status().await.unwrap_err();

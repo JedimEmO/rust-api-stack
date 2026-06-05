@@ -116,10 +116,8 @@ pub trait HttpTransport: TransportThreadBounds {
     /// Implementations are dumb pipes: they MUST NOT inspect the status code.
     /// Callers map non-success statuses via
     /// [`TransportResponse::error_for_status`].
-    async fn execute(
-        &self,
-        request: TransportRequest,
-    ) -> Result<TransportResponse, TransportError>;
+    async fn execute(&self, request: TransportRequest)
+    -> Result<TransportResponse, TransportError>;
 }
 
 // --- Query / JSON helpers. ---
@@ -202,7 +200,7 @@ macro_rules! collect_scalar {
     };
 }
 
-impl<'a> serde::Serializer for &'a mut QueryValueCollector {
+impl serde::Serializer for &mut QueryValueCollector {
     type Ok = ();
     type Error = serde_json::Error;
     type SerializeSeq = Self;
@@ -233,7 +231,9 @@ impl<'a> serde::Serializer for &'a mut QueryValueCollector {
 
     fn serialize_bytes(self, _v: &[u8]) -> QueryResult {
         use serde::ser::Error as _;
-        Err(serde_json::Error::custom("bytes are not a valid query value"))
+        Err(serde_json::Error::custom(
+            "bytes are not a valid query value",
+        ))
     }
 
     fn serialize_none(self) -> QueryResult {

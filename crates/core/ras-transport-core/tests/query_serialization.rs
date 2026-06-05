@@ -50,10 +50,7 @@ fn enum_uses_serde_rename() {
 #[test]
 fn pairs_are_percent_encoded() {
     let pairs = serialize_query_value("q", &"hello world & co").unwrap();
-    assert_eq!(
-        serialize_query_pairs(&pairs),
-        "q=hello+world+%26+co"
-    );
+    assert_eq!(serialize_query_pairs(&pairs), "q=hello+world+%26+co");
 }
 
 #[test]
