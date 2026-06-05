@@ -306,10 +306,16 @@ fn generate_client_method_with_timeout(
         params.push(quote! { #param_name: #param_type });
         param_names.push(param_name);
 
-        // Handle path parameter substitution
+        // Handle path parameter substitution. The value is percent-encoded for
+        // a single path segment so a `/`, `?`, `#`, etc. in a caller-supplied
+        // path parameter cannot escape its slot and alter the request's path or
+        // query.
         let placeholder = format!("{{{}}}", param_name);
         path_substitutions.push(quote! {
-            .replace(#placeholder, &#param_name.to_string())
+            .replace(
+                #placeholder,
+                &::ras_transport_core::encode_path_segment(&#param_name.to_string()),
+            )
         });
     }
 
@@ -431,7 +437,7 @@ fn generate_client_method_with_timeout(
 
             // Add bearer token if available
             if let Some(token) = &self.bearer_token {
-                __request = __request.bearer(token);
+                __request = __request.bearer(token)?;
             }
 
             #request_body_handling

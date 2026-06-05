@@ -7,7 +7,7 @@ use http::{Method, StatusCode};
 use ras_transport_core::request::RequestBody;
 use ras_transport_core::{
     ByteStream, TransportError, TransportRequest, TransportResponse, byte_stream_from,
-    deserialize_json, serialize_query_pairs, serialize_query_value,
+    deserialize_json, encode_path_segment, serialize_query_pairs, serialize_query_value,
 };
 use serde::Serialize;
 
@@ -37,6 +37,7 @@ fn request_builders_set_method_url_headers_body_timeout() {
     let req = TransportRequest::new(Method::POST, "http://h/x")
         .header("x-custom", "v")
         .bearer("tok")
+        .expect("valid bearer token")
         .json(&Payload { a: 1 })
         .expect("json body")
         .timeout(std::time::Duration::from_millis(50));
@@ -310,6 +311,25 @@ fn query_value_rejects_unsupported_shapes() {
     }
     assert!(serialize_query_value("e", &E::Tup(1, 2)).is_err()); // tuple variant
     assert!(serialize_query_value("e", &E::Strukt { x: 1 }).is_err()); // struct variant
+}
+
+#[test]
+fn encode_path_segment_passes_unreserved_and_escapes_the_rest() {
+    // RFC 3986 unreserved set is passed through verbatim.
+    assert_eq!(encode_path_segment("abcXYZ-._~09"), "abcXYZ-._~09");
+
+    // Segment/path/query/fragment delimiters are escaped so a value cannot
+    // break out of its slot.
+    assert_eq!(encode_path_segment("a/b"), "a%2Fb");
+    assert_eq!(encode_path_segment("../admin"), "..%2Fadmin");
+    assert_eq!(encode_path_segment("x?role=admin"), "x%3Frole%3Dadmin");
+    assert_eq!(encode_path_segment("a#frag"), "a%23frag");
+    assert_eq!(encode_path_segment("100%"), "100%25");
+    assert_eq!(encode_path_segment("a b"), "a%20b");
+
+    // Control bytes and multi-byte UTF-8 are percent-encoded per byte.
+    assert_eq!(encode_path_segment("a\r\nb"), "a%0D%0Ab");
+    assert_eq!(encode_path_segment("é"), "%C3%A9");
 }
 
 #[test]

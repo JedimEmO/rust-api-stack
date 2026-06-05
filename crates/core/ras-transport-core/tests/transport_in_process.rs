@@ -95,6 +95,7 @@ async fn post_bytes_body_and_headers_are_forwarded() {
     let t = transport();
     let req = TransportRequest::new(http::Method::POST, "http://api.example/echo")
         .bearer("sekret")
+        .expect("valid bearer token")
         .body(RequestBody::Bytes(Bytes::from_static(b"payload")));
     let resp = t.execute(req).await.unwrap();
     assert_eq!(resp.text().await.unwrap(), "payload|auth=Bearer sekret");

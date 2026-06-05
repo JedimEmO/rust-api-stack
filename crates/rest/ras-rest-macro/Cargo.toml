@@ -36,6 +36,7 @@ ras-transport-core = { path = "../../core/ras-transport-core", version = "0.1.0"
 
 [dev-dependencies]
 tokio = { workspace = true }
+bytes = { workspace = true }
 ras-transport-core = { path = "../../core/ras-transport-core", version = "0.1.0", features = ["axum-test"] }
 tower = { workspace = true }
 rand = { workspace = true }

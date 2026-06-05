@@ -2964,6 +2964,7 @@ dependencies = [
  "axum",
  "axum-extra",
  "axum-test",
+ "bytes",
  "chrono",
  "criterion",
  "futures",

@@ -43,6 +43,15 @@ pub enum TransportError {
     #[error("body error: {0}")]
     Body(String),
 
+    /// A header value could not be encoded (e.g. a bearer token containing a
+    /// control character). Surfaced instead of silently dropping the header,
+    /// so an auth-bearing request is never sent unauthenticated.
+    ///
+    /// The offending value is deliberately not included to avoid leaking
+    /// secrets (tokens) into error messages/logs.
+    #[error("invalid header value: {0}")]
+    InvalidHeader(String),
+
     /// A JSON-RPC 2.0 error object was returned in the response envelope.
     #[error("json-rpc error {code}: {message}")]
     JsonRpc {

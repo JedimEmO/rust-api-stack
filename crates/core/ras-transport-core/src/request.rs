@@ -81,6 +81,10 @@ impl TransportRequest {
     }
 
     /// Add a header. Invalid header names/values are silently dropped.
+    ///
+    /// This best-effort behavior is intentional for arbitrary caller headers;
+    /// for the security-sensitive auth header use [`Self::bearer`], which fails
+    /// closed instead.
     pub fn header(mut self, name: impl AsRef<str>, value: impl AsRef<str>) -> Self {
         if let (Ok(name), Ok(value)) = (
             HeaderName::try_from(name.as_ref()),
@@ -92,8 +96,16 @@ impl TransportRequest {
     }
 
     /// Set the `Authorization: Bearer <token>` header.
-    pub fn bearer(self, token: impl AsRef<str>) -> Self {
-        self.header("authorization", format!("Bearer {}", token.as_ref()))
+    ///
+    /// Unlike [`Self::header`], this fails closed: if the token cannot be
+    /// encoded as a header value (e.g. it contains a control character) it
+    /// returns [`TransportError::InvalidHeader`] rather than silently dropping
+    /// the header and sending the request unauthenticated.
+    pub fn bearer(mut self, token: impl AsRef<str>) -> Result<Self, TransportError> {
+        let value = HeaderValue::try_from(format!("Bearer {}", token.as_ref()))
+            .map_err(|_| TransportError::InvalidHeader("bearer token".to_string()))?;
+        self.headers.insert(http::header::AUTHORIZATION, value);
+        Ok(self)
     }
 
     /// Serialize `value` as a JSON body and set `Content-Type: application/json`.

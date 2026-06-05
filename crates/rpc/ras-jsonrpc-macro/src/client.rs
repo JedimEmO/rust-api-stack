@@ -118,7 +118,7 @@ pub fn generate_client_code(service_def: &ServiceDefinition) -> proc_macro2::Tok
 
                 // Add bearer token if available
                 if let Some(token) = &self.bearer_token {
-                    request = request.bearer(token);
+                    request = request.bearer(token)?;
                 }
 
                 // Apply per-call timeout, falling back to the client default.

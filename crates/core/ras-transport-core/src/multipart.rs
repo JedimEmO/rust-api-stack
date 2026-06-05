@@ -214,6 +214,17 @@ fn escape_disposition_param(value: &str) -> String {
         .replace('\n', "%0A")
 }
 
+/// Strip CR/LF from a part's `Content-Type` before it is written as a header
+/// line. The value is interpolated verbatim into the part header block, so a
+/// CR or LF (which is never valid in a MIME type) would otherwise let a
+/// caller-supplied content type inject extra header lines or prematurely
+/// terminate the header block — the same multipart-framing injection that
+/// [`escape_disposition_param`] guards `name`/`filename` against. `reqwest`'s
+/// `Part::mime_str` got this for free by validating the value as a header.
+fn sanitize_content_type(value: &str) -> String {
+    value.replace(['\r', '\n'], "")
+}
+
 /// Build the RFC 7578 header block for a part (boundary line + disposition +
 /// optional content type + the blank line that ends the header block).
 fn part_header(boundary: &str, part: &Part) -> String {
@@ -229,7 +240,7 @@ fn part_header(boundary: &str, part: &Part) -> String {
     }
     s.push_str("\r\n");
     if let Some(ct) = &part.content_type {
-        s.push_str(&format!("Content-Type: {ct}\r\n"));
+        s.push_str(&format!("Content-Type: {}\r\n", sanitize_content_type(ct)));
     }
     s.push_str("\r\n");
     s

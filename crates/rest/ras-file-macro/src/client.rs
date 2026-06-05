@@ -40,21 +40,31 @@ pub fn generate_client(definition: &FileServiceDefinition) -> TokenStream {
             fn build_request(
                 &self,
                 path: &str,
-            ) -> (String, ::ras_transport_core::http::HeaderMap) {
+            ) -> Result<
+                (String, ::ras_transport_core::http::HeaderMap),
+                ::ras_transport_core::TransportError,
+            > {
                 let base = self.base_url.trim_end_matches('/');
                 let path = path.trim_start_matches('/');
                 let url = format!("{}/{}", base, path);
 
                 let mut headers = ::ras_transport_core::http::HeaderMap::new();
                 if let Some(token) = self.bearer_token.read().unwrap().as_ref() {
-                    if let Ok(value) = ::ras_transport_core::http::HeaderValue::from_str(
+                    // Fail closed: a token that cannot be encoded must not be
+                    // silently dropped, which would send the request
+                    // unauthenticated.
+                    let value = ::ras_transport_core::http::HeaderValue::from_str(
                         &format!("Bearer {}", token),
-                    ) {
-                        headers.insert(::ras_transport_core::http::header::AUTHORIZATION, value);
-                    }
+                    )
+                    .map_err(|_| {
+                        ::ras_transport_core::TransportError::InvalidHeader(
+                            "bearer token".to_string(),
+                        )
+                    })?;
+                    headers.insert(::ras_transport_core::http::header::AUTHORIZATION, value);
                 }
 
-                (url, headers)
+                Ok((url, headers))
             }
 
             #(#client_methods)*
@@ -140,10 +150,18 @@ fn generate_client_method(
         let ty = &param.ty;
         quote! { #name: #ty }
     });
+    // Percent-encode each path parameter for its segment so a `/`, `?`, `#`,
+    // etc. in a caller-supplied value cannot escape its slot and alter the
+    // request's path or query.
     let path_replace = endpoint.path_params.iter().map(|param| {
         let name = &param.name;
         let placeholder = format!("{{{}}}", name);
-        quote! { .replace(#placeholder, &#name.to_string()) }
+        quote! {
+            .replace(
+                #placeholder,
+                &::ras_transport_core::encode_path_segment(&#name.to_string()),
+            )
+        }
     });
 
     match &endpoint.operation {
@@ -156,7 +174,7 @@ fn generate_client_method(
                     form: #form_builder,
                 ) -> Result<#response_type, ::ras_transport_core::TransportError> {
                     let path = #full_path.to_string()#(#path_replace)*;
-                    let (url, mut headers) = self.build_request(&path);
+                    let (url, mut headers) = self.build_request(&path)?;
 
                     let (body, content_type) = form.into_body();
                     if let Ok(value) = ::ras_transport_core::http::HeaderValue::from_str(&content_type) {
@@ -186,7 +204,7 @@ fn generate_client_method(
                 #(#path_params,)*
             ) -> Result<::ras_transport_core::TransportResponse, ::ras_transport_core::TransportError> {
                 let path = #full_path.to_string()#(#path_replace)*;
-                let (url, headers) = self.build_request(&path);
+                let (url, headers) = self.build_request(&path)?;
 
                 let mut request = ::ras_transport_core::TransportRequest::new(
                     ::ras_transport_core::http::Method::GET,
