@@ -13,7 +13,7 @@ readme = "README.md"
 [features]
 default = ["server"]
 server = ["ras-jsonrpc-macro/server"]
-client = ["ras-jsonrpc-macro/client", "ras-transport-core/reqwest"]
+client = ["ras-jsonrpc-macro/reqwest", "ras-transport-core/reqwest"]
 
 [dependencies]
 anyhow = { workspace = true }

@@ -1,6 +1,8 @@
 # 4. Build Clients
 
 Client crates depend on the same API crate with `features = ["client"]`.
+Enable the API crate's `fs` feature too when using generated file-upload helpers
+that read parts from disk.
 
 ```toml
 [dependencies]
@@ -69,6 +71,14 @@ let bytes = response.bytes().await?;
 For tests or browser-like buffered content, generated multipart builders also
 provide `*_bytes` helpers where file parts are declared.
 
+If you use the disk-streaming `file(...)` helper above, depend on the API crate
+with both `client` and `fs` enabled:
+
+```toml
+[dependencies]
+workspace-api = { path = "../workspace-api", default-features = false, features = ["client", "fs"] }
+```
+
 ## TypeScript Clients From OpenAPI
 
 If your browser app is TypeScript, generate a fetch client from the OpenAPI
@@ -132,4 +142,3 @@ activity.subscribe_project("project-123".to_string()).await?;
 
 Use generated clients directly at application edges, then wrap them in small
 domain-specific adapters if the UI needs a simpler interface.
-

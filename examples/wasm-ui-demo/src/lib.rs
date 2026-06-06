@@ -132,8 +132,7 @@ impl App {
         let api_url = rpc_endpoint_url(&protocol, &host);
 
         // Initialize the RPC client
-        let client = MyServiceClientBuilder::new()
-            .server_url(&api_url)
+        let client = MyServiceClientBuilder::new(&api_url)
             .build()
             .expect("Failed to build client");
 

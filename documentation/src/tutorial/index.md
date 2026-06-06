@@ -46,6 +46,9 @@ workspace-api = { path = "../workspace-api", default-features = false, features 
 This keeps generated transport code out of crates that do not need it, while
 keeping request and response types shared. The proc macro features decide what
 code is emitted; the API-crate features are only the downstream selection point.
+For HTTP service macros, the macro crate's `client` feature emits
+transport-injected clients; the macro crate's `reqwest` feature additionally
+emits the default `build()` constructor.
 
 ## What You Will Build
 

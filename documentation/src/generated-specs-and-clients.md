@@ -35,11 +35,16 @@ upload limits, part policies, content types, and range support.
 
 ## Rust Clients
 
-Enabling a service macro crate's `client` feature emits typed Rust clients.
+Enabling a service macro crate's `client` feature emits typed Rust clients that
+can be constructed with `build_with_transport(...)`. Enabling the macro crate's
+`reqwest` feature also emits the default reqwest-backed `build()`.
+
 The examples keep API definitions in separate API crates and expose API-crate
-`client` features that forward to the macro crates, so server and browser
-crates can depend on the same contract while selecting different generated
-surfaces.
+`client` features that forward to the macro crate's `reqwest` feature, so
+server and browser crates can depend on the same contract while selecting
+different generated surfaces. Test-only or in-process clients can instead
+forward only the macro crate's `client` feature and depend directly on
+`ras-transport-core`.
 
 For browser targets, compile client crates with `--target wasm32-unknown-unknown`
 and enable only the API crate's client-side feature set. See:

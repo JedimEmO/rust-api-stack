@@ -173,10 +173,9 @@ fn versioned_client_method_names_sanitize_semver_labels() {
 fn demo_client() -> DemoClient {
     let server = mock_http_server_arc(router());
     let transport = axum_transport(server);
-    DemoClientBuilder::new()
+    DemoClientBuilder::new("http://in-memory.test/rpc")
         // The AxumTestTransport strips scheme+authority, so the host is
         // irrelevant; only the path "/rpc" matters.
-        .server_url("http://in-memory.test/rpc")
         .build_with_transport(transport)
         .expect("build DemoClient over AxumTestTransport")
 }
@@ -194,6 +193,25 @@ async fn generated_client_round_trips_over_axum_transport() {
         .expect("ping over transport should succeed");
 
     assert_eq!(resp.msg, "hello-from-client");
+    assert_eq!(resp.user_id, None);
+}
+
+#[cfg(feature = "client")]
+#[tokio::test]
+async fn generated_client_timeout_variant_accepts_duration() {
+    let client = demo_client();
+
+    let resp = client
+        .ping_with_timeout(
+            EchoRequest {
+                msg: "timeout-client".to_string(),
+            },
+            std::time::Duration::from_secs(1),
+        )
+        .await
+        .expect("ping_with_timeout over transport should succeed");
+
+    assert_eq!(resp.msg, "timeout-client");
     assert_eq!(resp.user_id, None);
 }
 

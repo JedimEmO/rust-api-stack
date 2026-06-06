@@ -13,7 +13,7 @@ readme = "README.md"
 [features]
 default = ["server"]
 server = ["ras-file-macro/server"]
-client = ["ras-file-macro/client", "ras-transport-core/reqwest"]
+client = ["ras-file-macro/reqwest", "ras-transport-core/reqwest"]
 fs = ["ras-file-macro/fs", "ras-transport-core/fs"]
 
 [dependencies]

@@ -18,6 +18,18 @@ pub fn generate_client_code(service_def: &ServiceDefinition) -> proc_macro2::Tok
         .iter()
         .flat_map(generate_client_methods_with_timeout_for_method);
 
+    let build_method = if cfg!(feature = "reqwest") {
+        quote! {
+            /// Build the client using the default `ReqwestTransport`.
+            pub fn build(self) -> Result<#client_name, Box<dyn std::error::Error + Send + Sync>> {
+                let transport = std::sync::Arc::new(::ras_transport_core::ReqwestTransport::new());
+                self.build_with_transport(transport)
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     let output = quote! {
         /// Generated client for the JSON-RPC service
         #[derive(Clone)]
@@ -30,23 +42,17 @@ pub fn generate_client_code(service_def: &ServiceDefinition) -> proc_macro2::Tok
 
         /// Builder for the JSON-RPC client
         pub struct #client_builder_name {
-            server_url: Option<String>,
+            server_url: String,
             timeout: Option<std::time::Duration>,
         }
 
         impl #client_builder_name {
-            /// Create a new client builder
-            pub fn new() -> Self {
+            /// Create a new client builder with the required server URL
+            pub fn new(server_url: impl Into<String>) -> Self {
                 Self {
-                    server_url: None,
+                    server_url: server_url.into(),
                     timeout: None,
                 }
-            }
-
-            /// Set the server URL
-            pub fn server_url(mut self, url: impl Into<String>) -> Self {
-                self.server_url = Some(url.into());
-                self
             }
 
             /// Set the default timeout for requests
@@ -55,11 +61,7 @@ pub fn generate_client_code(service_def: &ServiceDefinition) -> proc_macro2::Tok
                 self
             }
 
-            /// Build the client using the default `ReqwestTransport`.
-            pub fn build(self) -> Result<#client_name, Box<dyn std::error::Error + Send + Sync>> {
-                let transport = std::sync::Arc::new(::ras_transport_core::ReqwestTransport::new());
-                self.build_with_transport(transport)
-            }
+            #build_method
 
             /// Build the client over an explicit transport (e.g. an in-process
             /// test transport). This is the injection point used by tests.
@@ -67,11 +69,9 @@ pub fn generate_client_code(service_def: &ServiceDefinition) -> proc_macro2::Tok
                 self,
                 transport: std::sync::Arc<dyn ::ras_transport_core::HttpTransport>,
             ) -> Result<#client_name, Box<dyn std::error::Error + Send + Sync>> {
-                let server_url = self.server_url.ok_or("Server URL is required")?;
-
                 Ok(#client_name {
                     transport,
-                    server_url,
+                    server_url: self.server_url,
                     bearer_token: None,
                     default_timeout: self.timeout,
                 })
@@ -82,6 +82,11 @@ pub fn generate_client_code(service_def: &ServiceDefinition) -> proc_macro2::Tok
             /// Set the bearer token for authentication
             pub fn set_bearer_token(&mut self, token: Option<impl Into<String>>) {
                 self.bearer_token = token.map(|t| t.into());
+            }
+
+            /// Create a new client builder
+            pub fn builder(server_url: impl Into<String>) -> #client_builder_name {
+                #client_builder_name::new(server_url)
             }
 
             /// Get a reference to the bearer token

@@ -710,12 +710,11 @@ async fn test_openrpc_generation() {
     assert!(permissions.contains(&json!("moderator")));
 }
 
-#[cfg(feature = "client")]
+#[cfg(feature = "reqwest")]
 #[test]
 fn test_client_generation() {
     // Test that client generation compiles and produces valid API
-    let client_result = TestServiceClientBuilder::new()
-        .server_url("http://example.invalid/rpc")
+    let client_result = TestServiceClientBuilder::new("http://example.invalid/rpc")
         .with_timeout(std::time::Duration::from_millis(1000))
         .build();
 

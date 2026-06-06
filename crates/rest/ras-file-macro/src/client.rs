@@ -17,14 +17,27 @@ pub fn generate_client(definition: &FileServiceDefinition) -> TokenStream {
         .endpoints
         .iter()
         .map(|endpoint| generate_client_method(definition, endpoint, &base_path));
+    let build_method = if cfg!(feature = "reqwest") {
+        quote! {
+            pub fn build(
+                self,
+            ) -> Result<#client_name, Box<dyn ::std::error::Error + Send + Sync>> {
+                let transport = ::std::sync::Arc::new(
+                    ::ras_transport_core::ReqwestTransport::new(),
+                );
+                self.build_with_transport(transport)
+            }
+        }
+    } else {
+        quote! {}
+    };
 
     quote! {
         #[derive(Clone)]
         pub struct #client_name {
             transport: ::std::sync::Arc<dyn ::ras_transport_core::HttpTransport>,
             base_url: String,
-            bearer_token: ::std::sync::Arc<::std::sync::RwLock<Option<String>>>,
-            #[cfg(not(target_arch = "wasm32"))]
+            bearer_token: Option<String>,
             default_timeout: Option<::std::time::Duration>,
         }
 
@@ -33,8 +46,12 @@ pub fn generate_client(definition: &FileServiceDefinition) -> TokenStream {
                 #builder_name::new(base_url)
             }
 
-            pub fn set_bearer_token(&self, token: Option<impl Into<String>>) {
-                *self.bearer_token.write().unwrap() = token.map(|token| token.into());
+            pub fn set_bearer_token(&mut self, token: Option<impl Into<String>>) {
+                self.bearer_token = token.map(|token| token.into());
+            }
+
+            pub fn bearer_token(&self) -> Option<&str> {
+                self.bearer_token.as_deref()
             }
 
             fn build_request(
@@ -49,7 +66,7 @@ pub fn generate_client(definition: &FileServiceDefinition) -> TokenStream {
                 let url = format!("{}/{}", base, path);
 
                 let mut headers = ::ras_transport_core::http::HeaderMap::new();
-                if let Some(token) = self.bearer_token.read().unwrap().as_ref() {
+                if let Some(token) = self.bearer_token.as_ref() {
                     // Fail closed: a token that cannot be encoded must not be
                     // silently dropped, which would send the request
                     // unauthenticated.
@@ -72,8 +89,6 @@ pub fn generate_client(definition: &FileServiceDefinition) -> TokenStream {
 
         pub struct #builder_name {
             base_url: String,
-            transport: Option<::std::sync::Arc<dyn ::ras_transport_core::HttpTransport>>,
-            #[cfg(not(target_arch = "wasm32"))]
             timeout: Option<::std::time::Duration>,
         }
 
@@ -81,55 +96,27 @@ pub fn generate_client(definition: &FileServiceDefinition) -> TokenStream {
             pub fn new(base_url: impl Into<String>) -> Self {
                 Self {
                     base_url: base_url.into(),
-                    transport: None,
-                    #[cfg(not(target_arch = "wasm32"))]
                     timeout: None,
                 }
             }
 
-            pub fn with_transport(
-                mut self,
-                transport: ::std::sync::Arc<dyn ::ras_transport_core::HttpTransport>,
-            ) -> Self {
-                self.transport = Some(transport);
-                self
-            }
-
-            #[cfg(not(target_arch = "wasm32"))]
             pub fn with_timeout(mut self, timeout: ::std::time::Duration) -> Self {
                 self.timeout = Some(timeout);
                 self
             }
 
-            pub fn build(self) -> #client_name {
-                let transport: ::std::sync::Arc<dyn ::ras_transport_core::HttpTransport> =
-                    match self.transport {
-                        Some(transport) => transport,
-                        None => ::std::sync::Arc::new(
-                            ::ras_transport_core::ReqwestTransport::new(),
-                        ),
-                    };
-
-                #client_name {
-                    transport,
-                    base_url: self.base_url,
-                    bearer_token: ::std::sync::Arc::new(::std::sync::RwLock::new(None)),
-                    #[cfg(not(target_arch = "wasm32"))]
-                    default_timeout: self.timeout,
-                }
-            }
+            #build_method
 
             pub fn build_with_transport(
                 self,
                 transport: ::std::sync::Arc<dyn ::ras_transport_core::HttpTransport>,
-            ) -> #client_name {
-                #client_name {
+            ) -> Result<#client_name, Box<dyn ::std::error::Error + Send + Sync>> {
+                Ok(#client_name {
                     transport,
                     base_url: self.base_url,
-                    bearer_token: ::std::sync::Arc::new(::std::sync::RwLock::new(None)),
-                    #[cfg(not(target_arch = "wasm32"))]
+                    bearer_token: None,
                     default_timeout: self.timeout,
-                }
+                })
             }
         }
 
@@ -143,26 +130,45 @@ fn generate_client_method(
     base_path: &str,
 ) -> TokenStream {
     let method_name = &endpoint.name;
+    let method_name_with_timeout = format_ident!("{}_with_timeout", method_name);
+    let method_name_with_optional_timeout =
+        format_ident!("__ras_{}_with_optional_timeout", method_name);
     let path = endpoint.path.value();
     let full_path = format!("{}{}", base_path.trim_end_matches('/'), path);
-    let path_params = endpoint.path_params.iter().map(|param| {
-        let name = &param.name;
-        let ty = &param.ty;
-        quote! { #name: #ty }
-    });
+    let path_params: Vec<_> = endpoint
+        .path_params
+        .iter()
+        .map(|param| {
+            let name = &param.name;
+            let ty = &param.ty;
+            quote! { #name: #ty }
+        })
+        .collect();
+    let path_args: Vec<_> = endpoint
+        .path_params
+        .iter()
+        .map(|param| {
+            let name = &param.name;
+            quote! { #name }
+        })
+        .collect();
     // Percent-encode each path parameter for its segment so a `/`, `?`, `#`,
     // etc. in a caller-supplied value cannot escape its slot and alter the
     // request's path or query.
-    let path_replace = endpoint.path_params.iter().map(|param| {
-        let name = &param.name;
-        let placeholder = format!("{{{}}}", name);
-        quote! {
-            .replace(
-                #placeholder,
-                &::ras_transport_core::encode_path_segment(&#name.to_string()),
-            )
-        }
-    });
+    let path_replace: Vec<_> = endpoint
+        .path_params
+        .iter()
+        .map(|param| {
+            let name = &param.name;
+            let placeholder = format!("{{{}}}", name);
+            quote! {
+                .replace(
+                    #placeholder,
+                    &::ras_transport_core::encode_path_segment(&#name.to_string()),
+                )
+            }
+        })
+        .collect();
 
     match &endpoint.operation {
         Operation::Upload { response_type, .. } => {
@@ -172,6 +178,24 @@ fn generate_client_method(
                     &self,
                     #(#path_params,)*
                     form: #form_builder,
+                ) -> Result<#response_type, ::ras_transport_core::TransportError> {
+                    self.#method_name_with_optional_timeout(#(#path_args,)* form, None).await
+                }
+
+                pub async fn #method_name_with_timeout(
+                    &self,
+                    #(#path_params,)*
+                    form: #form_builder,
+                    timeout: ::std::time::Duration,
+                ) -> Result<#response_type, ::ras_transport_core::TransportError> {
+                    self.#method_name_with_optional_timeout(#(#path_args,)* form, Some(timeout)).await
+                }
+
+                async fn #method_name_with_optional_timeout(
+                    &self,
+                    #(#path_params,)*
+                    form: #form_builder,
+                    timeout: Option<::std::time::Duration>,
                 ) -> Result<#response_type, ::ras_transport_core::TransportError> {
                     let path = #full_path.to_string()#(#path_replace)*;
                     let (url, mut headers) = self.build_request(&path)?;
@@ -188,8 +212,7 @@ fn generate_client_method(
                     .body(body);
                     request.headers = headers;
 
-                    #[cfg(not(target_arch = "wasm32"))]
-                    if let Some(timeout) = self.default_timeout {
+                    if let Some(timeout) = timeout.or(self.default_timeout) {
                         request = request.timeout(timeout);
                     }
 
@@ -203,6 +226,22 @@ fn generate_client_method(
                 &self,
                 #(#path_params,)*
             ) -> Result<::ras_transport_core::TransportResponse, ::ras_transport_core::TransportError> {
+                self.#method_name_with_optional_timeout(#(#path_args,)* None).await
+            }
+
+            pub async fn #method_name_with_timeout(
+                &self,
+                #(#path_params,)*
+                timeout: ::std::time::Duration,
+            ) -> Result<::ras_transport_core::TransportResponse, ::ras_transport_core::TransportError> {
+                self.#method_name_with_optional_timeout(#(#path_args,)* Some(timeout)).await
+            }
+
+            async fn #method_name_with_optional_timeout(
+                &self,
+                #(#path_params,)*
+                timeout: Option<::std::time::Duration>,
+            ) -> Result<::ras_transport_core::TransportResponse, ::ras_transport_core::TransportError> {
                 let path = #full_path.to_string()#(#path_replace)*;
                 let (url, headers) = self.build_request(&path)?;
 
@@ -212,8 +251,7 @@ fn generate_client_method(
                 );
                 request.headers = headers;
 
-                #[cfg(not(target_arch = "wasm32"))]
-                if let Some(timeout) = self.default_timeout {
+                if let Some(timeout) = timeout.or(self.default_timeout) {
                     request = request.timeout(timeout);
                 }
 

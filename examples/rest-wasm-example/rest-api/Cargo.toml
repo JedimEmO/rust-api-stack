@@ -46,4 +46,4 @@ server = [
     "dep:axum-extra",
     "dep:tokio",
 ]
-client = ["ras-rest-macro/client", "ras-transport-core/reqwest"]
+client = ["ras-rest-macro/reqwest", "ras-transport-core/reqwest"]

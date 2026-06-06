@@ -13,7 +13,7 @@ readme = "README.md"
 [features]
 default = ["server"]
 server = ["ras-rest-macro/server"]
-client = ["ras-rest-macro/client", "ras-transport-core/reqwest"]
+client = ["ras-rest-macro/reqwest", "ras-transport-core/reqwest"]
 
 [dependencies]
 anyhow = { workspace = true }

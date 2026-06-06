@@ -57,6 +57,22 @@ pub fn generate_client_code(service_def: &ServiceDefinition) -> proc_macro2::Tok
         .iter()
         .flat_map(generate_client_methods_with_timeout_for_endpoint);
 
+    let build_method = if cfg!(feature = "reqwest") {
+        quote! {
+            /// Build the client using the default `ReqwestTransport`.
+            ///
+            /// # Errors
+            ///
+            /// Returns an error if the underlying transport fails to construct.
+            pub fn build(self) -> Result<#client_name, Box<dyn std::error::Error + Send + Sync>> {
+                let transport = std::sync::Arc::new(::ras_transport_core::ReqwestTransport::new());
+                self.build_with_transport(transport)
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     let output = quote! {
         /// Helper function to join URL segments properly
         fn join_url_segments(base: &str, path: &str) -> String {
@@ -100,15 +116,7 @@ pub fn generate_client_code(service_def: &ServiceDefinition) -> proc_macro2::Tok
                 self
             }
 
-            /// Build the client using the default `ReqwestTransport`.
-            ///
-            /// # Errors
-            ///
-            /// Returns an error if the underlying transport fails to construct.
-            pub fn build(self) -> Result<#client_name, Box<dyn std::error::Error + Send + Sync>> {
-                let transport = std::sync::Arc::new(::ras_transport_core::ReqwestTransport::new());
-                self.build_with_transport(transport)
-            }
+            #build_method
 
             /// Build the client over an explicit transport (e.g. an in-process
             /// test transport). This is the injection point used by tests.
@@ -261,12 +269,13 @@ fn generate_client_method(
         call_args.push(quote! { body });
     }
 
-    let method_name_with_timeout = quote::format_ident!("{}_with_timeout", method_name);
+    let method_name_with_optional_timeout =
+        quote::format_ident!("__ras_{}_with_optional_timeout", method_name);
 
     quote! {
         /// Call the #method_name endpoint
         pub async fn #method_name(&self, #(#params),*) -> Result<#response_type, ::ras_transport_core::TransportError> {
-            self.#method_name_with_timeout(#(#call_args,)* None).await
+            self.#method_name_with_optional_timeout(#(#call_args,)* None).await
         }
     }
 }
@@ -282,6 +291,8 @@ fn generate_client_method_with_timeout(
     response_type: &Type,
 ) -> proc_macro2::TokenStream {
     let method_name_with_timeout = quote::format_ident!("{}_with_timeout", method_name);
+    let method_name_with_optional_timeout =
+        quote::format_ident!("__ras_{}_with_optional_timeout", method_name);
     let http_method = match method {
         HttpMethod::Get => quote! { ::ras_transport_core::http::Method::GET },
         HttpMethod::Post => quote! { ::ras_transport_core::http::Method::POST },
@@ -293,7 +304,7 @@ fn generate_client_method_with_timeout(
     // Build function parameters
     let mut params = Vec::new();
     let mut path_substitutions = Vec::new();
-    let mut param_names = Vec::new();
+    let mut call_args = Vec::new();
     // Build URL construction with proper joining
     let mut url_construction = quote! {
         join_url_segments(&join_url_segments(&self.server_url, &self.base_path), #path)
@@ -304,7 +315,7 @@ fn generate_client_method_with_timeout(
         let param_name = &path_param.name;
         let param_type = &path_param.param_type;
         params.push(quote! { #param_name: #param_type });
-        param_names.push(param_name);
+        call_args.push(quote! { #param_name });
 
         // Handle path parameter substitution. The value is percent-encoded for
         // a single path segment so a `/`, `?`, `#`, etc. in a caller-supplied
@@ -390,12 +401,14 @@ fn generate_client_method_with_timeout(
         let param_name = &query_param.name;
         let param_type = &query_param.param_type;
         params.push(quote! { #param_name: #param_type });
+        call_args.push(quote! { #param_name });
     }
 
     // Add request body parameter if present. The body is serialized to JSON
     // (which also sets `Content-Type: application/json`).
     let request_body_handling = if let Some(request_type) = request_type {
         params.push(quote! { body: #request_type });
+        call_args.push(quote! { body });
         quote! {
             __request = __request.json(&body)?;
         }
@@ -425,6 +438,14 @@ fn generate_client_method_with_timeout(
     quote! {
         /// Call the #method_name endpoint with a custom timeout
         pub async fn #method_name_with_timeout(
+            &self,
+            #(#params,)*
+            timeout: std::time::Duration
+        ) -> Result<#response_type, ::ras_transport_core::TransportError> {
+            self.#method_name_with_optional_timeout(#(#call_args,)* Some(timeout)).await
+        }
+
+        async fn #method_name_with_optional_timeout(
             &self,
             #(#params,)*
             timeout: Option<std::time::Duration>

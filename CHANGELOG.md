@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed - 2026-06-06
+- REST, JSON-RPC, and file generated-client APIs are now consistent: builders take the URL at construction, auth state is cloned, `build_with_transport(...)` is always available for generated clients, public timeout variants take `Duration`, and default reqwest-backed `build()` is emitted only when the macro crate's `reqwest` feature is enabled.
+- Macro client features now distinguish transport-injected clients from default reqwest clients: `client` emits generated clients using `ras-transport-core`, while `reqwest` enables the default `ReqwestTransport` constructor.
+- Documentation now describes the `client`/`reqwest` split, direct `ras-transport-core` dependency requirements for generated client consumers, and native file-client `fs` helpers.
+
 ### Changed - 2026-05-24
 - Specification types crate now uses the `ras-openrpc-types` package name and `ras_openrpc_types` import path.
 - Package metadata, clone instructions, and documentation links now point to the moved `rust-api-stack` repository.

@@ -54,7 +54,7 @@ server = [
     "dep:serde_json",
 ]
 client = [
-    "ras-file-macro/client",
+    "ras-file-macro/reqwest",
     "ras-transport-core/reqwest",
 ]
 fs = ["ras-file-macro/fs", "ras-transport-core/fs", "dep:tokio", "dep:tokio-util"]

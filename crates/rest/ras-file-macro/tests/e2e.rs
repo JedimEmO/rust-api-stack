@@ -221,7 +221,9 @@ fn demo_server_arc(service: DemoImpl) -> Arc<TestServer> {
 }
 
 fn demo_client(server: Arc<TestServer>) -> DemoClient {
-    DemoClient::builder("http://test.local").build_with_transport(axum_transport(server))
+    DemoClient::builder("http://test.local")
+        .build_with_transport(axum_transport(server))
+        .expect("build DemoClient over AxumTestTransport")
 }
 
 #[tokio::test]
@@ -229,7 +231,7 @@ async fn upload_and_download_round_trips_declared_multipart_fields() {
     let service = DemoImpl::new();
     let storage = service.storage.clone();
     let server = demo_server_arc(service);
-    let client = demo_client(server);
+    let mut client = demo_client(server);
     client.set_bearer_token(Some("user-token"));
 
     let payload = b"streamed file".to_vec();
@@ -280,7 +282,7 @@ async fn upload_streams_file_part_from_disk_round_trips() {
     let service = DemoImpl::new();
     let storage = service.storage.clone();
     let server = demo_server_arc(service);
-    let client = demo_client(server);
+    let mut client = demo_client(server);
     client.set_bearer_token(Some("user-token"));
 
     // Write a temp file that the generated streaming `file(path, ...)` method
@@ -321,6 +323,43 @@ async fn upload_streams_file_part_from_disk_round_trips() {
     assert_eq!(downloaded.as_ref(), payload.as_slice());
 
     drop(temp);
+}
+
+#[tokio::test]
+async fn generated_file_client_timeout_variants_round_trip() {
+    let service = DemoImpl::new();
+    let storage = service.storage.clone();
+    let server = demo_server_arc(service);
+    let mut client = demo_client(server);
+    client.set_bearer_token(Some("user-token"));
+
+    let payload = b"timeout upload".to_vec();
+    let metadata = UploadMetadata {
+        title: "timeout".to_string(),
+    };
+    let form = DemoUploadMultipart::new()
+        .file_bytes(
+            payload.clone(),
+            "timeout.bin",
+            Some("application/octet-stream"),
+        )
+        .expect("file part")
+        .metadata(&metadata)
+        .expect("json part");
+
+    let uploaded = client
+        .upload_with_timeout(form, std::time::Duration::from_secs(1))
+        .await
+        .expect("upload_with_timeout succeeds");
+    assert_eq!(uploaded.size, payload.len() as u64);
+    assert_eq!(storage.lock().unwrap().len(), 1);
+
+    let response = client
+        .download_by_file_id_with_timeout(uploaded.file_id, std::time::Duration::from_secs(1))
+        .await
+        .expect("download_by_file_id_with_timeout succeeds");
+    let downloaded = response.bytes().await.expect("download body");
+    assert_eq!(downloaded.as_ref(), payload.as_slice());
 }
 
 #[tokio::test]

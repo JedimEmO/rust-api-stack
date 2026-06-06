@@ -20,7 +20,7 @@ server = [
 ]
 client = [
     "ras-jsonrpc-bidirectional-macro/client",
-    "ras-rest-macro/client",
+    "ras-rest-macro/reqwest",
     "ras-transport-core/reqwest",
     "dep:ras-jsonrpc-bidirectional-client",
 ]

@@ -401,6 +401,24 @@ async fn query_params_required_and_optional_serialize_correctly() {
 }
 
 #[tokio::test]
+async fn generated_client_timeout_variant_accepts_duration() {
+    let client = client();
+
+    let resp = client
+        .get_search_with_timeout(
+            "timeout".to_string(),
+            Some(1),
+            false,
+            std::time::Duration::from_secs(1),
+        )
+        .await
+        .expect("get_search_with_timeout failed");
+
+    assert_eq!(resp.items.len(), 1);
+    assert_eq!(resp.items[0].name, "fuzzy:timeout-0");
+}
+
+#[tokio::test]
 async fn vec_query_params_serialize_as_repeated_keys() {
     // `Vec<T>` and `Option<Vec<T>>` query params must serialize as repeated
     // keys through the generated client.

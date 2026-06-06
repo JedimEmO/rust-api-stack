@@ -18,23 +18,29 @@ ras-jsonrpc-types = "0.1.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 schemars = "1.0.0-alpha.20"
+ras-transport-core = { version = "0.1.0", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ras-jsonrpc-core = { version = "0.1.2", optional = true }
 axum = { version = "0.8", optional = true }
 tokio = { version = "1.0", features = ["full"], optional = true }
-reqwest = { version = "0.12", features = ["json"], optional = true }
 
 [features]
 default = []
 server = ["ras-jsonrpc-macro/server", "dep:ras-jsonrpc-core", "dep:axum", "dep:tokio"]
-client = ["ras-jsonrpc-macro/client", "dep:reqwest"]
+client = ["ras-jsonrpc-macro/reqwest", "ras-transport-core/reqwest"]
 ```
 
 Server binaries then depend on `my-api` with `features = ["server"]`; clients
 depend on the same API crate with `features = ["client"]`. The generated code
 itself is selected by the `ras-jsonrpc-macro` features, not by generated
 consumer-crate cfg attributes.
+
+The macro crate's `client` feature emits the generated client types and
+`build_with_transport(...)`. Its `reqwest` feature also emits the default
+reqwest-backed `build()`. If a crate only injects a custom transport, forward
+`ras-jsonrpc-macro/client` plus `dep:ras-transport-core` instead of
+`ras-jsonrpc-macro/reqwest`.
 
 ## Define The Service
 
@@ -130,8 +136,7 @@ The generated client calls methods by their Rust names and sends the correct
 JSON-RPC wire method internally.
 
 ```rust,ignore
-let mut client = UserServiceClientBuilder::new()
-    .server_url("http://localhost:3000/rpc")
+let mut client = UserServiceClientBuilder::new("http://localhost:3000/rpc")
     .with_timeout(std::time::Duration::from_secs(10))
     .build()?;
 
@@ -155,9 +160,7 @@ For browser/WASM clients, use the same generated client with a browser URL and
 set the bearer token on a cloned client before protected calls:
 
 ```rust,ignore
-let client = UserServiceClientBuilder::new()
-    .server_url("/rpc")
-    .build()?;
+let client = UserServiceClientBuilder::new("/rpc").build()?;
 
 let mut authed = client.clone();
 authed.set_bearer_token(Some(token));

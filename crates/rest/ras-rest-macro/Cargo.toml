@@ -13,9 +13,10 @@ readme = "README.md"
 proc-macro = true
 
 [features]
-default = ["server", "client"]  # Enable server by default for backward compatibility
+default = ["server", "reqwest"]
 server = ["axum", "ras-auth-core", "ras-rest-core", "async-trait"]
-client = ["ras-transport-core/reqwest"]
+client = ["dep:ras-transport-core"]
+reqwest = ["client", "ras-transport-core/reqwest"]
 permissions = []
 
 [dependencies]
