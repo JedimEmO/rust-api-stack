@@ -1,0 +1,45 @@
+[package]
+name = "ras-transport-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "HTTP transport abstraction for generated Rust Agent Stack clients (production reqwest + in-process axum-test transports)"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-api-stack"
+homepage = "https://github.com/JedimEmO/rust-api-stack"
+readme = "README.md"
+
+[dependencies]
+async-trait = { workspace = true }
+bytes = { workspace = true }
+getrandom = "0.2"
+futures-core = { workspace = true }
+futures-util = { workspace = true }
+http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_urlencoded = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+reqwest = { workspace = true, optional = true }
+axum-test = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+tokio-util = { workspace = true, optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json"], optional = true }
+# `js` lets `getrandom` source entropy from the browser crypto API on wasm.
+getrandom = { version = "0.2", features = ["js"] }
+
+[dev-dependencies]
+tokio = { workspace = true }
+futures-util = { workspace = true }
+axum = { workspace = true }
+serde = { workspace = true }
+
+[features]
+default = []
+reqwest = ["dep:reqwest"]
+fs = ["dep:tokio", "dep:tokio-util"]
+axum-test = ["dep:axum-test"]

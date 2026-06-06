@@ -16,13 +16,13 @@ mod support;
 use support::{MockAuthProvider, mock_http_server};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct AddRequest {
+pub struct AddRequest {
     a: i64,
     b: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct AddResponse {
+pub struct AddResponse {
     sum: i64,
 }
 

@@ -13,15 +13,15 @@ readme = "README.md"
 [features]
 default = []
 server = ["ras-jsonrpc-macro/server", "dep:axum", "dep:ras-jsonrpc-core"]
-client = ["ras-jsonrpc-macro/client", "dep:reqwest"]
+client = ["ras-jsonrpc-macro/reqwest", "ras-transport-core/reqwest"]
 
 [dependencies]
 ras-jsonrpc-macro = { path = "../../../crates/rpc/ras-jsonrpc-macro", version = "0.2.0", default-features = false, features = ["permissions"] }
 ras-jsonrpc-core = { path = "../../../crates/rpc/ras-jsonrpc-core", version = "0.1.2", optional = true }
+ras-transport-core = { path = "../../../crates/core/ras-transport-core", version = "0.1.0" }
 ras-jsonrpc-types = { path = "../../../crates/rpc/ras-jsonrpc-types", version = "0.1.1" }
 ras-permission-manifest = { path = "../../../crates/specs/ras-permission-manifest", version = "0.1.0" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 schemars = { workspace = true }
 axum = { workspace = true, optional = true }
-reqwest = { workspace = true, optional = true }

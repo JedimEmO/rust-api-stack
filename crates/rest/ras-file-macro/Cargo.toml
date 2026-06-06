@@ -13,9 +13,14 @@ readme = "README.md"
 proc-macro = true
 
 [features]
-default = ["server", "client"]
+default = ["server", "reqwest"]
 server = []
-client = []
+client = ["dep:ras-transport-core"]
+reqwest = ["client", "ras-transport-core/reqwest"]
+# Enables generated streaming file-upload helpers (native only). Disk streaming
+# is implemented by `ras-transport-core`, so generated-client consumers do not
+# need direct Tokio stream dependencies for this helper.
+fs = ["client", "ras-transport-core/fs"]
 permissions = []
 
 [dependencies]
@@ -24,17 +29,23 @@ quote = { workspace = true }
 proc-macro2 = { workspace = true }
 schemars = { workspace = true }
 serde_json = { workspace = true }
+# Proc-macro crates can't re-export runtime deps. Consumers of generated client
+# code must depend on `ras-transport-core` directly too.
+ras-transport-core = { path = "../../core/ras-transport-core", version = "0.1.0", default-features = false, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true }
+futures-util = { workspace = true }
 axum = { workspace = true }
-reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 ras-auth-core = { path = "../../core/ras-auth-core", version = "0.1.0" }
 ras-file-core = { path = "../ras-file-core", version = "0.1.0" }
 ras-permission-manifest = { path = "../../specs/ras-permission-manifest", version = "0.1.0" }
+# Generated-client tests drive the client over the in-process AxumTestTransport,
+# and the default `build()` path needs the reqwest transport to compile.
+ras-transport-core = { path = "../../core/ras-transport-core", version = "0.1.0", features = ["reqwest", "axum-test", "fs"] }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 axum-test = { workspace = true }

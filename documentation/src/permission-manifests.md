@@ -33,7 +33,7 @@ forward to the macro crate:
 ```toml
 [features]
 server = ["ras-rest-macro/server", "dep:axum", "dep:ras-rest-core"]
-client = ["ras-rest-macro/client", "dep:reqwest"]
+client = ["ras-rest-macro/reqwest", "ras-transport-core/reqwest"]
 ```
 
 Server build scripts then depend on the API crate feature that makes the

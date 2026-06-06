@@ -3,12 +3,12 @@ use serde::{Deserialize, Serialize};
 
 // Test types
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-struct TestRequest {
+pub struct TestRequest {
     data: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-struct TestResponse {
+pub struct TestResponse {
     result: String,
 }
 

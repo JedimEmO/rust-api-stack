@@ -18,17 +18,13 @@ ras-file-core = { version = "0.1.0", optional = true }
 ras-auth-core = { version = "0.1.0", optional = true }
 serde = { version = "1.0", features = ["derive"] }
 async-trait = { version = "0.1", optional = true }
+ras-transport-core = { version = "0.1.0", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 axum = { version = "0.8", optional = true }
-reqwest = { version = "0.12", optional = true }
 tokio = { version = "1.0", optional = true }
-tokio-util = { version = "0.7", optional = true }
 schemars = { version = "1.0.0-alpha.20", optional = true }
 serde_json = { version = "1.0", optional = true }
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["json", "multipart"], optional = true }
 
 [features]
 default = []
@@ -41,13 +37,23 @@ server = [
     "dep:schemars",
     "dep:serde_json",
 ]
-client = ["ras-file-macro/client", "dep:reqwest", "dep:tokio", "dep:tokio-util"]
+client = ["ras-file-macro/reqwest", "ras-transport-core/reqwest"]
+fs = ["ras-file-macro/fs", "ras-transport-core/fs"]
 ```
 
 Server crates depend on the API crate with `features = ["server"]`. Native and
 browser clients depend on the same API crate with `features = ["client"]`.
-Those API-crate features forward to `ras-file-macro/server` and
-`ras-file-macro/client`; the macro emits only the selected generated surfaces.
+Those API-crate features forward to the relevant macro crate features; the
+macro emits only the selected generated surfaces.
+
+Enable `fs` as well for native generated-client helpers that stream file parts
+from disk.
+
+The macro crate's `client` feature emits the generated client types and
+`build_with_transport(...)`. Its `reqwest` feature also emits the default
+reqwest-backed `build()`. If a crate only injects a custom transport, forward
+`ras-file-macro/client` plus `dep:ras-transport-core` instead of
+`ras-file-macro/reqwest`.
 
 ## Define The Service
 
@@ -202,11 +208,11 @@ Enable it through the API crate dependency:
 
 ```toml
 [dependencies]
-document-api = { path = "../file-service-api", default-features = false, features = ["client"] }
+document-api = { path = "../file-service-api", default-features = false, features = ["client", "fs"] }
 ```
 
 ```rust,ignore
-let client = DocumentServiceClient::builder("http://localhost:3000")
+let mut client = DocumentServiceClient::builder("http://localhost:3000")
     .with_timeout(std::time::Duration::from_secs(30))
     .build()?;
 

@@ -5,12 +5,12 @@ mod tests {
 
     // Test types
     #[derive(Serialize, Deserialize, Debug)]
-    struct TestRequest {
+    pub struct TestRequest {
         value: String,
     }
 
     #[derive(Serialize, Deserialize, Debug)]
-    struct TestResponse {
+    pub struct TestResponse {
         result: String,
     }
 

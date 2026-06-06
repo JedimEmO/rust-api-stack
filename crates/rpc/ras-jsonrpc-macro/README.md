@@ -34,27 +34,29 @@ ras-jsonrpc-types = "0.1.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 schemars = "1.0.0-alpha.20"
+ras-transport-core = { version = "0.1.0", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 axum = { version = "0.8", optional = true }
 tokio = { version = "1.0", features = ["full"], optional = true }
-reqwest = { version = "0.12", features = ["json"], optional = true }
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["json"], optional = true }
 
 [features]
 default = []
 server = [
+    "ras-jsonrpc-macro/server",
     "dep:ras-jsonrpc-core",
     "dep:axum",
     "dep:tokio",
 ]
-client = ["dep:reqwest"]
+client = ["ras-jsonrpc-macro/reqwest", "ras-transport-core/reqwest"]
 ```
 
 Define `server` and `client` on the API crate that invokes the macro. Downstream
 server and client crates enable the API crate feature they need.
+
+The macro crate's `client` feature emits generated clients with
+`build_with_transport(...)`; its `reqwest` feature also emits the default
+reqwest-backed `build()`.
 
 ## Quick Start
 

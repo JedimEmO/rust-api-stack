@@ -18,11 +18,23 @@ pub fn generate_client_code(service_def: &ServiceDefinition) -> proc_macro2::Tok
         .iter()
         .flat_map(generate_client_methods_with_timeout_for_method);
 
+    let build_method = if cfg!(feature = "reqwest") {
+        quote! {
+            /// Build the client using the default `ReqwestTransport`.
+            pub fn build(self) -> Result<#client_name, Box<dyn std::error::Error + Send + Sync>> {
+                let transport = std::sync::Arc::new(::ras_transport_core::ReqwestTransport::new());
+                self.build_with_transport(transport)
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     let output = quote! {
         /// Generated client for the JSON-RPC service
         #[derive(Clone)]
         pub struct #client_name {
-            client: reqwest::Client,
+            transport: std::sync::Arc<dyn ::ras_transport_core::HttpTransport>,
             server_url: String,
             bearer_token: Option<String>,
             default_timeout: Option<std::time::Duration>,
@@ -30,23 +42,17 @@ pub fn generate_client_code(service_def: &ServiceDefinition) -> proc_macro2::Tok
 
         /// Builder for the JSON-RPC client
         pub struct #client_builder_name {
-            server_url: Option<String>,
+            server_url: String,
             timeout: Option<std::time::Duration>,
         }
 
         impl #client_builder_name {
-            /// Create a new client builder
-            pub fn new() -> Self {
+            /// Create a new client builder with the required server URL
+            pub fn new(server_url: impl Into<String>) -> Self {
                 Self {
-                    server_url: None,
+                    server_url: server_url.into(),
                     timeout: None,
                 }
-            }
-
-            /// Set the server URL
-            pub fn server_url(mut self, url: impl Into<String>) -> Self {
-                self.server_url = Some(url.into());
-                self
             }
 
             /// Set the default timeout for requests
@@ -55,22 +61,17 @@ pub fn generate_client_code(service_def: &ServiceDefinition) -> proc_macro2::Tok
                 self
             }
 
-            /// Build the client
-            pub fn build(self) -> Result<#client_name, Box<dyn std::error::Error + Send + Sync>> {
-                let server_url = self.server_url.ok_or("Server URL is required")?;
+            #build_method
 
-                let mut client_builder = reqwest::Client::builder();
-
-                #[cfg(not(target_arch = "wasm32"))]
-                if let Some(timeout) = self.timeout {
-                    client_builder = client_builder.timeout(timeout);
-                }
-
-                let client = client_builder.build()?;
-
+            /// Build the client over an explicit transport (e.g. an in-process
+            /// test transport). This is the injection point used by tests.
+            pub fn build_with_transport(
+                self,
+                transport: std::sync::Arc<dyn ::ras_transport_core::HttpTransport>,
+            ) -> Result<#client_name, Box<dyn std::error::Error + Send + Sync>> {
                 Ok(#client_name {
-                    client,
-                    server_url,
+                    transport,
+                    server_url: self.server_url,
                     bearer_token: None,
                     default_timeout: self.timeout,
                 })
@@ -81,6 +82,11 @@ pub fn generate_client_code(service_def: &ServiceDefinition) -> proc_macro2::Tok
             /// Set the bearer token for authentication
             pub fn set_bearer_token(&mut self, token: Option<impl Into<String>>) {
                 self.bearer_token = token.map(|t| t.into());
+            }
+
+            /// Create a new client builder
+            pub fn builder(server_url: impl Into<String>) -> #client_builder_name {
+                #client_builder_name::new(server_url)
             }
 
             /// Get a reference to the bearer token
@@ -97,7 +103,7 @@ pub fn generate_client_code(service_def: &ServiceDefinition) -> proc_macro2::Tok
                 method: &str,
                 params: T,
                 timeout: Option<std::time::Duration>,
-            ) -> Result<R, Box<dyn std::error::Error + Send + Sync>>
+            ) -> Result<R, ::ras_transport_core::TransportError>
             where
                 T: serde::Serialize,
                 R: serde::de::DeserializeOwned,
@@ -109,35 +115,69 @@ pub fn generate_client_code(service_def: &ServiceDefinition) -> proc_macro2::Tok
                     "id": 1
                 });
 
-                let mut request_builder = self.client
-                    .post(&self.server_url)
-                    .header("Content-Type", "application/json")
-                    .json(&request_body);
+                let mut request = ::ras_transport_core::TransportRequest::new(
+                    ::ras_transport_core::http::Method::POST,
+                    self.server_url.clone(),
+                )
+                .json(&request_body)?;
 
                 // Add bearer token if available
                 if let Some(token) = &self.bearer_token {
-                    request_builder = request_builder.header("Authorization", format!("Bearer {}", token));
+                    request = request.bearer(token)?;
                 }
 
-                // Override timeout if provided (not supported in WASM)
-                #[cfg(not(target_arch = "wasm32"))]
-                if let Some(timeout) = timeout {
-                    request_builder = request_builder.timeout(timeout);
+                // Apply per-call timeout, falling back to the client default.
+                if let Some(timeout) = timeout.or(self.default_timeout) {
+                    request = request.timeout(timeout);
                 }
 
-                let response = request_builder.send().await?;
-                let json_response: serde_json::Value = response.json().await?;
+                // The transport is a dumb pipe and never inspects status. For
+                // JSON-RPC, error detail lives in the body even on non-2xx
+                // responses (auth/permission failures map to 401/403 but still
+                // carry a JSON-RPC error envelope), so parse the body first and
+                // only fall back to the HTTP status when the body is not a
+                // well-formed JSON-RPC response.
+                let response = self.transport.execute(request).await?;
+                let status = response.status();
+                let body = response.bytes().await?;
+
+                let json_response: serde_json::Value = match serde_json::from_slice(&body) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        if status.is_success() {
+                            return Err(::ras_transport_core::TransportError::Deserialize(err));
+                        }
+                        let text = String::from_utf8_lossy(&body).into_owned();
+                        return Err(::ras_transport_core::TransportError::http_status(status, text));
+                    }
+                };
 
                 // Check for JSON-RPC error
                 if let Some(error) = json_response.get("error") {
-                    return Err(format!("JSON-RPC error: {}", error).into());
+                    let code = error.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
+                    let message = error
+                        .get("message")
+                        .and_then(|m| m.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| error.to_string());
+                    return Err(::ras_transport_core::TransportError::JsonRpc { code, message });
+                }
+
+                // No JSON-RPC error: surface any non-success HTTP status.
+                if !status.is_success() {
+                    let text = String::from_utf8_lossy(&body).into_owned();
+                    return Err(::ras_transport_core::TransportError::http_status(status, text));
                 }
 
                 // Extract result
-                let result = json_response.get("result")
-                    .ok_or("Missing result in JSON-RPC response")?;
+                let result = json_response.get("result").ok_or_else(|| {
+                    ::ras_transport_core::TransportError::Body(
+                        "Missing result in JSON-RPC response".to_string(),
+                    )
+                })?;
 
-                let deserialized_result: R = serde_json::from_value(result.clone())?;
+                let deserialized_result: R = serde_json::from_value(result.clone())
+                    .map_err(::ras_transport_core::TransportError::Deserialize)?;
                 Ok(deserialized_result)
             }
         }
@@ -237,7 +277,7 @@ fn generate_client_method(
 ) -> proc_macro2::TokenStream {
     quote! {
         /// Call the #method_name method
-        pub async fn #method_name(&self, params: #request_type) -> Result<#response_type, Box<dyn std::error::Error + Send + Sync>> {
+        pub async fn #method_name(&self, params: #request_type) -> Result<#response_type, ::ras_transport_core::TransportError> {
             self.make_request(#method_str, params, None).await
         }
     }
@@ -258,7 +298,7 @@ fn generate_client_method_with_timeout(
             &self,
             params: #request_type,
             timeout: std::time::Duration
-        ) -> Result<#response_type, Box<dyn std::error::Error + Send + Sync>> {
+        ) -> Result<#response_type, ::ras_transport_core::TransportError> {
             self.make_request(#method_str, params, Some(timeout)).await
         }
     }

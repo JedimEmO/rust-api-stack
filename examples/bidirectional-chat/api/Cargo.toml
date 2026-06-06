@@ -20,7 +20,8 @@ server = [
 ]
 client = [
     "ras-jsonrpc-bidirectional-macro/client",
-    "ras-rest-macro/client",
+    "ras-rest-macro/reqwest",
+    "ras-transport-core/reqwest",
     "dep:ras-jsonrpc-bidirectional-client",
 ]
 
@@ -37,6 +38,7 @@ ras-jsonrpc-bidirectional-client = { path = "../../../crates/rpc/bidirectional/r
 ras-permission-manifest = { path = "../../../crates/specs/ras-permission-manifest", version = "0.1.0" }
 ras-auth-core = { path = "../../../crates/core/ras-auth-core", version = "0.1.0" }
 ras-rest-core = { path = "../../../crates/rest/ras-rest-core", version = "0.1.1" }
+ras-transport-core = { path = "../../../crates/core/ras-transport-core", version = "0.1.0" }
 ras-jsonrpc-types = { path = "../../../crates/rpc/ras-jsonrpc-types", version = "0.1.1" }
 ras-rest-macro = { path = "../../../crates/rest/ras-rest-macro", version = "0.2.1", default-features = false, features = ["permissions"] }
 reqwest = { workspace = true, features = ["json"] }

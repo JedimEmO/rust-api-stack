@@ -23,7 +23,7 @@ The runnable server is documented in [../server/README.md](../server/README.md),
 ## Features
 
 - `server` - enables generated server integration and Axum support.
-- `client` - enables the generated bidirectional client.
+- `client` - enables the generated bidirectional client and REST auth client with the default reqwest transport.
 - default: no generated transport code.
 
 ## Checks

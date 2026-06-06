@@ -16,6 +16,7 @@ crate-type = ["rlib"]
 [dependencies]
 ras-file-macro = { path = "../../../crates/rest/ras-file-macro", version = "0.1.0", default-features = false, features = ["permissions"] }
 ras-file-core = { path = "../../../crates/rest/ras-file-core", version = "0.1.0", optional = true }
+ras-transport-core = { path = "../../../crates/core/ras-transport-core", version = "0.1.0" }
 ras-auth-core = { path = "../../../crates/core/ras-auth-core", version = "0.1.0", optional = true }
 ras-permission-manifest = { path = "../../../crates/specs/ras-permission-manifest", version = "0.1.0" }
 serde = { workspace = true, features = ["derive"] }
@@ -53,9 +54,8 @@ server = [
     "dep:serde_json",
 ]
 client = [
-    "ras-file-macro/client",
-    "dep:reqwest",
-    "dep:tokio",
-    "dep:tokio-util",
+    "ras-file-macro/reqwest",
+    "ras-transport-core/reqwest",
 ]
+fs = ["ras-file-macro/fs", "ras-transport-core/fs", "dep:tokio", "dep:tokio-util"]
 wasm-client = ["client", "wasm-bindgen", "wasm-bindgen-futures", "js-sys", "web-sys", "serde-wasm-bindgen"]

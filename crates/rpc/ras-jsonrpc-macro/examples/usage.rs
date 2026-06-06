@@ -3,13 +3,13 @@ use ras_jsonrpc_macro::jsonrpc_service;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct SignInRequest {
+pub struct SignInRequest {
     email: String,
     password: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct SignInResponse {
+pub struct SignInResponse {
     jwt: String,
     user_id: String,
 }

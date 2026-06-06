@@ -1,6 +1,6 @@
 # OAuth2 Demo API
 
-Shared JSON-RPC API contract for the [OAuth2 demo](../README.md). This crate defines the service payloads and uses `ras-jsonrpc-macro` to generate the `GoogleOAuth2Service` server trait and OpenRPC document consumed by the demo server.
+Shared JSON-RPC API contract for the [OAuth2 demo](../README.md). This crate defines the service payloads and uses `ras-jsonrpc-macro` to generate the `GoogleOAuth2Service` server trait, optional reqwest-backed Rust client, and OpenRPC document consumed by the demo server.
 
 ## Generated Service
 

@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use axum::Router;
 use axum_test::TestServer;
@@ -49,4 +50,14 @@ pub fn mock_http_server(router: Router) -> TestServer {
         .mock_transport()
         .build(router)
         .expect("failed to start axum-test TestServer with in-memory transport")
+}
+
+#[allow(dead_code)]
+pub fn mock_http_server_arc(router: Router) -> Arc<TestServer> {
+    Arc::new(mock_http_server(router))
+}
+
+#[allow(dead_code)]
+pub fn axum_transport(server: Arc<TestServer>) -> Arc<dyn ras_transport_core::HttpTransport> {
+    Arc::new(ras_transport_core::AxumTestTransport::from_arc(server))
 }

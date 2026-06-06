@@ -5,23 +5,23 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    struct CreateUserRequest {
+    pub struct CreateUserRequest {
         username: String,
         email: String,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    struct CreateUserResponse {
+    pub struct CreateUserResponse {
         user_id: String,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    struct GetUserRequest {
+    pub struct GetUserRequest {
         user_id: String,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-    struct GetUserResponse {
+    pub struct GetUserResponse {
         user_id: String,
         username: String,
         email: String,

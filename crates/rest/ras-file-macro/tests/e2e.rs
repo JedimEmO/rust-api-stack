@@ -13,7 +13,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 mod support;
-use support::{MockAuthProvider, mock_http_server};
+use support::{MockAuthProvider, axum_transport, mock_http_server, mock_http_server_arc};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct UploadMetadata {
@@ -212,35 +212,56 @@ fn demo_server(service: DemoImpl) -> TestServer {
     )
 }
 
+fn demo_server_arc(service: DemoImpl) -> Arc<TestServer> {
+    mock_http_server_arc(
+        DemoBuilder::<DemoImpl, MockAuthProvider>::new(service)
+            .auth_provider(MockAuthProvider::default())
+            .build(),
+    )
+}
+
+fn demo_client(server: Arc<TestServer>) -> DemoClient {
+    DemoClient::builder("http://test.local")
+        .build_with_transport(axum_transport(server))
+        .expect("build DemoClient over AxumTestTransport")
+}
+
 #[tokio::test]
 async fn upload_and_download_round_trips_declared_multipart_fields() {
     let service = DemoImpl::new();
     let storage = service.storage.clone();
-    let server = mock_http_server(
-        DemoBuilder::<DemoImpl, MockAuthProvider>::new(service)
-            .auth_provider(MockAuthProvider::default())
-            .build(),
-    );
+    let server = demo_server_arc(service);
+    let mut client = demo_client(server);
+    client.set_bearer_token(Some("user-token"));
 
     let payload = b"streamed file".to_vec();
-    let response = server
-        .post("/files/upload")
-        .authorization_bearer("user-token")
-        .multipart(form(payload.clone()))
-        .await;
+    let metadata = UploadMetadata {
+        title: "demo".to_string(),
+    };
 
-    response.assert_status(StatusCode::CREATED);
-    let uploaded: UploadResponse = response.json();
+    let form = DemoUploadMultipart::new()
+        .file_bytes(
+            payload.clone(),
+            "blob.bin",
+            Some("application/octet-stream"),
+        )
+        .expect("file part")
+        .metadata(&metadata)
+        .expect("json part")
+        .comment("hello");
+
+    let uploaded: UploadResponse = client.upload(form).await.expect("upload succeeds");
     assert_eq!(uploaded.size, payload.len() as u64);
     assert_eq!(uploaded.title, "demo");
     assert_eq!(uploaded.comment.as_deref(), Some("hello"));
 
     assert_eq!(storage.lock().unwrap().len(), 1);
 
-    let response = server
-        .get(&format!("/files/download/{}", uploaded.file_id))
-        .await;
-    response.assert_status_ok();
+    let response = client
+        .download_by_file_id(uploaded.file_id.clone())
+        .await
+        .expect("download succeeds");
+    assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response.headers()["content-type"],
         "application/octet-stream"
@@ -249,7 +270,96 @@ async fn upload_and_download_round_trips_declared_multipart_fields() {
         response.headers()["content-disposition"],
         "attachment; filename=\"file-0.bin\""
     );
-    assert_eq!(response.into_bytes().as_ref(), payload.as_slice());
+    let downloaded = response.bytes().await.expect("download body");
+    assert_eq!(downloaded.as_ref(), payload.as_slice());
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "fs"))]
+#[tokio::test]
+async fn upload_streams_file_part_from_disk_round_trips() {
+    use std::io::Write as _;
+
+    let service = DemoImpl::new();
+    let storage = service.storage.clone();
+    let server = demo_server_arc(service);
+    let mut client = demo_client(server);
+    client.set_bearer_token(Some("user-token"));
+
+    // Write a temp file that the generated streaming `file(path, ...)` method
+    // (tokio::fs::File -> ReaderStream -> MultipartBuilder::stream_part) reads
+    // from disk. This is the only test that drives the from-disk streaming path.
+    let payload = b"streamed-from-disk file contents".to_vec();
+    let mut temp = tempfile::NamedTempFile::new().expect("create temp file");
+    temp.write_all(&payload).expect("write temp file");
+    temp.flush().expect("flush temp file");
+    let path = temp.path().to_path_buf();
+
+    let metadata = UploadMetadata {
+        title: "demo".to_string(),
+    };
+
+    let form = DemoUploadMultipart::new()
+        .file(&path, Some("blob.bin"), Some("application/octet-stream"))
+        .await
+        .expect("streaming file part from disk")
+        .metadata(&metadata)
+        .expect("json part")
+        .comment("hello");
+
+    let uploaded: UploadResponse = client.upload(form).await.expect("upload succeeds");
+    assert_eq!(uploaded.size, payload.len() as u64);
+    assert_eq!(uploaded.title, "demo");
+    assert_eq!(uploaded.comment.as_deref(), Some("hello"));
+
+    assert_eq!(storage.lock().unwrap().len(), 1);
+
+    // Verify the exact bytes survived the from-disk streaming multipart framing.
+    let response = client
+        .download_by_file_id(uploaded.file_id.clone())
+        .await
+        .expect("download succeeds");
+    assert_eq!(response.status(), StatusCode::OK);
+    let downloaded = response.bytes().await.expect("download body");
+    assert_eq!(downloaded.as_ref(), payload.as_slice());
+
+    drop(temp);
+}
+
+#[tokio::test]
+async fn generated_file_client_timeout_variants_round_trip() {
+    let service = DemoImpl::new();
+    let storage = service.storage.clone();
+    let server = demo_server_arc(service);
+    let mut client = demo_client(server);
+    client.set_bearer_token(Some("user-token"));
+
+    let payload = b"timeout upload".to_vec();
+    let metadata = UploadMetadata {
+        title: "timeout".to_string(),
+    };
+    let form = DemoUploadMultipart::new()
+        .file_bytes(
+            payload.clone(),
+            "timeout.bin",
+            Some("application/octet-stream"),
+        )
+        .expect("file part")
+        .metadata(&metadata)
+        .expect("json part");
+
+    let uploaded = client
+        .upload_with_timeout(form, std::time::Duration::from_secs(1))
+        .await
+        .expect("upload_with_timeout succeeds");
+    assert_eq!(uploaded.size, payload.len() as u64);
+    assert_eq!(storage.lock().unwrap().len(), 1);
+
+    let response = client
+        .download_by_file_id_with_timeout(uploaded.file_id, std::time::Duration::from_secs(1))
+        .await
+        .expect("download_by_file_id_with_timeout succeeds");
+    let downloaded = response.bytes().await.expect("download body");
+    assert_eq!(downloaded.as_ref(), payload.as_slice());
 }
 
 #[tokio::test]
@@ -267,7 +377,7 @@ fn generated_client_multipart_builder_covers_declared_parts() {
         title: "demo".to_string(),
     };
 
-    let form = DemoUploadMultipart::new()
+    let (body, content_type) = DemoUploadMultipart::new()
         .file_bytes(
             b"body".to_vec(),
             "blob.bin",
@@ -277,9 +387,13 @@ fn generated_client_multipart_builder_covers_declared_parts() {
         .metadata(&metadata)
         .expect("json part")
         .comment("hello")
-        .into_form();
+        .into_body();
 
-    let _ = form;
+    assert!(content_type.starts_with("multipart/form-data; boundary="));
+    match body {
+        ras_transport_core::RequestBody::Stream(_) => {}
+        other => panic!("expected streaming multipart body, got {other:?}"),
+    }
 }
 
 #[tokio::test]

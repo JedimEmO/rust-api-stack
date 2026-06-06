@@ -19,7 +19,7 @@ The service declaration in `src/lib.rs` generates:
 ## Features
 
 - `server`: enables generated server-side types and router integration
-- `client`: enables generated Rust client helpers
+- `client`: enables generated Rust client helpers with the default reqwest transport
 - default: no generated server or client transport code
 
 ## Checks

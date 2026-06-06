@@ -107,8 +107,7 @@ pub trait AuthProvider: Send + Sync + 'static {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
-    use std::sync::Arc;
-    use std::task::{Context, Poll, Wake, Waker};
+    use std::task::{Context, Poll, Waker};
 
     use serde_json::json;
 
@@ -140,14 +139,8 @@ mod tests {
         }
     }
 
-    struct NoopWaker;
-
-    impl Wake for NoopWaker {
-        fn wake(self: Arc<Self>) {}
-    }
-
     fn poll_auth_future(mut future: AuthFuture<'_>) -> AuthResult {
-        let waker = Waker::from(Arc::new(NoopWaker));
+        let waker = Waker::noop().clone();
         let mut context = Context::from_waker(&waker);
 
         match future.as_mut().poll(&mut context) {

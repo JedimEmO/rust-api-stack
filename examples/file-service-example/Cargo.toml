@@ -13,7 +13,8 @@ readme = "README.md"
 [features]
 default = ["server"]
 server = ["ras-file-macro/server"]
-client = ["ras-file-macro/client"]
+client = ["ras-file-macro/reqwest", "ras-transport-core/reqwest"]
+fs = ["ras-file-macro/fs", "ras-transport-core/fs"]
 
 [dependencies]
 axum = { workspace = true }
@@ -22,6 +23,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 ras-file-macro = { path = "../../crates/rest/ras-file-macro", version = "0.1.0", default-features = false }
 ras-file-core = { path = "../../crates/rest/ras-file-core", version = "0.1.0" }
+ras-transport-core = { path = "../../crates/core/ras-transport-core", version = "0.1.0" }
 ras-auth-core = { path = "../../crates/core/ras-auth-core", version = "0.1.0" }
 ras-permission-manifest = { path = "../../crates/specs/ras-permission-manifest", version = "0.1.0" }
 thiserror = { workspace = true }

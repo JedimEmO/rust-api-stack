@@ -13,6 +13,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 schemars = "1.0.0-alpha.20"
 async-trait = { version = "0.1", optional = true }
+ras-transport-core = { version = "0.1.0", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ras-rest-core = { version = "0.1.1", optional = true }
@@ -20,7 +21,6 @@ ras-auth-core = { version = "0.1.0", optional = true }
 axum = { version = "0.8", optional = true }
 axum-extra = { version = "0.10", features = ["query"], optional = true }
 tokio = { version = "1.0", features = ["full"], optional = true }
-reqwest = { version = "0.12", features = ["json"], optional = true }
 
 [features]
 default = []
@@ -33,7 +33,7 @@ server = [
     "dep:axum-extra",
     "dep:tokio",
 ]
-client = ["ras-rest-macro/client", "dep:reqwest"]
+client = ["ras-rest-macro/reqwest", "ras-transport-core/reqwest"]
 ```
 
 These API-crate features are forwarding gates. They enable the relevant macro
@@ -46,6 +46,12 @@ A backend depends on the API crate with `features = ["server"]`; a Rust client
 or WASM crate depends on the same crate with `features = ["client"]`. If one
 crate should always expose both surfaces, enable `server` and `client` directly
 on the `ras-rest-macro` dependency and make the runtime dependencies non-optional.
+
+The macro crate's `client` feature emits the generated client types and
+`build_with_transport(...)`. Its `reqwest` feature also emits the default
+reqwest-backed `build()`. If a crate only injects a custom transport, forward
+`ras-rest-macro/client` plus `dep:ras-transport-core` instead of
+`ras-rest-macro/reqwest`.
 
 ## Define The Service
 

@@ -13,9 +13,10 @@ readme = "README.md"
 proc-macro = true
 
 [features]
-default = ["server", "client"]  # Enable server by default for backward compatibility
+default = ["server", "reqwest"]
 server = ["axum", "ras-auth-core", "ras-rest-core", "async-trait"]
-client = ["reqwest"]
+client = ["dep:ras-transport-core"]
+reqwest = ["client", "ras-transport-core/reqwest"]
 permissions = []
 
 [dependencies]
@@ -32,11 +33,12 @@ ras-rest-core = { path = "../ras-rest-core", version = "0.1.1", optional = true 
 async-trait = { workspace = true, optional = true }
 
 # Client dependencies
-reqwest = { workspace = true, optional = true }
+ras-transport-core = { path = "../../core/ras-transport-core", version = "0.1.0", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
-reqwest = { workspace = true }
+bytes = { workspace = true }
+ras-transport-core = { path = "../../core/ras-transport-core", version = "0.1.0", features = ["axum-test"] }
 tower = { workspace = true }
 rand = { workspace = true }
 ras-identity-session = { path = "../../identity/ras-identity-session", version = "0.2.0" }

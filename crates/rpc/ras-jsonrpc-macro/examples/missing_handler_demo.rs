@@ -6,13 +6,13 @@ use serde::{Deserialize, Serialize};
 
 // Example types
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-struct CalculateRequest {
+pub struct CalculateRequest {
     a: i32,
     b: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-struct CalculateResponse {
+pub struct CalculateResponse {
     result: i32,
 }
 

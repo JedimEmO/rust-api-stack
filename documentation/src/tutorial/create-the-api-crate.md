@@ -21,6 +21,7 @@ serde = { version = "1.0", features = ["derive"] }
 schemars = { version = "1.0.0-alpha.20", optional = true }
 serde_json = { version = "1.0", optional = true }
 async-trait = { version = "0.1", optional = true }
+ras-transport-core = { version = "0.1.0", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ras-auth-core = { version = "0.1.0", optional = true }
@@ -30,11 +31,6 @@ ras-jsonrpc-bidirectional-server = { version = "0.1.0", optional = true }
 axum = { version = "0.8", optional = true }
 axum-extra = { version = "0.10", optional = true }
 tokio = { version = "1.0", optional = true }
-tokio-util = { version = "0.7", optional = true }
-reqwest = { version = "0.12", optional = true }
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["json", "multipart"], optional = true }
 
 [features]
 default = []
@@ -54,19 +50,22 @@ server = [
     "dep:tokio",
 ]
 client = [
-    "ras-rest-macro/client",
-    "ras-file-macro/client",
+    "ras-rest-macro/reqwest",
+    "ras-file-macro/reqwest",
     "ras-jsonrpc-bidirectional-macro/client",
-    "dep:reqwest",
+    "ras-transport-core/reqwest",
     "dep:tokio",
-    "dep:tokio-util",
 ]
+fs = ["ras-file-macro/fs", "ras-transport-core/fs"]
 ```
 
 Server crates enable `workspace-api/server`. Rust or WASM clients enable
 `workspace-api/client`. The proc macro crate features decide which generated
 code is emitted; the API-crate features are just a convenient way to select
 those macro features from downstream crates.
+
+Enable `workspace-api/fs` for native file-client helpers that stream upload
+parts from disk.
 
 ## Source Layout
 

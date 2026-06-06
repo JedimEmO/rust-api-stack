@@ -16,7 +16,7 @@ The service route is selected by the server crate when it builds the generated r
 ## Features
 
 - `server` - enables generated server-side types and Axum integration.
-- `client` - enables the generated HTTP client.
+- `client` - enables the generated HTTP client with the default reqwest transport.
 - default: no generated transport code.
 
 ## Checks

@@ -13,9 +13,10 @@ readme = "README.md"
 proc-macro = true
 
 [features]
-default = ["server", "client"]  # Enable server by default for backward compatibility
+default = ["server", "reqwest"]
 server = ["axum", "ras-jsonrpc-core"]
-client = ["reqwest"]
+client = ["dep:ras-transport-core"]
+reqwest = ["client", "ras-transport-core/reqwest"]
 permissions = []
 
 [dependencies]
@@ -31,15 +32,16 @@ schemars = { workspace = true }
 axum = { workspace = true, optional = true }
 ras-jsonrpc-core = { path = "../ras-jsonrpc-core", version = "0.1.2", optional = true }
 
-# Client dependencies
-reqwest = { workspace = true, optional = true }
+# Client dependencies (only referenced by generated client code, gated by the
+# `client` feature — see `ras-rest-macro`/`ras-file-macro` for the same wiring).
+ras-transport-core = { path = "../../core/ras-transport-core", version = "0.1.0", optional = true }
 
 # Always needed for types
 ras-jsonrpc-types = { path = "../ras-jsonrpc-types", version = "0.1.1" }
 
 [dev-dependencies]
 tokio = { workspace = true }
-reqwest = { workspace = true }
+ras-transport-core = { path = "../../core/ras-transport-core", version = "0.1.0", features = ["axum-test"] }
 tower = { workspace = true }
 rand = { workspace = true }
 ras-identity-session = { path = "../../identity/ras-identity-session", version = "0.2.0" }

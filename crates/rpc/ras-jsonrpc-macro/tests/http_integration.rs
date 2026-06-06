@@ -9,26 +9,26 @@ use std::collections::HashSet;
 
 // Test data structures for various scenarios
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-struct SignInRequest {
+pub struct SignInRequest {
     email: String,
     password: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-struct SignInResponse {
+pub struct SignInResponse {
     jwt: String,
     user_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-struct CreateUserRequest {
+pub struct CreateUserRequest {
     name: String,
     email: String,
     permissions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-struct User {
+pub struct User {
     id: Option<i32>,
     name: String,
     email: String,
@@ -36,26 +36,26 @@ struct User {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-struct ComplexRequest {
+pub struct ComplexRequest {
     data: Vec<NestedData>,
     metadata: Option<MetadataInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-struct NestedData {
+pub struct NestedData {
     id: i32,
     value: String,
     active: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-struct MetadataInfo {
+pub struct MetadataInfo {
     version: String,
     tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-struct ProcessingResult {
+pub struct ProcessingResult {
     processed_count: usize,
     errors: Vec<String>,
     success: bool,
@@ -710,12 +710,11 @@ async fn test_openrpc_generation() {
     assert!(permissions.contains(&json!("moderator")));
 }
 
-#[cfg(feature = "client")]
+#[cfg(feature = "reqwest")]
 #[test]
 fn test_client_generation() {
     // Test that client generation compiles and produces valid API
-    let client_result = TestServiceClientBuilder::new()
-        .server_url("http://example.invalid/rpc")
+    let client_result = TestServiceClientBuilder::new("http://example.invalid/rpc")
         .with_timeout(std::time::Duration::from_millis(1000))
         .build();
 
