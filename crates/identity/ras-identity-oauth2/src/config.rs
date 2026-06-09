@@ -13,7 +13,7 @@ pub struct OAuth2ProviderConfig {
     pub token_endpoint: String,
     pub userinfo_endpoint: Option<String>,
     /// Expected `iss` claim of id_tokens returned by this provider
-    /// (e.g. "https://accounts.google.com"). When set, callbacks carrying
+    /// (e.g. `https://accounts.google.com`). When set, callbacks carrying
     /// an id_token with a different issuer are rejected.
     #[serde(default)]
     pub issuer: Option<String>,
