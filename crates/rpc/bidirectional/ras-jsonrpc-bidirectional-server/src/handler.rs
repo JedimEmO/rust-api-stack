@@ -442,10 +442,16 @@ impl<H: MessageHandler> WebSocketHandler<H> {
             return self.handle_jsonrpc_request(request, socket).await;
         }
 
-        // If neither worked, return error
-        Err(ServerError::InvalidRequest(
-            "Could not parse message as JSON-RPC or bidirectional message".to_string(),
-        ))
+        // Neither shape parsed. Per JSON-RPC 2.0, answer with a Parse Error
+        // (-32700, id null) and keep the connection open; only transport
+        // failures terminate the handler loop.
+        warn!(
+            "Could not parse message as JSON-RPC or bidirectional message on connection {}",
+            self.context.id
+        );
+        let response = JsonRpcResponse::error(JsonRpcError::parse_error(), None);
+        self.send_message(socket, BidirectionalMessage::Response(response))
+            .await
     }
 
     /// Handle bidirectional messages
@@ -938,24 +944,49 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handler_loop_closes_malformed_text_without_response() {
-        let mut socket =
-            InMemorySocket::closing([WebSocketIoMessage::Text("not json-rpc".to_string())]);
+    async fn handler_loop_answers_malformed_text_with_parse_error_and_continues() {
+        let request = JsonRpcRequest::new(
+            "echo".into(),
+            Some(serde_json::json!({})),
+            Some(serde_json::json!(9)),
+        );
+        let mut socket = InMemorySocket::closing([
+            WebSocketIoMessage::Text("not json-rpc".to_string()),
+            WebSocketIoMessage::Text(
+                serde_json::to_string(&BidirectionalMessage::Request(request)).unwrap(),
+            ),
+        ]);
         let (_tx, rx) = mpsc::channel(4);
 
-        WebSocketHandler::new(Arc::new(PassThrough), ctx(), rx, 1024)
+        WebSocketHandler::new(Arc::new(RespondingHandler), ctx(), rx, 1024)
             .run_with_io(&mut socket)
             .await
             .unwrap();
 
         let messages = bidirectional_outgoing(&socket);
-        assert_eq!(messages.len(), 2);
         assert!(matches!(
             messages[0],
             BidirectionalMessage::ConnectionEstablished { .. }
         ));
+
+        // The garbage frame is answered with -32700 (id null)...
+        let parse_error = match &messages[1] {
+            BidirectionalMessage::Response(response) => response,
+            other => panic!("expected parse error response, got {other:?}"),
+        };
+        assert_eq!(parse_error.id, None);
+        let error = parse_error.error.as_ref().expect("parse error");
+        assert_eq!(error.code, ras_jsonrpc_types::error_codes::PARSE_ERROR);
+
+        // ...and the connection keeps serving subsequent requests.
+        let response = match &messages[2] {
+            BidirectionalMessage::Response(response) => response,
+            other => panic!("expected response, got {other:?}"),
+        };
+        assert_eq!(response.id, Some(serde_json::json!(9)));
+
         assert!(matches!(
-            messages[1],
+            messages[3],
             BidirectionalMessage::ConnectionClosed { .. }
         ));
     }
