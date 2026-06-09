@@ -4,7 +4,7 @@ use crate::{
     ConnectionContext, DefaultConnectionManager, MessageHandler, MessageRouter, ServerError,
     ServerResult, WebSocketHandler, WebSocketUpgrade,
     connection::ChannelMessageSender,
-    handler::{AxumWebSocketIo, WebSocketIo},
+    handler::{AuthRevalidation, AxumWebSocketIo, DEFAULT_AUTH_REVALIDATION_INTERVAL, WebSocketIo},
 };
 use axum::{
     extract::{State, ws::WebSocketUpgrade as AxumWebSocketUpgrade},
@@ -15,6 +15,7 @@ use bon::Builder;
 use ras_auth_core::AuthProvider;
 use ras_jsonrpc_bidirectional_types::{ConnectionId, ConnectionInfo, ConnectionManager};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
@@ -53,6 +54,14 @@ pub trait WebSocketService: Clone + Send + Sync + 'static {
         DEFAULT_MAX_MESSAGE_SIZE
     }
 
+    /// How often to re-run authentication for a live connection.
+    ///
+    /// Bounds the lifetime of revoked/expired credentials on a long-lived
+    /// WebSocket to at most one interval.
+    fn auth_revalidation_interval(&self) -> Duration {
+        DEFAULT_AUTH_REVALIDATION_INTERVAL
+    }
+
     /// Handle WebSocket upgrade
     async fn handle_upgrade(
         &self,
@@ -60,6 +69,8 @@ pub trait WebSocketService: Clone + Send + Sync + 'static {
         headers: HeaderMap,
     ) -> Result<Response, (axum::http::StatusCode, String)> {
         let ws_upgrade = WebSocketUpgrade::new(upgrade, headers);
+        // Captured pre-upgrade so the connection can periodically re-validate it.
+        let auth_token = ws_upgrade.extract_auth_token();
         let service = self.clone();
 
         ws_upgrade
@@ -68,7 +79,7 @@ pub trait WebSocketService: Clone + Send + Sync + 'static {
                 self.require_auth(),
                 move |socket, user| {
                     Box::pin(async move {
-                        if let Err(e) = service.handle_connection(socket, user).await {
+                        if let Err(e) = service.handle_connection(socket, user, auth_token).await {
                             error!("WebSocket connection error: {}", e);
                         }
                     })
@@ -82,11 +93,12 @@ pub trait WebSocketService: Clone + Send + Sync + 'static {
         &self,
         socket: axum::extract::ws::WebSocket,
         user: Option<ras_auth_core::AuthenticatedUser>,
+        auth_token: Option<String>,
     ) -> impl std::future::Future<Output = ServerResult<()>> + Send {
         let service = self.clone();
         async move {
             let mut socket = AxumWebSocketIo::new(socket);
-            run_connection_with_io(service, &mut socket, user).await
+            run_connection_with_io(service, &mut socket, user, auth_token).await
         }
     }
 
@@ -103,7 +115,7 @@ pub trait WebSocketService: Clone + Send + Sync + 'static {
         S: WebSocketIo + ?Sized + 'a,
     {
         let service = self.clone();
-        async move { run_connection_with_io(service, socket, user).await }
+        async move { run_connection_with_io(service, socket, user, None).await }
     }
 }
 
@@ -111,6 +123,7 @@ async fn run_connection_with_io<Svc, S>(
     service: Svc,
     socket: &mut S,
     user: Option<ras_auth_core::AuthenticatedUser>,
+    auth_token: Option<String>,
 ) -> ServerResult<()>
 where
     Svc: WebSocketService,
@@ -139,12 +152,22 @@ where
         .await
         .map_err(ServerError::ConnectionError)?;
 
-    let handler = WebSocketHandler::new(
+    let mut handler = WebSocketHandler::new(
         service.handler(),
         context.clone(),
         message_rx,
         service.max_message_size(),
     );
+
+    // Authenticated connections re-validate their token periodically so
+    // revocation/expiry takes effect without waiting for a disconnect.
+    if let Some(token) = auth_token {
+        handler = handler.with_auth_revalidation(AuthRevalidation {
+            auth_provider: service.auth_provider(),
+            token,
+            interval: service.auth_revalidation_interval(),
+        });
+    }
 
     let result = handler.run_with_io(socket).await;
 
@@ -168,8 +191,8 @@ pub struct WebSocketServiceBuilder<H, A, M = DefaultConnectionManager> {
     auth_provider: Arc<A>,
     /// Connection manager
     connection_manager: Option<Arc<M>>,
-    /// Whether authentication is required
-    #[builder(default = false)]
+    /// Whether authentication is required (secure default: required)
+    #[builder(default = true)]
     require_auth: bool,
     /// Maximum queued outbound messages per connection
     #[builder(default = DEFAULT_MESSAGE_CHANNEL_CAPACITY)]
@@ -177,6 +200,9 @@ pub struct WebSocketServiceBuilder<H, A, M = DefaultConnectionManager> {
     /// Maximum accepted inbound WebSocket message size in bytes
     #[builder(default = DEFAULT_MAX_MESSAGE_SIZE)]
     max_message_size: usize,
+    /// Interval between credential re-validations for live connections
+    #[builder(default = DEFAULT_AUTH_REVALIDATION_INTERVAL)]
+    auth_revalidation_interval: Duration,
 }
 
 impl<H, A> WebSocketServiceBuilder<H, A, DefaultConnectionManager>
@@ -195,6 +221,7 @@ where
             require_auth: self.require_auth,
             message_channel_capacity: self.message_channel_capacity,
             max_message_size: self.max_message_size,
+            auth_revalidation_interval: self.auth_revalidation_interval,
         }
     }
 }
@@ -214,6 +241,7 @@ where
             require_auth: self.require_auth,
             message_channel_capacity: self.message_channel_capacity,
             max_message_size: self.max_message_size,
+            auth_revalidation_interval: self.auth_revalidation_interval,
         }
     }
 }
@@ -226,6 +254,7 @@ pub struct BuiltWebSocketService<H, A, M> {
     require_auth: bool,
     message_channel_capacity: usize,
     max_message_size: usize,
+    auth_revalidation_interval: Duration,
 }
 
 impl<H, A, M> Clone for BuiltWebSocketService<H, A, M> {
@@ -237,6 +266,7 @@ impl<H, A, M> Clone for BuiltWebSocketService<H, A, M> {
             require_auth: self.require_auth,
             message_channel_capacity: self.message_channel_capacity,
             max_message_size: self.max_message_size,
+            auth_revalidation_interval: self.auth_revalidation_interval,
         }
     }
 }
@@ -273,6 +303,10 @@ where
 
     fn max_message_size(&self) -> usize {
         self.max_message_size
+    }
+
+    fn auth_revalidation_interval(&self) -> Duration {
+        self.auth_revalidation_interval
     }
 }
 
@@ -385,6 +419,33 @@ mod tests {
 
         assert!(!service.require_auth());
         assert_eq!(service.connection_manager().connection_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn builder_requires_auth_by_default() {
+        let builder = WebSocketServiceBuilder::builder()
+            .handler(Arc::new(MessageRouter::new()))
+            .auth_provider(Arc::new(MockAuthProvider))
+            .build();
+        let service = builder.build();
+
+        assert!(service.require_auth());
+        assert_eq!(
+            service.auth_revalidation_interval(),
+            Duration::from_secs(30)
+        );
+    }
+
+    #[tokio::test]
+    async fn builder_revalidation_interval_is_configurable() {
+        let builder = WebSocketServiceBuilder::builder()
+            .handler(Arc::new(MessageRouter::new()))
+            .auth_provider(Arc::new(MockAuthProvider))
+            .auth_revalidation_interval(Duration::from_secs(5))
+            .build();
+        let service = builder.build();
+
+        assert_eq!(service.auth_revalidation_interval(), Duration::from_secs(5));
     }
 
     #[tokio::test]

@@ -36,3 +36,4 @@ dashmap = { workspace = true }
 
 [dev-dependencies]
 ras-jsonrpc-types = { path = "../../ras-jsonrpc-types", version = "0.1.1" }
+tokio = { workspace = true, features = ["test-util"] }

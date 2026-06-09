@@ -4,9 +4,11 @@ use crate::{ConnectionContext, ServerError, ServerResult};
 use async_trait::async_trait;
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use futures::stream::StreamExt;
+use ras_auth_core::AuthProvider;
 use ras_jsonrpc_bidirectional_types::BidirectionalMessage;
 use ras_jsonrpc_types::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, error_codes};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
@@ -29,15 +31,37 @@ pub trait MessageHandler: Send + Sync + 'static {
         context: Arc<ConnectionContext>,
     ) -> ServerResult<Option<JsonRpcResponse>>;
 
+    /// Decide whether this connection may subscribe to `topic`.
+    ///
+    /// Default-deny: services that broadcast over topics must override this
+    /// (or `handle_subscribe`) to allow the topics a connection is entitled
+    /// to. Errors propagate to the handler loop and close the connection.
+    async fn authorize_subscribe(
+        &self,
+        _topic: &str,
+        _context: &Arc<ConnectionContext>,
+    ) -> ServerResult<bool> {
+        Ok(false)
+    }
+
     /// Handle subscription requests
     async fn handle_subscribe(
         &self,
         topics: Vec<String>,
         context: Arc<ConnectionContext>,
     ) -> ServerResult<()> {
-        // Default implementation subscribes the connection to each requested topic.
+        // Default implementation subscribes the connection to each topic the
+        // service authorizes via `authorize_subscribe`; denied topics are
+        // skipped without closing the connection.
         for topic in topics {
-            context.subscribe(topic).await;
+            if self.authorize_subscribe(&topic, &context).await? {
+                context.subscribe(topic).await;
+            } else {
+                warn!(
+                    "Denied subscription to topic '{}' for connection {}",
+                    topic, context.id
+                );
+            }
         }
         Ok(())
     }
@@ -154,6 +178,25 @@ impl WebSocketIo for AxumWebSocketIo {
     }
 }
 
+/// Default interval between credential re-validations on long-lived connections.
+pub const DEFAULT_AUTH_REVALIDATION_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Periodic credential re-validation for a long-lived connection.
+///
+/// The token is captured before the WebSocket upgrade and re-run through the
+/// auth provider on every `interval` tick. Failure closes the connection;
+/// success refreshes the cached user (so permission changes propagate). This
+/// bounds the lifetime of revoked/expired credentials on an open socket to at
+/// most one interval.
+pub struct AuthRevalidation {
+    /// Provider used to re-run authentication
+    pub auth_provider: Arc<dyn AuthProvider>,
+    /// Token captured at upgrade time
+    pub token: String,
+    /// How often to re-validate
+    pub interval: Duration,
+}
+
 /// WebSocket connection handler that manages the message flow
 pub struct WebSocketHandler<H: MessageHandler> {
     /// The message handler for processing requests
@@ -163,6 +206,8 @@ pub struct WebSocketHandler<H: MessageHandler> {
     /// Channel for receiving messages to send to client
     message_rx: mpsc::Receiver<BidirectionalMessage>,
     max_message_size: usize,
+    /// Optional periodic credential re-validation
+    auth_revalidation: Option<AuthRevalidation>,
 }
 
 impl<H: MessageHandler> WebSocketHandler<H> {
@@ -178,7 +223,14 @@ impl<H: MessageHandler> WebSocketHandler<H> {
             context,
             message_rx,
             max_message_size,
+            auth_revalidation: None,
         }
+    }
+
+    /// Enable periodic credential re-validation for this connection.
+    pub fn with_auth_revalidation(mut self, revalidation: AuthRevalidation) -> Self {
+        self.auth_revalidation = Some(revalidation);
+        self
     }
 
     /// Run the WebSocket handler loop
@@ -215,9 +267,51 @@ impl<H: MessageHandler> WebSocketHandler<H> {
             error!("Failed to send connection established message: {}", e);
         }
 
+        let mut revalidation_timer = self.auth_revalidation.as_ref().map(|revalidation| {
+            let mut timer = tokio::time::interval_at(
+                tokio::time::Instant::now() + revalidation.interval,
+                revalidation.interval,
+            );
+            timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            timer
+        });
+
         // Main message handling loop
         loop {
             tokio::select! {
+                // Re-validate credentials so revoked/expired tokens are
+                // bounded to at most one interval on a long-lived connection
+                _ = async { revalidation_timer.as_mut().expect("guarded by is_some").tick().await },
+                    if revalidation_timer.is_some() =>
+                {
+                    let revalidation = self
+                        .auth_revalidation
+                        .as_ref()
+                        .expect("revalidation timer implies config");
+                    match revalidation
+                        .auth_provider
+                        .authenticate(revalidation.token.clone())
+                        .await
+                    {
+                        Ok(user) => {
+                            // Refresh cached identity/permissions
+                            self.context.set_user(user).await;
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Closing connection {}: credential re-validation failed: {}",
+                                self.context.id, e
+                            );
+                            let _ = socket
+                                .send(WebSocketIoMessage::Close(Some(
+                                    "credentials no longer valid".to_string(),
+                                )))
+                                .await;
+                            break;
+                        }
+                    }
+                }
+
                 // Handle incoming WebSocket messages
                 msg = socket.recv() => {
                     match msg {
@@ -606,14 +700,53 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_handle_subscribe_writes_to_context() {
+    async fn default_handle_subscribe_denies_all_topics() {
         let h = PassThrough;
         let c = ctx();
         h.handle_subscribe(vec!["a".into(), "b".into()], c.clone())
             .await
             .unwrap();
-        assert!(c.is_subscribed_to("a").await);
-        assert!(c.is_subscribed_to("b").await);
+        assert!(!c.is_subscribed_to("a").await);
+        assert!(!c.is_subscribed_to("b").await);
+    }
+
+    #[tokio::test]
+    async fn default_authorize_subscribe_denies() {
+        let h = PassThrough;
+        let c = ctx();
+        assert!(!h.authorize_subscribe("any-topic", &c).await.unwrap());
+    }
+
+    struct AllowListHandler;
+
+    #[async_trait]
+    impl MessageHandler for AllowListHandler {
+        async fn handle_request(
+            &self,
+            _request: JsonRpcRequest,
+            _context: Arc<ConnectionContext>,
+        ) -> ServerResult<Option<JsonRpcResponse>> {
+            Ok(None)
+        }
+
+        async fn authorize_subscribe(
+            &self,
+            topic: &str,
+            _context: &Arc<ConnectionContext>,
+        ) -> ServerResult<bool> {
+            Ok(topic == "room:allowed")
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_subscribe_only_subscribes_authorized_topics() {
+        let h = AllowListHandler;
+        let c = ctx();
+        h.handle_subscribe(vec!["room:allowed".into(), "room:denied".into()], c.clone())
+            .await
+            .unwrap();
+        assert!(c.is_subscribed_to("room:allowed").await);
+        assert!(!c.is_subscribed_to("room:denied").await);
     }
 
     #[tokio::test]
@@ -888,6 +1021,107 @@ mod tests {
                 .disconnect_reasons()
                 .contains(&Some("client bye".to_string()))
         );
+    }
+
+    fn auth_user(id: &str) -> ras_auth_core::AuthenticatedUser {
+        ras_auth_core::AuthenticatedUser {
+            user_id: id.to_string(),
+            permissions: std::collections::HashSet::new(),
+            metadata: None,
+        }
+    }
+
+    /// Auth provider that replays a fixed sequence of results, then fails.
+    struct SequenceAuthProvider(
+        Mutex<VecDeque<Result<ras_auth_core::AuthenticatedUser, ras_auth_core::AuthError>>>,
+    );
+
+    impl SequenceAuthProvider {
+        fn new(
+            results: impl IntoIterator<
+                Item = Result<ras_auth_core::AuthenticatedUser, ras_auth_core::AuthError>,
+            >,
+        ) -> Self {
+            Self(Mutex::new(results.into_iter().collect()))
+        }
+    }
+
+    impl AuthProvider for SequenceAuthProvider {
+        fn authenticate(&self, _token: String) -> ras_auth_core::AuthFuture<'_> {
+            let result = self
+                .0
+                .lock()
+                .expect("results lock")
+                .pop_front()
+                .unwrap_or(Err(ras_auth_core::AuthError::InvalidToken));
+            Box::pin(async move { result })
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn revalidation_failure_closes_connection() {
+        let context = ctx();
+        let (_tx, rx) = mpsc::channel(4);
+        let mut socket = InMemorySocket::pending();
+
+        WebSocketHandler::new(Arc::new(PassThrough), context, rx, 1024)
+            .with_auth_revalidation(AuthRevalidation {
+                auth_provider: Arc::new(SequenceAuthProvider::new([])),
+                token: "revoked-token".into(),
+                interval: Duration::from_secs(30),
+            })
+            .run_with_io(&mut socket)
+            .await
+            .unwrap();
+
+        assert!(socket.outgoing.iter().any(|message| matches!(
+            message,
+            WebSocketIoMessage::Close(Some(reason)) if reason == "credentials no longer valid"
+        )));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn revalidation_success_refreshes_cached_user() {
+        let context = ctx();
+        context.set_user(auth_user("stale")).await;
+        let (_tx, rx) = mpsc::channel(4);
+        let mut socket = InMemorySocket::pending();
+
+        WebSocketHandler::new(Arc::new(PassThrough), context.clone(), rx, 1024)
+            .with_auth_revalidation(AuthRevalidation {
+                auth_provider: Arc::new(SequenceAuthProvider::new([Ok(auth_user("fresh"))])),
+                token: "valid-token".into(),
+                interval: Duration::from_secs(30),
+            })
+            .run_with_io(&mut socket)
+            .await
+            .unwrap();
+
+        // First tick refreshed the cached user; the second (sequence
+        // exhausted) failed and closed the connection.
+        assert_eq!(context.get_user().await.expect("user").user_id, "fresh");
+        assert!(
+            socket
+                .outgoing
+                .iter()
+                .any(|message| matches!(message, WebSocketIoMessage::Close(_)))
+        );
+    }
+
+    #[tokio::test]
+    async fn handler_without_revalidation_does_not_authenticate() {
+        // No auth provider involved at all: the loop must terminate on
+        // socket close without ticking a revalidation timer.
+        let mut socket = InMemorySocket::closing([]);
+        let (_tx, rx) = mpsc::channel(4);
+
+        WebSocketHandler::new(Arc::new(PassThrough), ctx(), rx, 1024)
+            .run_with_io(&mut socket)
+            .await
+            .unwrap();
+
+        let messages = bidirectional_outgoing(&socket);
+        assert_eq!(messages.len(), 2);
     }
 
     fn bidirectional_outgoing(socket: &InMemorySocket) -> Vec<BidirectionalMessage> {

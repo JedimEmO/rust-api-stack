@@ -436,11 +436,14 @@ pub fn generate_server_code(
 
         impl<T: #service_trait_name, A: ras_auth_core::AuthProvider> #builder_name<T, A> {
             /// Create a new builder
+            ///
+            /// Authentication is required by default; call `.require_auth(false)`
+            /// to explicitly allow anonymous connections.
             pub fn new(service: T, auth_provider: A) -> Self {
                 Self {
                     service: std::sync::Arc::new(service),
                     auth_provider: std::sync::Arc::new(auth_provider),
-                    require_auth: false,
+                    require_auth: true,
                 }
             }
 
