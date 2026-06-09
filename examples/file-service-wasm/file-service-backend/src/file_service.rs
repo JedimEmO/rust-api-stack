@@ -24,6 +24,7 @@ impl FileServiceImpl {
     async fn handle_file_upload(
         &self,
         file: &mut IncomingFile<'_>,
+        owner: Option<&str>,
     ) -> Result<UploadResponse, DocumentServiceFileError> {
         let file_name = file.file_name().unwrap_or("unknown").to_string();
         let content_type = file.content_type().map(ToString::to_string);
@@ -37,7 +38,7 @@ impl FileServiceImpl {
 
         let metadata = self
             .storage
-            .save_file(data, &file_name, content_type)
+            .save_file(data, &file_name, content_type, owner)
             .await
             .map_err(|e| {
                 error!("Failed to save file: {}", e);
@@ -60,8 +61,9 @@ impl FileServiceImpl {
     async fn download_response(
         &self,
         file_id: String,
+        owner: Option<&str>,
     ) -> Result<DownloadResponse, DocumentServiceFileError> {
-        let (data, metadata) = self.storage.get_file(&file_id).await.map_err(|e| {
+        let (data, metadata) = self.storage.get_file(&file_id, owner).await.map_err(|e| {
             error!("Failed to get file: {}", e);
             match e.to_string().contains("not found") {
                 true => DocumentServiceFileError::NotFound,
@@ -112,7 +114,8 @@ impl DocumentServiceTrait for FileServiceImpl {
     ) -> Result<(), DocumentServiceFileError> {
         match part {
             DocumentServiceUploadPart::File(file) => {
-                state.response = Some(self.handle_file_upload(file).await?);
+                // Anonymous endpoint: files land in the public scope.
+                state.response = Some(self.handle_file_upload(file, None).await?);
             }
         }
         Ok(())
@@ -144,14 +147,17 @@ impl DocumentServiceTrait for FileServiceImpl {
 
     async fn upload_profile_picture_part(
         &self,
-        _ctx: &FileRequestContext<'_>,
+        ctx: &FileRequestContext<'_>,
         _path: &DocumentServiceUploadProfilePicturePath,
         state: &mut Self::UploadProfilePictureState,
         part: &mut DocumentServiceUploadProfilePicturePart<'_>,
     ) -> Result<(), DocumentServiceFileError> {
+        // Authenticated endpoint: record the uploader as the file's owner so
+        // the secure download path can enforce ownership.
+        let user = ctx.user.ok_or(DocumentServiceFileError::Unauthorized)?;
         match part {
             DocumentServiceUploadProfilePicturePart::File(file) => {
-                state.response = Some(self.handle_file_upload(file).await?);
+                state.response = Some(self.handle_file_upload(file, Some(&user.user_id)).await?);
             }
         }
         Ok(())
@@ -176,7 +182,8 @@ impl DocumentServiceTrait for FileServiceImpl {
         path: DocumentServiceDownloadByFileIdPath,
     ) -> Result<DownloadResponse, DocumentServiceFileError> {
         debug!("Handling public file download: {}", path.file_id);
-        self.download_response(path.file_id).await
+        // Public endpoint: only the public scope is reachable.
+        self.download_response(path.file_id, None).await
     }
 
     async fn download_secure_by_file_id(
@@ -184,15 +191,15 @@ impl DocumentServiceTrait for FileServiceImpl {
         ctx: &FileRequestContext<'_>,
         path: DocumentServiceDownloadSecureByFileIdPath,
     ) -> Result<DownloadResponse, DocumentServiceFileError> {
-        if let Some(user) = ctx.user {
-            debug!(
-                "Handling secure file download for user {}: {}",
-                user.user_id, path.file_id
-            );
-        }
-
-        // In a real app, you might check if the user has access to this file
-        self.download_response(path.file_id).await
+        // Object ownership: a user can only download files they uploaded.
+        // Anything outside their scope is indistinguishable from missing.
+        let user = ctx.user.ok_or(DocumentServiceFileError::Unauthorized)?;
+        debug!(
+            "Handling secure file download for user {}: {}",
+            user.user_id, path.file_id
+        );
+        self.download_response(path.file_id, Some(&user.user_id))
+            .await
     }
 }
 
@@ -242,6 +249,7 @@ mod tests {
                 b"download body".to_vec(),
                 "report.txt",
                 Some("text/plain".to_string()),
+                None,
             )
             .await
             .expect("save file");
@@ -292,11 +300,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn secure_download_uses_same_download_path() {
+    async fn secure_download_returns_own_file() {
         let temp_dir = TempDir::new().expect("temp dir");
         let storage = Arc::new(FileStorage::new(temp_dir.path()));
         let saved = storage
-            .save_file(b"secure body".to_vec(), "secure.bin", None)
+            .save_file(
+                b"secure body".to_vec(),
+                "secure.bin",
+                None,
+                Some("testuser"),
+            )
             .await
             .expect("save file");
         let service = FileServiceImpl::new(storage);
@@ -313,5 +326,59 @@ mod tests {
             .expect("secure download response");
 
         assert_eq!(body_bytes(response), b"secure body");
+    }
+
+    #[tokio::test]
+    async fn secure_download_denies_other_users_files() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let storage = Arc::new(FileStorage::new(temp_dir.path()));
+        let saved = storage
+            .save_file(b"alice data".to_vec(), "doc.txt", None, Some("alice"))
+            .await
+            .expect("save file");
+        let service = FileServiceImpl::new(storage);
+        let headers = HeaderMap::new();
+        let user = test_user(); // user_id: testuser
+        let ctx = test_context(&headers, Some(&user));
+
+        let result = service
+            .download_secure_by_file_id(
+                &ctx,
+                DocumentServiceDownloadSecureByFileIdPath {
+                    file_id: saved.id.clone(),
+                },
+            )
+            .await;
+        assert!(matches!(result, Err(DocumentServiceFileError::NotFound)));
+
+        // It is also invisible through the public endpoint.
+        let result = service
+            .download_by_file_id(
+                &ctx,
+                DocumentServiceDownloadByFileIdPath { file_id: saved.id },
+            )
+            .await;
+        assert!(matches!(result, Err(DocumentServiceFileError::NotFound)));
+    }
+
+    #[tokio::test]
+    async fn secure_download_requires_authenticated_user() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let service = test_service(&temp_dir);
+        let headers = HeaderMap::new();
+        let ctx = test_context(&headers, None);
+
+        let result = service
+            .download_secure_by_file_id(
+                &ctx,
+                DocumentServiceDownloadSecureByFileIdPath {
+                    file_id: "ignored".to_string(),
+                },
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(DocumentServiceFileError::Unauthorized)
+        ));
     }
 }
