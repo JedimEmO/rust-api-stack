@@ -78,8 +78,12 @@ struct ServiceDefinition {
     base_path: String,
     openapi: Option<OpenApiConfig>,
     static_hosting: static_hosting::StaticHostingConfig,
+    body_limit: Option<usize>,
     endpoints: Vec<EndpointDefinition>,
 }
+
+/// Default maximum JSON body size in bytes (matches axum's default).
+const DEFAULT_BODY_LIMIT: usize = 2 * 1024 * 1024;
 
 #[derive(Debug)]
 enum OpenApiConfig {
@@ -244,9 +248,10 @@ impl Parse for ServiceDefinition {
         let base_path = base_path_lit.value();
         let _ = content.parse::<Token![,]>()?;
 
-        // Parse optional fields (openapi, serve_docs, docs_path, ui_theme)
+        // Parse optional fields (openapi, serve_docs, docs_path, ui_theme, body_limit)
         let mut openapi = None;
         let mut static_hosting = static_hosting::StaticHostingConfig::default();
+        let mut body_limit = None;
 
         // Parse optional fields
         while content.peek(Ident) {
@@ -292,6 +297,12 @@ impl Parse for ServiceDefinition {
                 let theme = content.parse::<LitStr>()?;
                 static_hosting.ui_theme = theme.value();
                 let _ = content.parse::<Token![,]>()?;
+            } else if field_name == "body_limit" {
+                let _ = content.parse::<Ident>()?; // "body_limit"
+                let _ = content.parse::<Token![:]>()?;
+                let limit = content.parse::<syn::LitInt>()?;
+                body_limit = Some(limit.base10_parse::<usize>()?);
+                let _ = content.parse::<Token![,]>()?;
             } else if field_name == "endpoints" {
                 break; // Start parsing endpoints
             } else {
@@ -325,6 +336,7 @@ impl Parse for ServiceDefinition {
             base_path,
             openapi,
             static_hosting,
+            body_limit,
             endpoints,
         })
     }
@@ -766,10 +778,16 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
         quote! {}
     };
 
+    let body_limit = service_def.body_limit.unwrap_or(DEFAULT_BODY_LIMIT);
+
     let server_code = if cfg!(feature = "server") {
         quote! {
         mod #server_mod {
             use super::*;
+
+        /// Maximum accepted JSON body size in bytes
+        #[allow(dead_code)]
+        const __RAS_BODY_LIMIT: usize = #body_limit;
 
         /// Generated service trait
         #[async_trait::async_trait]
@@ -1267,20 +1285,7 @@ fn generate_legacy_handler_body(
     let mut canonical_args = rest_canonical_args_from_parts(endpoint, &canonical_parts_ident);
 
     let json_handling = if version.request_type.is_some() {
-        quote! {
-            let body = match body_result {
-                Ok(json) => json.0,
-                Err(_) => {
-                    use axum::response::IntoResponse;
-                    return (
-                        axum::http::StatusCode::BAD_REQUEST,
-                        axum::Json(serde_json::json!({
-                            "error": "Invalid JSON"
-                        }))
-                    ).into_response();
-                },
-            };
-        }
+        generate_body_extraction()
     } else {
         quote! {}
     };
@@ -1365,8 +1370,6 @@ fn generate_legacy_handler_body(
             canonical_args.insert(0, quote! { &user });
 
             quote! {
-                #json_handling
-
                 let auth_credential = match ras_auth_core::extract_auth_credential(&headers, &auth_transport) {
                     Ok(credential) => credential,
                     Err(_) => {
@@ -1441,6 +1444,9 @@ fn generate_legacy_handler_body(
                         ).into_response();
                     }
                 }
+
+                // Read and parse the body only after auth has succeeded
+                #json_handling
 
                 if let Some(tracker) = &with_usage_tracker {
                     let tracker_headers =
@@ -1546,13 +1552,52 @@ fn generate_axum_handler(
         });
     }
 
-    // Add request body extractor if present - use Result to handle JSON parsing errors
+    // Take the raw request when a body is declared. The body is read and
+    // deserialized inside the handler AFTER auth/CSRF/permission checks, so
+    // unauthenticated clients cannot make the server buffer or parse payloads.
     if request_type.is_some() {
-        extractors.push(quote! { body_result: Result<axum::extract::Json<_>, axum::extract::rejection::JsonRejection> });
+        extractors.push(quote! { request: axum::extract::Request });
     }
 
     quote! {
         #(#extractors),*
+    }
+}
+
+/// Generated code that reads and JSON-deserializes the request body from the
+/// raw `request` extractor, bounded by `__RAS_BODY_LIMIT`.
+///
+/// For authenticated endpoints this must be emitted AFTER the
+/// auth/CSRF/permission block so unauthenticated clients cannot make the
+/// server buffer or parse payloads.
+fn generate_body_extraction() -> proc_macro2::TokenStream {
+    quote! {
+        let body = {
+            let body_bytes = match ::axum::body::to_bytes(request.into_body(), __RAS_BODY_LIMIT).await {
+                Ok(bytes) => bytes,
+                Err(_) => {
+                    use axum::response::IntoResponse;
+                    return (
+                        axum::http::StatusCode::PAYLOAD_TOO_LARGE,
+                        axum::Json(serde_json::json!({
+                            "error": "Request body too large or unreadable"
+                        }))
+                    ).into_response();
+                },
+            };
+            match serde_json::from_slice(&body_bytes) {
+                Ok(body) => body,
+                Err(_) => {
+                    use axum::response::IntoResponse;
+                    return (
+                        axum::http::StatusCode::BAD_REQUEST,
+                        axum::Json(serde_json::json!({
+                            "error": "Invalid JSON"
+                        }))
+                    ).into_response();
+                },
+            }
+        };
     }
 }
 
@@ -1587,21 +1632,7 @@ fn generate_handler_body(
             // Handle JSON body extraction with error handling
             let json_handling = if endpoint.request_type.is_some() {
                 args.push(quote! { body });
-                quote! {
-                    // Handle JSON parsing errors
-                    let body = match body_result {
-                        Ok(json) => json.0,
-                        Err(_) => {
-                            use axum::response::IntoResponse;
-                            return (
-                                axum::http::StatusCode::BAD_REQUEST,
-                                axum::Json(serde_json::json!({
-                                    "error": "Invalid JSON"
-                                }))
-                            ).into_response();
-                        },
-                    };
-                }
+                generate_body_extraction()
             } else {
                 quote! {}
             };
@@ -1681,28 +1712,12 @@ fn generate_handler_body(
             // Handle JSON body extraction with error handling
             let json_handling = if endpoint.request_type.is_some() {
                 args.push(quote! { body });
-                quote! {
-                    // Handle JSON parsing errors
-                    let body = match body_result {
-                        Ok(json) => json.0,
-                        Err(_) => {
-                            use axum::response::IntoResponse;
-                            return (
-                                axum::http::StatusCode::BAD_REQUEST,
-                                axum::Json(serde_json::json!({
-                                    "error": "Invalid JSON"
-                                }))
-                            ).into_response();
-                        },
-                    };
-                }
+                generate_body_extraction()
             } else {
                 quote! {}
             };
 
             quote! {
-                #json_handling
-
                 // Extract and validate auth token
                 let auth_credential = match ras_auth_core::extract_auth_credential(&headers, &auth_transport) {
                     Ok(credential) => credential,
@@ -1785,6 +1800,9 @@ fn generate_handler_body(
                         ).into_response();
                     }
                 }
+
+                // Read and parse the body only after auth has succeeded
+                #json_handling
 
                 // Call usage tracker if configured
                 if let Some(tracker) = &with_usage_tracker {
