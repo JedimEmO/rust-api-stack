@@ -1,5 +1,6 @@
 //! Authentication and authorization traits for JSON-RPC services.
 
+mod authorize;
 mod transport;
 
 use std::collections::HashSet;
@@ -9,6 +10,7 @@ use std::pin::Pin;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub use authorize::*;
 pub use transport::*;
 
 /// Errors that can occur during authentication or authorization.

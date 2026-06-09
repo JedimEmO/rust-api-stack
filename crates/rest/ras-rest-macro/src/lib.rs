@@ -789,6 +789,35 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
         #[allow(dead_code)]
         const __RAS_BODY_LIMIT: usize = #body_limit;
 
+        /// Map a shared authorization failure to this service's JSON error shape
+        #[allow(dead_code)]
+        fn __ras_authorize_error_response(error: ras_auth_core::AuthorizeError) -> axum::response::Response {
+            use axum::response::IntoResponse;
+            let (status, message) = match error {
+                ras_auth_core::AuthorizeError::MissingCredential => (
+                    axum::http::StatusCode::UNAUTHORIZED,
+                    "Missing or invalid Authorization header",
+                ),
+                ras_auth_core::AuthorizeError::CsrfValidationFailed => (
+                    axum::http::StatusCode::FORBIDDEN,
+                    "CSRF validation failed",
+                ),
+                ras_auth_core::AuthorizeError::AuthenticationFailed(_) => (
+                    axum::http::StatusCode::UNAUTHORIZED,
+                    "Authentication failed",
+                ),
+                ras_auth_core::AuthorizeError::NoAuthProvider => (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    "No auth provider configured",
+                ),
+                ras_auth_core::AuthorizeError::InsufficientPermissions(_) => (
+                    axum::http::StatusCode::FORBIDDEN,
+                    "Insufficient permissions",
+                ),
+            };
+            (status, axum::Json(serde_json::json!({ "error": message }))).into_response()
+        }
+
         /// Generated service trait
         #[async_trait::async_trait]
         #[allow(private_interfaces, private_bounds)]
@@ -1370,80 +1399,18 @@ fn generate_legacy_handler_body(
             canonical_args.insert(0, quote! { &user });
 
             quote! {
-                let auth_credential = match ras_auth_core::extract_auth_credential(&headers, &auth_transport) {
-                    Ok(credential) => credential,
-                    Err(_) => {
-                        use axum::response::IntoResponse;
-                        return (
-                            axum::http::StatusCode::UNAUTHORIZED,
-                            axum::Json(serde_json::json!({
-                                "error": "Missing or invalid Authorization header"
-                            }))
-                        ).into_response();
-                    },
+                // Authenticate and authorize: credential → CSRF → authenticate
+                // → OR-of-AND permission groups (shared ras-auth-core pipeline)
+                let user = match ras_auth_core::authorize_request(
+                    #method,
+                    &headers,
+                    &auth_transport,
+                    auth_provider.as_deref(),
+                    &required_permission_groups,
+                ).await {
+                    Ok(user) => user,
+                    Err(error) => return __ras_authorize_error_response(error),
                 };
-
-                if let Err(_) = ras_auth_core::validate_csrf_for_credential(#method, &headers, &auth_credential, &auth_transport) {
-                    use axum::response::IntoResponse;
-                    return (
-                        axum::http::StatusCode::FORBIDDEN,
-                        axum::Json(serde_json::json!({
-                            "error": "CSRF validation failed"
-                        }))
-                    ).into_response();
-                }
-
-                let user = match &auth_provider {
-                    Some(provider) => match provider.authenticate(auth_credential.token().to_string()).await {
-                        Ok(user) => user,
-                        Err(_) => {
-                            use axum::response::IntoResponse;
-                            return (
-                                axum::http::StatusCode::UNAUTHORIZED,
-                                axum::Json(serde_json::json!({
-                                    "error": "Authentication failed"
-                                }))
-                            ).into_response();
-                        },
-                    },
-                    None => {
-                        use axum::response::IntoResponse;
-                        return (
-                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                            axum::Json(serde_json::json!({
-                                "error": "No auth provider configured"
-                            }))
-                        ).into_response();
-                    },
-                };
-
-                let has_non_empty_groups = required_permission_groups.iter().any(|g| !g.is_empty());
-                if has_non_empty_groups {
-                    let mut has_permission = false;
-
-                    for permission_group in &required_permission_groups {
-                        if permission_group.is_empty() {
-                            has_permission = true;
-                            break;
-                        } else {
-                            let group_result = auth_provider.as_ref().unwrap().check_permissions(&user, permission_group);
-                            if group_result.is_ok() {
-                                has_permission = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    if !has_permission {
-                        use axum::response::IntoResponse;
-                        return (
-                            axum::http::StatusCode::FORBIDDEN,
-                            axum::Json(serde_json::json!({
-                                "error": "Insufficient permissions"
-                            }))
-                        ).into_response();
-                    }
-                }
 
                 // Read and parse the body only after auth has succeeded
                 #json_handling
@@ -1718,88 +1685,18 @@ fn generate_handler_body(
             };
 
             quote! {
-                // Extract and validate auth token
-                let auth_credential = match ras_auth_core::extract_auth_credential(&headers, &auth_transport) {
-                    Ok(credential) => credential,
-                    Err(_) => {
-                        use axum::response::IntoResponse;
-                        return (
-                            axum::http::StatusCode::UNAUTHORIZED,
-                            axum::Json(serde_json::json!({
-                                "error": "Missing or invalid Authorization header"
-                            }))
-                        ).into_response();
-                    },
+                // Authenticate and authorize: credential → CSRF → authenticate
+                // → OR-of-AND permission groups (shared ras-auth-core pipeline)
+                let user = match ras_auth_core::authorize_request(
+                    #method,
+                    &headers,
+                    &auth_transport,
+                    auth_provider.as_deref(),
+                    &required_permission_groups,
+                ).await {
+                    Ok(user) => user,
+                    Err(error) => return __ras_authorize_error_response(error),
                 };
-
-                if let Err(_) = ras_auth_core::validate_csrf_for_credential(#method, &headers, &auth_credential, &auth_transport) {
-                    use axum::response::IntoResponse;
-                    return (
-                        axum::http::StatusCode::FORBIDDEN,
-                        axum::Json(serde_json::json!({
-                            "error": "CSRF validation failed"
-                        }))
-                    ).into_response();
-                }
-
-                // Authenticate user
-                let user = match &auth_provider {
-                    Some(provider) => match provider.authenticate(auth_credential.token().to_string()).await {
-                        Ok(user) => user,
-                        Err(_) => {
-                            use axum::response::IntoResponse;
-                            return (
-                                axum::http::StatusCode::UNAUTHORIZED,
-                                axum::Json(serde_json::json!({
-                                    "error": "Authentication failed"
-                                }))
-                            ).into_response();
-                        },
-                    },
-                    None => {
-                        use axum::response::IntoResponse;
-                        return (
-                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                            axum::Json(serde_json::json!({
-                                "error": "No auth provider configured"
-                            }))
-                        ).into_response();
-                    },
-                };
-
-                // Check permissions - AND within groups, OR between groups
-                // Only check permissions if we have non-empty groups
-                let has_non_empty_groups = required_permission_groups.iter().any(|g| !g.is_empty());
-                if has_non_empty_groups {
-                    let mut has_permission = false;
-
-                    // Check each permission group (OR logic between groups)
-                    for permission_group in &required_permission_groups {
-                        // Check if user has ALL permissions in this group (AND logic within group)
-                        if permission_group.is_empty() {
-                            // Empty group means any authenticated user can access
-                            has_permission = true;
-                            break;
-                        } else {
-                            // Check if user has all permissions in this group
-                            let group_result = auth_provider.as_ref().unwrap().check_permissions(&user, permission_group);
-                            if group_result.is_ok() {
-                                has_permission = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    if !has_permission {
-                        use axum::response::IntoResponse;
-                        return (
-                            axum::http::StatusCode::FORBIDDEN,
-                            axum::Json(serde_json::json!({
-                                "error": "Insufficient permissions"
-                            }))
-                        ).into_response();
-                    }
-                }
 
                 // Read and parse the body only after auth has succeeded
                 #json_handling

@@ -799,40 +799,18 @@ fn jsonrpc_auth_check_code(
                         ),
                     };
 
+                    // OR-of-AND permission check (shared ras-auth-core implementation)
                     let required_permission_groups: Vec<Vec<String>> = #permission_groups_code;
-                    let has_non_empty_groups = required_permission_groups.iter().any(|g| !g.is_empty());
-                    if has_non_empty_groups {
-                        let mut has_permission = false;
-
-                        for permission_group in &required_permission_groups {
-                            if permission_group.is_empty() {
-                                has_permission = true;
-                                break;
-                            } else {
-                                let group_result = self.auth_provider
-                                    .as_ref()
-                                    .unwrap()
-                                    .check_permissions(user, permission_group);
-                                if group_result.is_ok() {
-                                    has_permission = true;
-                                    break;
-                                }
-                            }
-                        }
-
-                        if !has_permission {
-                            let first_group = required_permission_groups.iter()
-                                .find(|g| !g.is_empty())
-                                .cloned()
-                                .unwrap_or_default();
-                            return ras_jsonrpc_types::JsonRpcResponse::error(
-                                ras_jsonrpc_types::JsonRpcError::insufficient_permissions(
-                                    first_group,
-                                    user.permissions.iter().cloned().collect()
-                                ),
-                                request.id.clone()
-                            );
-                        }
+                    let provider = self.auth_provider.as_ref().expect("auth provider required for WITH_PERMISSIONS methods");
+                    if let Err(error) = ras_jsonrpc_core::check_permission_groups(provider.as_ref(), user, &required_permission_groups) {
+                        let (required, has) = match error {
+                            ras_jsonrpc_core::AuthError::InsufficientPermissions { required, has } => (required, has),
+                            _ => (Vec::new(), Vec::new()),
+                        };
+                        return ras_jsonrpc_types::JsonRpcResponse::error(
+                            ras_jsonrpc_types::JsonRpcError::insufficient_permissions(required, has),
+                            request.id.clone()
+                        );
                     }
                 },
                 quote! { Some(user) },

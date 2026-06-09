@@ -929,12 +929,12 @@ fn generate_permission_check(auth: &AuthRequirement) -> TokenStream {
             });
 
             quote! {
+                // OR-of-AND permission check (shared ras-auth-core implementation).
+                // A group list with no non-empty groups means "any authenticated
+                // user", consistent with the REST and JSON-RPC macros.
                 let required_permission_groups: Vec<Vec<String>> = vec![#(#groups),*];
                 let authenticated_user = user.as_ref().expect("authenticated user exists after auth check");
-                let has_permission = required_permission_groups.iter().any(|group| {
-                    group.is_empty() || auth_provider.check_permissions(authenticated_user, group).is_ok()
-                });
-                if !has_permission {
+                if ::ras_auth_core::check_permission_groups(auth_provider.as_ref(), authenticated_user, &required_permission_groups).is_err() {
                     return __ras_file_error_response(::ras_file_core::FileError::Forbidden);
                 }
             }
