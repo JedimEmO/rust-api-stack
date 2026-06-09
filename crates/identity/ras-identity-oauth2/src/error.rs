@@ -27,6 +27,9 @@ pub enum OAuth2Error {
     #[error("Invalid id_token: {0}")]
     InvalidIdToken(String),
 
+    #[error("Too many pending OAuth2 flows")]
+    TooManyPendingFlows,
+
     #[error("User info request failed: {0}")]
     UserInfoFailed(String),
 

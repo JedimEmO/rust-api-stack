@@ -30,6 +30,12 @@ pub trait ConnectionManager: Send + Sync {
     /// Get all active connections
     async fn get_all_connections(&self) -> Result<Vec<ConnectionInfo>>;
 
+    /// Number of active connections. Implementations should override this
+    /// with a cheap counter; the default clones every ConnectionInfo.
+    async fn active_connection_count(&self) -> Result<usize> {
+        Ok(self.get_all_connections().await?.len())
+    }
+
     /// Get connections subscribed to a topic
     async fn get_subscribed_connections(&self, topic: &str) -> Result<Vec<ConnectionInfo>>;
 

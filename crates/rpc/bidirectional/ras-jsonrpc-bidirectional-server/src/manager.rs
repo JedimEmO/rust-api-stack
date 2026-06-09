@@ -174,6 +174,10 @@ impl ConnectionManager for DefaultConnectionManager {
             .collect())
     }
 
+    async fn active_connection_count(&self) -> Result<usize> {
+        Ok(self.connections.len())
+    }
+
     async fn get_subscribed_connections(&self, topic: &str) -> Result<Vec<ConnectionInfo>> {
         let connection_ids = self.get_topic_connections(topic);
         let mut connections = Vec::new();

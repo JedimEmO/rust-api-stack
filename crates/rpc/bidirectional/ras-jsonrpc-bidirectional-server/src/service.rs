@@ -4,7 +4,10 @@ use crate::{
     ConnectionContext, DefaultConnectionManager, MessageHandler, MessageRouter, ServerError,
     ServerResult, WebSocketHandler, WebSocketUpgrade,
     connection::ChannelMessageSender,
-    handler::{AuthRevalidation, AxumWebSocketIo, DEFAULT_AUTH_REVALIDATION_INTERVAL, WebSocketIo},
+    handler::{
+        AuthRevalidation, AxumWebSocketIo, DEFAULT_AUTH_REVALIDATION_INTERVAL, WebSocketIo,
+        WebSocketIoMessage,
+    },
 };
 use axum::{
     extract::{State, ws::WebSocketUpgrade as AxumWebSocketUpgrade},
@@ -62,12 +65,35 @@ pub trait WebSocketService: Clone + Send + Sync + 'static {
         DEFAULT_AUTH_REVALIDATION_INTERVAL
     }
 
+    /// Maximum simultaneous connections; further upgrades are refused.
+    ///
+    /// The check is advisory (checked-then-added, not atomic), so a burst
+    /// can briefly overshoot by a few connections.
+    fn max_connections(&self) -> Option<usize> {
+        None
+    }
+
     /// Handle WebSocket upgrade
     async fn handle_upgrade(
         &self,
         upgrade: AxumWebSocketUpgrade,
         headers: HeaderMap,
     ) -> Result<Response, (axum::http::StatusCode, String)> {
+        // Refuse before upgrading when the connection cap is reached.
+        if let Some(limit) = self.max_connections() {
+            let current = self
+                .connection_manager()
+                .active_connection_count()
+                .await
+                .unwrap_or(0);
+            if current >= limit {
+                return Err((
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                    "Connection limit reached".to_string(),
+                ));
+            }
+        }
+
         let ws_upgrade = WebSocketUpgrade::new(upgrade, headers);
         // Captured pre-upgrade so the connection can periodically re-validate it.
         let auth_token = ws_upgrade.extract_auth_token();
@@ -131,6 +157,25 @@ where
 {
     let connection_id = ConnectionId::new();
     info!("New WebSocket connection: {}", connection_id);
+
+    // Enforce the connection cap for transports that bypass handle_upgrade.
+    if let Some(limit) = service.max_connections() {
+        let current = service
+            .connection_manager()
+            .active_connection_count()
+            .await
+            .unwrap_or(0);
+        if current >= limit {
+            let _ = socket
+                .send(WebSocketIoMessage::Close(Some(
+                    "connection limit reached".to_string(),
+                )))
+                .await;
+            return Err(ServerError::Internal(
+                "connection limit reached".to_string(),
+            ));
+        }
+    }
 
     let channel_capacity = service.message_channel_capacity().max(1);
     let (message_tx, message_rx) = mpsc::channel(channel_capacity);
@@ -203,6 +248,8 @@ pub struct WebSocketServiceBuilder<H, A, M = DefaultConnectionManager> {
     /// Interval between credential re-validations for live connections
     #[builder(default = DEFAULT_AUTH_REVALIDATION_INTERVAL)]
     auth_revalidation_interval: Duration,
+    /// Maximum simultaneous connections (None = unbounded)
+    max_connections: Option<usize>,
 }
 
 impl<H, A> WebSocketServiceBuilder<H, A, DefaultConnectionManager>
@@ -222,6 +269,7 @@ where
             message_channel_capacity: self.message_channel_capacity,
             max_message_size: self.max_message_size,
             auth_revalidation_interval: self.auth_revalidation_interval,
+            max_connections: self.max_connections,
         }
     }
 }
@@ -242,6 +290,7 @@ where
             message_channel_capacity: self.message_channel_capacity,
             max_message_size: self.max_message_size,
             auth_revalidation_interval: self.auth_revalidation_interval,
+            max_connections: self.max_connections,
         }
     }
 }
@@ -255,6 +304,7 @@ pub struct BuiltWebSocketService<H, A, M> {
     message_channel_capacity: usize,
     max_message_size: usize,
     auth_revalidation_interval: Duration,
+    max_connections: Option<usize>,
 }
 
 impl<H, A, M> Clone for BuiltWebSocketService<H, A, M> {
@@ -267,6 +317,7 @@ impl<H, A, M> Clone for BuiltWebSocketService<H, A, M> {
             message_channel_capacity: self.message_channel_capacity,
             max_message_size: self.max_message_size,
             auth_revalidation_interval: self.auth_revalidation_interval,
+            max_connections: self.max_connections,
         }
     }
 }
@@ -307,6 +358,10 @@ where
 
     fn auth_revalidation_interval(&self) -> Duration {
         self.auth_revalidation_interval
+    }
+
+    fn max_connections(&self) -> Option<usize> {
+        self.max_connections
     }
 }
 
@@ -446,6 +501,48 @@ mod tests {
         let service = builder.build();
 
         assert_eq!(service.auth_revalidation_interval(), Duration::from_secs(5));
+    }
+
+    #[tokio::test]
+    async fn connection_cap_refuses_excess_connections() {
+        let manager = Arc::new(DefaultConnectionManager::new());
+        let builder = WebSocketServiceBuilder::builder()
+            .handler(Arc::new(MessageRouter::new()))
+            .auth_provider(Arc::new(MockAuthProvider))
+            .max_connections(0)
+            .build();
+        let service = builder.build_with_manager(manager.clone());
+
+        let mut socket = InMemorySocket::closing([]);
+        let result = service
+            .handle_connection_with_io(&mut socket, Some(test_user()))
+            .await;
+
+        assert!(result.is_err(), "connection over the cap must be refused");
+        assert!(
+            socket
+                .outgoing
+                .iter()
+                .any(|message| matches!(message, WebSocketIoMessage::Close(_)))
+        );
+        assert_eq!(manager.connection_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn connection_cap_admits_connections_under_the_limit() {
+        let manager = Arc::new(DefaultConnectionManager::new());
+        let builder = WebSocketServiceBuilder::builder()
+            .handler(Arc::new(MessageRouter::new()))
+            .auth_provider(Arc::new(MockAuthProvider))
+            .max_connections(1)
+            .build();
+        let service = builder.build_with_manager(manager.clone());
+
+        let mut socket = InMemorySocket::closing([]);
+        service
+            .handle_connection_with_io(&mut socket, Some(test_user()))
+            .await
+            .expect("connection under the cap is admitted");
     }
 
     #[tokio::test]

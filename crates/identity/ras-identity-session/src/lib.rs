@@ -382,6 +382,36 @@ impl SessionService {
         Ok(claims)
     }
 
+    /// Number of sessions currently held in the in-memory store
+    /// (only populated when `enforce_active_sessions` is on).
+    pub async fn active_session_count(&self) -> usize {
+        self.active_sessions.read().await.len()
+    }
+
+    /// Spawn a background task pruning expired sessions every `interval`.
+    ///
+    /// Expired sessions are otherwise only pruned opportunistically when
+    /// begin_session/verify_session run, so a traffic lull leaves them in
+    /// memory indefinitely. The task holds only a weak reference and stops
+    /// when the service is dropped (or when the returned handle is aborted).
+    pub fn start_cleanup_task(
+        self: &std::sync::Arc<Self>,
+        interval: std::time::Duration,
+    ) -> tokio::task::JoinHandle<()> {
+        let service = std::sync::Arc::downgrade(self);
+        tokio::spawn(async move {
+            let mut timer = tokio::time::interval(interval);
+            timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                timer.tick().await;
+                let Some(service) = service.upgrade() else {
+                    break;
+                };
+                service.cleanup_expired_sessions().await;
+            }
+        })
+    }
+
     pub async fn end_session(&self, jti: &str) -> Option<JwtClaims> {
         let mut sessions = self.active_sessions.write().await;
         sessions.remove(jti)
@@ -681,5 +711,42 @@ mod tests {
         assert_eq!(user.user_id, "alice");
         assert!(user.permissions.contains("chat:read"));
         assert!(user.metadata.is_none());
+    }
+
+    #[tokio::test]
+    async fn cleanup_task_prunes_expired_sessions_in_background() {
+        let config = SessionConfig::new(TEST_SECRET).unwrap();
+        let service = std::sync::Arc::new(SessionService::new(config).unwrap());
+
+        // Plant an already-expired session directly in the store.
+        let now = chrono::Utc::now().timestamp();
+        service.active_sessions.write().await.insert(
+            "expired-jti".to_string(),
+            JwtClaims {
+                sub: "alice".to_string(),
+                exp: now - 10,
+                iat: now - 20,
+                jti: "expired-jti".to_string(),
+                provider_id: "local".to_string(),
+                email: None,
+                display_name: None,
+                permissions: HashSet::new(),
+                metadata: None,
+            },
+        );
+        assert_eq!(service.active_session_count().await, 1);
+
+        let handle = service.start_cleanup_task(std::time::Duration::from_millis(20));
+
+        // The sweeper prunes the expired session without any begin/verify call.
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while service.active_session_count().await != 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("cleanup task prunes expired sessions");
+
+        handle.abort();
     }
 }
