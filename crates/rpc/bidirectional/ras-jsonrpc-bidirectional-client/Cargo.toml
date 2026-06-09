@@ -64,3 +64,4 @@ wasm = ["tokio", "web-sys", "wasm-bindgen", "wasm-bindgen-futures", "js-sys"]
 [dev-dependencies]
 tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
