@@ -58,38 +58,26 @@ let oauth2_provider = OAuth2Provider::new(config, state_store);
 ### Integration with Session Service
 
 ```rust
-use ras_identity_core::{IdentityError, IdentityProvider};
+use ras_identity_core::IdentityProvider;
 use ras_identity_oauth2::OAuth2Response;
-use ras_identity_session::{SessionConfig, SessionError, SessionService};
+use ras_identity_session::{SessionConfig, SessionService};
 
-// Register with session service
+// Register with session service. The provider is cheap to clone; keep one
+// handle for flow initiation and register the other for verification.
 let session_config = SessionConfig::new("use-at-least-32-bytes-of-random-secret")?;
 let session_service = SessionService::new(session_config)?;
 
-session_service.register_provider(Box::new(oauth2_provider)).await;
+session_service.register_provider(Box::new(oauth2_provider.clone())).await;
 
 // Start OAuth2 flow
-let start_payload = serde_json::json!({
-    "type": "StartFlow",
-    "provider_id": "google"
-});
-
-// This will return an error containing the authorization URL
-match session_service.begin_session("oauth2", start_payload).await {
-    Err(SessionError::IdentityError(IdentityError::ProviderError(json))) => {
-        let response: OAuth2Response = serde_json::from_str(&json)?;
-        match response {
-            OAuth2Response::AuthorizationUrl { url, state } => {
-                // Redirect user to `url`
-                println!("Redirect to: {}", url);
-            }
-            OAuth2Response::Error { message } => {
-                eprintln!("OAuth2 start-flow failed: {message}");
-            }
-        }
+match oauth2_provider.start_flow("google", None).await? {
+    OAuth2Response::AuthorizationUrl { url, state } => {
+        // Redirect user to `url`
+        println!("Redirect to: {}", url);
     }
-    Ok(_) => eprintln!("OAuth2 start flow completed without a redirect"),
-    Err(err) => eprintln!("OAuth2 start flow failed: {err}"),
+    OAuth2Response::Error { message } => {
+        eprintln!("OAuth2 start-flow failed: {message}");
+    }
 }
 
 // Handle callback

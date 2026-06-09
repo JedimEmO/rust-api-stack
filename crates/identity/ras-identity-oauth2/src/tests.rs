@@ -220,30 +220,27 @@ mod integration_tests {
         let state_store = Arc::new(InMemoryStateStore::new());
         let provider = provider_with_server(provider_config, state_store, server);
 
-        // Start OAuth2 flow
+        // Start OAuth2 flow via the typed API
+        let start_result = provider.start_flow("mock_provider", None).await.unwrap();
+        let auth_url = match start_result {
+            OAuth2Response::AuthorizationUrl { url, state } => {
+                assert!(url.contains("/authorize"));
+                assert!(url.contains("response_type=code"));
+                assert!(url.contains("code_challenge"));
+                state
+            }
+            _ => panic!("Expected authorization URL"),
+        };
+
+        // StartFlow payloads are no longer routed through verify()
         let start_payload = serde_json::json!({
             "type": "StartFlow",
             "provider_id": "mock_provider"
         });
-
-        let start_result = provider.verify(start_payload).await;
-        assert!(start_result.is_err());
-
-        let auth_url =
-            if let Err(ras_identity_core::IdentityError::ProviderError(json)) = start_result {
-                let response: OAuth2Response = serde_json::from_str(&json).unwrap();
-                match response {
-                    OAuth2Response::AuthorizationUrl { url, state } => {
-                        assert!(url.contains("/authorize"));
-                        assert!(url.contains("response_type=code"));
-                        assert!(url.contains("code_challenge"));
-                        state
-                    }
-                    _ => panic!("Expected authorization URL"),
-                }
-            } else {
-                panic!("Expected provider error with auth URL");
-            };
+        assert!(matches!(
+            provider.verify(start_payload).await,
+            Err(ras_identity_core::IdentityError::UnsupportedMethod)
+        ));
 
         // Simulate callback
         let callback_payload = serde_json::json!({
@@ -270,12 +267,7 @@ mod integration_tests {
         let provider = OAuth2Provider::new(config, state_store);
 
         // Test invalid provider
-        let payload = serde_json::json!({
-            "type": "StartFlow",
-            "provider_id": "nonexistent"
-        });
-
-        let result = provider.verify(payload).await;
+        let result = provider.start_flow("nonexistent", None).await;
         assert!(result.is_err());
 
         // Test callback with invalid state
@@ -334,15 +326,8 @@ mod integration_tests {
         let provider = OAuth2Provider::new(config, state_store.clone());
 
         // Generate two authorization URLs
-        let payload1 = serde_json::json!({"type": "StartFlow", "provider_id": "test"});
-        let payload2 = serde_json::json!({"type": "StartFlow", "provider_id": "test"});
-
-        let result1 = provider.verify(payload1).await;
-        let result2 = provider.verify(payload2).await;
-
-        // Extract states
-        let state1 = extract_state_from_error(result1);
-        let state2 = extract_state_from_error(result2);
+        let state1 = extract_state(provider.start_flow("test", None).await);
+        let state2 = extract_state(provider.start_flow("test", None).await);
 
         // States should be unique
         assert_ne!(state1, state2);
@@ -352,17 +337,10 @@ mod integration_tests {
         assert_eq!(state2.len(), 36);
     }
 
-    fn extract_state_from_error(
-        result: Result<ras_identity_core::VerifiedIdentity, ras_identity_core::IdentityError>,
-    ) -> String {
-        if let Err(ras_identity_core::IdentityError::ProviderError(json)) = result {
-            let response: OAuth2Response = serde_json::from_str(&json).unwrap();
-            match response {
-                OAuth2Response::AuthorizationUrl { state, .. } => state,
-                _ => panic!("Expected authorization URL"),
-            }
-        } else {
-            panic!("Expected provider error");
+    fn extract_state(result: crate::OAuth2Result<OAuth2Response>) -> String {
+        match result.expect("start_flow succeeds") {
+            OAuth2Response::AuthorizationUrl { state, .. } => state,
+            _ => panic!("Expected authorization URL"),
         }
     }
 
