@@ -129,6 +129,7 @@ pub struct GetBetaFeaturesResponse {
 jsonrpc_service!({
     service_name: GoogleOAuth2Service,
     openrpc: true,
+    feature_gated: true,
     methods: [
         // Public endpoints (require authentication but no specific permissions)
         WITH_PERMISSIONS([]) get_user_info(GetUserInfoRequest) -> GetUserInfoResponse,

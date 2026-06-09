@@ -85,6 +85,7 @@ mod integration_tests {
             authorization_endpoint: "http://oauth.test/authorize".to_string(),
             token_endpoint: "http://oauth.test/token".to_string(),
             userinfo_endpoint: Some("http://oauth.test/userinfo".to_string()),
+            issuer: None,
             redirect_uri: "http://localhost:3000/callback".to_string(),
             scopes: vec!["openid".to_string(), "email".to_string()],
             auth_params: HashMap::new(),
@@ -315,6 +316,7 @@ mod integration_tests {
             authorization_endpoint: "https://example.com/auth".to_string(),
             token_endpoint: "https://example.com/token".to_string(),
             userinfo_endpoint: None,
+            issuer: None,
             redirect_uri: "http://localhost:3000/callback".to_string(),
             scopes: vec![],
             auth_params: HashMap::new(),
@@ -358,6 +360,7 @@ mod integration_tests {
             authorization_endpoint: "https://example.com/auth".to_string(),
             token_endpoint: "https://example.com/token".to_string(),
             userinfo_endpoint: None,
+            issuer: None,
             redirect_uri: "http://localhost:3000/callback".to_string(),
             scopes: vec![],
             auth_params: HashMap::new(),
@@ -411,6 +414,7 @@ mod integration_tests {
             state: state.state,
             error: None,
             error_description: None,
+            binding: None,
         };
 
         let result = client.handle_callback(&provider_config, callback).await;
@@ -438,6 +442,7 @@ mod integration_tests {
             state: state2.state,
             error: None,
             error_description: None,
+            binding: None,
         };
 
         let result = client.handle_callback(&provider_config, callback2).await;

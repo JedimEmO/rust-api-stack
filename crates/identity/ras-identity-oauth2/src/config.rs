@@ -12,6 +12,11 @@ pub struct OAuth2ProviderConfig {
     pub authorization_endpoint: String,
     pub token_endpoint: String,
     pub userinfo_endpoint: Option<String>,
+    /// Expected `iss` claim of id_tokens returned by this provider
+    /// (e.g. "https://accounts.google.com"). When set, callbacks carrying
+    /// an id_token with a different issuer are rejected.
+    #[serde(default)]
+    pub issuer: Option<String>,
     pub redirect_uri: String,
     pub scopes: Vec<String>,
     /// Additional parameters to include in authorization request
@@ -93,6 +98,7 @@ mod tests {
             authorization_endpoint: "https://x/auth".into(),
             token_endpoint: "https://x/token".into(),
             userinfo_endpoint: Some("https://x/info".into()),
+            issuer: None,
             redirect_uri: "https://app/cb".into(),
             scopes: vec!["openid".into(), "email".into()],
             auth_params: HashMap::new(),

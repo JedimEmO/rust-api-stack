@@ -16,6 +16,9 @@ OAuth2 identity provider implementation with PKCE support for Rust Agent Stack.
 
 - **PKCE Support**: Mitigates authorization code interception attacks
 - **State Parameter**: CSRF protection using cryptographically random UUIDs
+- **OIDC Nonce**: Sent on every authorization request and verified against the id_token
+- **id_token Claim Validation**: `iss` (when `issuer` is configured), `aud`, `exp` and `nonce` are checked on callback. The signature is not verified because the token arrives directly from the token endpoint over TLS, which OIDC Core §3.1.3.7 permits for the code flow
+- **Session Binding (login-CSRF guard)**: `start_flow_bound` accepts an unguessable per-browser-session value (e.g. a random cookie); the callback payload must carry the identical `binding` or it is rejected, so an attacker cannot trick a victim into completing the attacker's flow
 - **Input Validation**: Robust handling of malformed responses
 - **Single-Use State**: Callback state is removed after successful retrieval
 
@@ -111,6 +114,7 @@ let jwt_token = session_service.begin_session("oauth2", callback_payload).await?
 - `authorization_endpoint`: Provider's authorization URL
 - `token_endpoint`: Provider's token exchange URL
 - `userinfo_endpoint`: Provider's user info URL (optional)
+- `issuer`: Expected `iss` claim of id_tokens (e.g. `https://accounts.google.com`); when set, id_tokens with a different issuer are rejected
 - `redirect_uri`: Your application's callback URL
 - `scopes`: Requested OAuth2 scopes
 - `auth_params`: Additional authorization parameters

@@ -28,6 +28,10 @@ pub enum OAuth2AuthPayload {
         state: String,
         error: Option<String>,
         error_description: Option<String>,
+        /// Session-binding value captured when the flow was started (e.g.
+        /// from a cookie); required when the flow was started with one.
+        #[serde(default)]
+        binding: Option<String>,
     },
 }
 
@@ -115,12 +119,27 @@ impl OAuth2Provider {
         provider_id: &str,
         additional_params: Option<HashMap<String, String>>,
     ) -> OAuth2Result<OAuth2Response> {
+        self.start_flow_bound(provider_id, additional_params, None)
+            .await
+    }
+
+    /// Start a flow bound to the initiating browser session.
+    ///
+    /// `binding` should be an unguessable value the integrator can recover on
+    /// callback (e.g. a random cookie value); the callback payload must then
+    /// carry the identical value or it is rejected, preventing login CSRF.
+    pub async fn start_flow_bound(
+        &self,
+        provider_id: &str,
+        additional_params: Option<HashMap<String, String>>,
+        binding: Option<String>,
+    ) -> OAuth2Result<OAuth2Response> {
         let provider_config = self.get_provider_config(provider_id)?;
         let params = additional_params.unwrap_or_default();
 
         let (auth_url, state) = self
             .client
-            .generate_authorization_url(provider_config, params)
+            .generate_authorization_url_bound(provider_config, params, binding)
             .await?;
 
         info!("Started OAuth2 flow for provider: {}", provider_id);
@@ -139,6 +158,7 @@ impl OAuth2Provider {
         state: String,
         error: Option<String>,
         error_description: Option<String>,
+        binding: Option<String>,
     ) -> OAuth2Result<VerifiedIdentity> {
         let provider_config = self.get_provider_config(provider_id)?;
 
@@ -147,6 +167,7 @@ impl OAuth2Provider {
             state,
             error,
             error_description,
+            binding,
         };
 
         // Exchange code for tokens
@@ -280,9 +301,10 @@ impl IdentityProvider for OAuth2Provider {
                 state,
                 error,
                 error_description,
+                binding,
             } => {
                 // For callback, we complete the flow and return the verified identity
-                self.handle_callback(&provider_id, code, state, error, error_description)
+                self.handle_callback(&provider_id, code, state, error, error_description, binding)
                     .await
                     .map_err(|e| IdentityError::ProviderError(e.to_string()))
             }
@@ -304,6 +326,7 @@ mod tests {
             authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
             token_endpoint: "https://oauth2.googleapis.com/token".to_string(),
             userinfo_endpoint: Some("https://www.googleapis.com/oauth2/v1/userinfo".to_string()),
+            issuer: None,
             redirect_uri: "http://localhost:3000/callback".to_string(),
             scopes: vec![
                 "openid".to_string(),

@@ -16,6 +16,13 @@ pub struct OAuth2State {
     pub provider_id: String,
     pub redirect_uri: String,
     pub code_verifier: Option<String>,
+    /// OIDC nonce sent in the authorization request; the id_token returned
+    /// on callback must echo it.
+    pub nonce: Option<String>,
+    /// Optional caller-supplied value binding this flow to the browser
+    /// session that started it (e.g. a random cookie value). When set, the
+    /// callback must present the identical value, preventing login CSRF.
+    pub binding: Option<String>,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub metadata: Option<serde_json::Value>,
@@ -37,10 +44,24 @@ impl OAuth2State {
             provider_id,
             redirect_uri,
             code_verifier,
+            nonce: None,
+            binding: None,
             created_at,
             expires_at,
             metadata: None,
         }
+    }
+
+    /// Attach an OIDC nonce to the flow.
+    pub fn with_nonce(mut self, nonce: String) -> Self {
+        self.nonce = Some(nonce);
+        self
+    }
+
+    /// Bind the flow to the initiating browser session (login-CSRF guard).
+    pub fn with_binding(mut self, binding: Option<String>) -> Self {
+        self.binding = binding;
+        self
     }
 
     pub fn is_expired(&self) -> bool {

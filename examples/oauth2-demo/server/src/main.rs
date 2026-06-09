@@ -129,6 +129,7 @@ fn create_oauth2_provider(config: &AppConfig) -> Result<OAuth2Provider> {
         authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
         token_endpoint: "https://oauth2.googleapis.com/token".to_string(),
         userinfo_endpoint: Some("https://www.googleapis.com/oauth2/v3/userinfo".to_string()),
+        issuer: Some("https://accounts.google.com".to_string()),
         redirect_uri: config.redirect_uri.clone(),
         scopes: vec![
             "openid".to_string(),
@@ -228,6 +229,7 @@ async fn oauth2_callback_handler(
         state: state_param,
         error: callback_query.error,
         error_description: callback_query.error_description,
+        binding: None,
     };
 
     let payload_json = serde_json::to_value(auth_payload)

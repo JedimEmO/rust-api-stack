@@ -28,6 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
         token_endpoint: "https://oauth2.googleapis.com/token".to_string(),
         userinfo_endpoint: Some("https://www.googleapis.com/oauth2/v1/userinfo".to_string()),
+        issuer: Some("https://accounts.google.com".to_string()),
         redirect_uri: "http://localhost:3000/auth/google/callback".to_string(),
         scopes: vec![
             "openid".to_string(),
@@ -153,6 +154,7 @@ mod tests {
             authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
             token_endpoint: "https://oauth2.googleapis.com/token".to_string(),
             userinfo_endpoint: Some("https://www.googleapis.com/oauth2/v1/userinfo".to_string()),
+            issuer: Some("https://accounts.google.com".to_string()),
             redirect_uri: "http://localhost:3000/callback".to_string(),
             scopes: vec!["openid".to_string(), "email".to_string()],
             auth_params: HashMap::new(),
