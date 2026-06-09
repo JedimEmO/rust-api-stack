@@ -79,6 +79,36 @@ impl DefaultConnectionManager {
     pub fn get_sender(&self, id: ConnectionId) -> Option<ChannelMessageSender> {
         self.connections.get(&id).map(|entry| entry.1.clone())
     }
+
+    /// Send `message` to every recipient concurrently.
+    ///
+    /// Senders are cloned out of the map before any send so no DashMap shard
+    /// lock is held across an await (a slow consumer with a full channel
+    /// would otherwise block every other map access on that shard), and the
+    /// slowest recipient bounds wall-clock time instead of the sum of all.
+    async fn fan_out(
+        &self,
+        recipients: Vec<(ConnectionId, ChannelMessageSender)>,
+        message: BidirectionalMessage,
+    ) -> (usize, Vec<ConnectionId>) {
+        let sends = recipients.into_iter().map(|(id, sender)| {
+            let message = message.clone();
+            async move { (id, sender.send(message).await) }
+        });
+
+        let mut sent_count = 0;
+        let mut failed = Vec::new();
+        for (id, result) in futures::future::join_all(sends).await {
+            match result {
+                Ok(()) => sent_count += 1,
+                Err(e) => {
+                    warn!("Failed to broadcast to connection {}: {}", id, e);
+                    failed.push(id);
+                }
+            }
+        }
+        (sent_count, failed)
+    }
 }
 
 #[async_trait]
@@ -112,15 +142,13 @@ impl ConnectionManager for DefaultConnectionManager {
 
     async fn remove_connection(&self, id: ConnectionId) -> Result<()> {
         if let Some((_, (info, _))) = self.connections.remove(&id) {
-            // Remove from all topic subscriptions
+            // Remove from all topic subscriptions. remove_if keeps the
+            // empty-entry cleanup atomic against concurrent subscribes.
             for topic in info.subscriptions.iter() {
                 if let Some(mut entry) = self.subscriptions.get_mut(topic) {
                     entry.retain(|&connection_id| connection_id != id);
-                    if entry.is_empty() {
-                        drop(entry);
-                        self.subscriptions.remove(topic);
-                    }
                 }
+                self.subscriptions.remove_if(topic, |_, ids| ids.is_empty());
             }
 
             // Clean up pending requests for this connection
@@ -183,15 +211,35 @@ impl ConnectionManager for DefaultConnectionManager {
     }
 
     async fn add_subscription(&self, id: ConnectionId, topic: String) -> Result<()> {
-        // Update topic subscriptions
-        self.subscriptions
-            .entry(topic.clone())
-            .or_default()
-            .push(id);
-
-        // Update connection subscriptions
-        if let Some(mut entry) = self.connections.get_mut(&id) {
+        // Only live connections may enter the topic index, otherwise a
+        // subscribe racing remove_connection leaves dangling ids behind.
+        {
+            let Some(mut entry) = self.connections.get_mut(&id) else {
+                warn!(
+                    "Attempted to subscribe non-existent connection {} to topic {}",
+                    id, topic
+                );
+                return Ok(());
+            };
             entry.0.subscribe(topic.clone());
+        }
+
+        {
+            let mut entry = self.subscriptions.entry(topic.clone()).or_default();
+            if !entry.contains(&id) {
+                entry.push(id);
+            }
+        }
+
+        // The connection may have been removed between the liveness check and
+        // the index insert; undo so no zombie entry survives the race.
+        if !self.connections.contains_key(&id) {
+            if let Some(mut entry) = self.subscriptions.get_mut(&topic) {
+                entry.retain(|&connection_id| connection_id != id);
+            }
+            self.subscriptions
+                .remove_if(&topic, |_, ids| ids.is_empty());
+            return Ok(());
         }
 
         debug!("Connection {} subscribed to topic {}", id, topic);
@@ -202,11 +250,11 @@ impl ConnectionManager for DefaultConnectionManager {
         // Update topic subscriptions
         if let Some(mut entry) = self.subscriptions.get_mut(topic) {
             entry.retain(|&connection_id| connection_id != id);
-            if entry.is_empty() {
-                drop(entry);
-                self.subscriptions.remove(topic);
-            }
         }
+        // Drop the topic entry only if it is still empty at removal time, so
+        // a concurrent subscribe between the retain above and this call is
+        // not thrown away.
+        self.subscriptions.remove_if(topic, |_, ids| ids.is_empty());
 
         // Update connection subscriptions
         if let Some(mut entry) = self.connections.get_mut(&id) {
@@ -230,9 +278,11 @@ impl ConnectionManager for DefaultConnectionManager {
         id: ConnectionId,
         message: BidirectionalMessage,
     ) -> Result<()> {
-        if let Some(entry) = self.connections.get(&id) {
-            entry
-                .1
+        // Clone the sender out of the map: awaiting a send on a full channel
+        // while holding the shard guard would block other map accesses.
+        let sender = self.connections.get(&id).map(|entry| entry.1.clone());
+        if let Some(sender) = sender {
+            sender
                 .send(message)
                 .await
                 .map_err(ras_jsonrpc_bidirectional_types::BidirectionalError::SendError)?;
@@ -255,26 +305,21 @@ impl ConnectionManager for DefaultConnectionManager {
         }
 
         let mut failed_connections = Vec::new();
-        let mut sent_count = 0;
-
-        for connection_id in &topic_connections {
-            if let Some(entry) = self.connections.get(connection_id) {
-                if let Err(e) = entry.1.send(message.clone()).await {
-                    warn!("Failed to broadcast to connection {}: {}", connection_id, e);
-                    failed_connections.push(*connection_id);
-                } else {
-                    sent_count += 1;
-                }
+        let mut recipients = Vec::with_capacity(topic_connections.len());
+        for connection_id in topic_connections {
+            if let Some(entry) = self.connections.get(&connection_id) {
+                recipients.push((connection_id, entry.1.clone()));
             } else {
-                failed_connections.push(*connection_id);
+                failed_connections.push(connection_id);
             }
         }
 
+        let (sent_count, send_failures) = self.fan_out(recipients, message).await;
+        failed_connections.extend(send_failures);
+
         // Clean up failed connections from topic subscriptions
-        if !failed_connections.is_empty() {
-            for connection_id in failed_connections {
-                let _ = self.remove_subscription(connection_id, topic).await;
-            }
+        for connection_id in failed_connections {
+            let _ = self.remove_subscription(connection_id, topic).await;
         }
 
         debug!(
@@ -285,21 +330,14 @@ impl ConnectionManager for DefaultConnectionManager {
     }
 
     async fn broadcast_to_authenticated(&self, message: BidirectionalMessage) -> Result<usize> {
-        let mut sent_count = 0;
+        let recipients: Vec<_> = self
+            .connections
+            .iter()
+            .filter(|entry| entry.value().0.is_authenticated())
+            .map(|entry| (*entry.key(), entry.value().1.clone()))
+            .collect();
 
-        for entry in self.connections.iter() {
-            let (info, sender) = entry.value();
-            if info.is_authenticated() {
-                if let Err(e) = sender.send(message.clone()).await {
-                    warn!(
-                        "Failed to broadcast to authenticated connection {}: {}",
-                        info.id, e
-                    );
-                } else {
-                    sent_count += 1;
-                }
-            }
-        }
+        let (sent_count, _) = self.fan_out(recipients, message).await;
 
         debug!("Broadcasted to {} authenticated connections", sent_count);
         Ok(sent_count)
@@ -310,21 +348,14 @@ impl ConnectionManager for DefaultConnectionManager {
         permission: &str,
         message: BidirectionalMessage,
     ) -> Result<usize> {
-        let mut sent_count = 0;
+        let recipients: Vec<_> = self
+            .connections
+            .iter()
+            .filter(|entry| entry.value().0.has_permission(permission))
+            .map(|entry| (*entry.key(), entry.value().1.clone()))
+            .collect();
 
-        for entry in self.connections.iter() {
-            let (info, sender) = entry.value();
-            if info.has_permission(permission) {
-                if let Err(e) = sender.send(message.clone()).await {
-                    warn!(
-                        "Failed to broadcast to connection {} with permission {}: {}",
-                        info.id, permission, e
-                    );
-                } else {
-                    sent_count += 1;
-                }
-            }
-        }
+        let (sent_count, _) = self.fan_out(recipients, message).await;
 
         debug!(
             "Broadcasted to {} connections with permission: {}",
@@ -358,10 +389,11 @@ impl ConnectionManager for DefaultConnectionManager {
     ) -> Result<Option<oneshot::Sender<ras_jsonrpc_types::JsonRpcResponse>>> {
         if let Some(mut entry) = self.pending_requests.get_mut(&connection_id) {
             let sender = entry.remove(request_id);
-            if entry.is_empty() {
-                drop(entry);
-                self.pending_requests.remove(&connection_id);
-            }
+            drop(entry);
+            // Conditional removal so a concurrent register between the drop
+            // above and this call is not thrown away.
+            self.pending_requests
+                .remove_if(&connection_id, |_, requests| requests.is_empty());
             debug!("Removed pending request for connection: {}", connection_id);
             Ok(sender)
         } else {
