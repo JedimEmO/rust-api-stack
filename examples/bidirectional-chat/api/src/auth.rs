@@ -68,6 +68,7 @@ rest_service!({
     service_name: ChatAuthService,
     base_path: "/",
     openapi: true,
+    feature_gated: true,
     serve_docs: false,
     endpoints: [
         // Authentication endpoints

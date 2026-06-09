@@ -226,6 +226,7 @@ pub struct UserStoppedTypingNotification {
 // Generate the bidirectional chat service
 jsonrpc_bidirectional_service!({
     service_name: ChatService,
+    feature_gated: true,
 
     // Client -> Server methods (with authentication/permissions)
     client_to_server: [

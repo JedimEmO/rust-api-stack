@@ -79,6 +79,7 @@ struct ServiceDefinition {
     openapi: Option<OpenApiConfig>,
     static_hosting: static_hosting::StaticHostingConfig,
     body_limit: Option<usize>,
+    feature_gated: bool,
     endpoints: Vec<EndpointDefinition>,
 }
 
@@ -252,6 +253,7 @@ impl Parse for ServiceDefinition {
         let mut openapi = None;
         let mut static_hosting = static_hosting::StaticHostingConfig::default();
         let mut body_limit = None;
+        let mut feature_gated = false;
 
         // Parse optional fields
         while content.peek(Ident) {
@@ -303,6 +305,12 @@ impl Parse for ServiceDefinition {
                 let limit = content.parse::<syn::LitInt>()?;
                 body_limit = Some(limit.base10_parse::<usize>()?);
                 let _ = content.parse::<Token![,]>()?;
+            } else if field_name == "feature_gated" {
+                let _ = content.parse::<Ident>()?; // "feature_gated"
+                let _ = content.parse::<Token![:]>()?;
+                let enabled = content.parse::<syn::LitBool>()?;
+                feature_gated = enabled.value();
+                let _ = content.parse::<Token![,]>()?;
             } else if field_name == "endpoints" {
                 break; // Start parsing endpoints
             } else {
@@ -337,6 +345,7 @@ impl Parse for ServiceDefinition {
             openapi,
             static_hosting,
             body_limit,
+            feature_gated,
             endpoints,
         })
     }
@@ -780,8 +789,27 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
 
     let body_limit = service_def.body_limit.unwrap_or(DEFAULT_BODY_LIMIT);
 
-    let server_code = if cfg!(feature = "server") {
+    // `cfg!(feature = ...)` below evaluates the MACRO crate's features, which
+    // Cargo unifies across the whole workspace — one crate enabling `client`
+    // forces client codegen into every consumer's expansion. With
+    // `feature_gated: true` the generated code is instead wrapped in
+    // `#[cfg(feature = ...)]` attributes that resolve against the CONSUMER
+    // crate's own `server`/`client` features, immune to unification.
+    let feature_gated = service_def.feature_gated;
+    let cfg_server = if feature_gated {
+        quote! { #[cfg(feature = "server")] }
+    } else {
+        quote! {}
+    };
+    let cfg_client = if feature_gated {
+        quote! { #[cfg(feature = "client")] }
+    } else {
+        quote! {}
+    };
+
+    let server_code = if feature_gated || cfg!(feature = "server") {
         quote! {
+        #cfg_server
         mod #server_mod {
             use super::*;
 
@@ -941,20 +969,23 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
 
         }
 
+        #cfg_server
         pub use #server_mod::*;
         }
     } else {
         quote! {}
     };
 
-    let client_code = if cfg!(feature = "client") {
+    let client_code = if feature_gated || cfg!(feature = "client") {
         quote! {
+        #cfg_client
         mod #client_mod {
             use super::*;
 
             #client_impl
         }
 
+        #cfg_client
         pub use #client_mod::*;
         }
     } else {

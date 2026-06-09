@@ -28,6 +28,7 @@ struct ServiceDefinition {
     service_name: Ident,
     openrpc: Option<OpenRpcConfig>,
     explorer: Option<ExplorerConfig>,
+    feature_gated: bool,
     methods: Vec<MethodDefinition>,
 }
 
@@ -148,6 +149,7 @@ impl Parse for ServiceDefinition {
         // Check if openrpc field is present
         let mut openrpc = None;
         let mut explorer = None;
+        let mut feature_gated = false;
 
         // Parse optional fields until we hit "methods"
         while content.peek(Ident) {
@@ -193,6 +195,9 @@ impl Parse for ServiceDefinition {
                     let path = explorer_content.parse::<LitStr>()?;
                     explorer = Some(ExplorerConfig::WithPath(path.value()));
                 }
+            } else if field_name == "feature_gated" {
+                let enabled = content.parse::<syn::LitBool>()?;
+                feature_gated = enabled.value();
             }
 
             let _ = content.parse::<Token![,]>()?;
@@ -220,6 +225,7 @@ impl Parse for ServiceDefinition {
             service_name,
             openrpc,
             explorer,
+            feature_gated,
             methods,
         })
     }
@@ -460,8 +466,25 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
         quote! {}
     };
 
-    let server_code = if cfg!(feature = "server") {
+    // With `feature_gated: true` the generated code is wrapped in
+    // `#[cfg(feature = ...)]` attributes resolved against the CONSUMER
+    // crate's features, immune to workspace feature unification of the
+    // macro crate's own features (which `cfg!` evaluates).
+    let feature_gated = service_def.feature_gated;
+    let cfg_server = if feature_gated {
+        quote! { #[cfg(feature = "server")] }
+    } else {
+        quote! {}
+    };
+    let cfg_client = if feature_gated {
+        quote! { #[cfg(feature = "client")] }
+    } else {
+        quote! {}
+    };
+
+    let server_code = if feature_gated || cfg!(feature = "server") {
         quote! {
+        #cfg_server
         mod #server_mod {
             use super::*;
 
@@ -469,6 +492,7 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
             #explorer_code
         }
 
+        #cfg_server
         pub use #server_mod::*;
         }
     } else {
@@ -482,14 +506,16 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
         quote! {}
     };
 
-    let client_code = if cfg!(feature = "client") {
+    let client_code = if feature_gated || cfg!(feature = "client") {
         quote! {
+        #cfg_client
         mod #client_mod {
             use super::*;
 
             #client_impl
         }
 
+        #cfg_client
         pub use #client_mod::*;
         }
     } else {

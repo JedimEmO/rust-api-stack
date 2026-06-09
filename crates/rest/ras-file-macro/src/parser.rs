@@ -9,6 +9,7 @@ pub struct FileServiceDefinition {
     pub service_name: Ident,
     pub base_path: LitStr,
     pub openapi: Option<OpenApiConfig>,
+    pub feature_gated: bool,
     pub endpoints: Vec<Endpoint>,
 }
 
@@ -103,6 +104,7 @@ impl Parse for FileServiceDefinition {
         let mut service_name = None;
         let mut base_path = None;
         let mut openapi = None;
+        let mut feature_gated = false;
         let mut endpoints = Vec::new();
 
         while !content.is_empty() {
@@ -112,6 +114,10 @@ impl Parse for FileServiceDefinition {
             match field_name.to_string().as_str() {
                 "service_name" => service_name = Some(content.parse()?),
                 "base_path" => base_path = Some(content.parse()?),
+                "feature_gated" => {
+                    let enabled = content.parse::<syn::LitBool>()?;
+                    feature_gated = enabled.value();
+                }
                 "body_limit" => {
                     return Err(Error::new(
                         field_name.span(),
@@ -183,6 +189,7 @@ impl Parse for FileServiceDefinition {
                 .ok_or_else(|| Error::new(input.span(), "Missing service_name"))?,
             base_path: base_path.ok_or_else(|| Error::new(input.span(), "Missing base_path"))?,
             openapi,
+            feature_gated,
             endpoints,
         })
     }

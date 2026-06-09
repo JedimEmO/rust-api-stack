@@ -37,37 +37,60 @@ pub fn file_service(input: TokenStream) -> TokenStream {
         quote! {}
     };
 
-    let server_output = if cfg!(feature = "server") {
+    // With `feature_gated: true` the generated code is wrapped in
+    // `#[cfg(feature = ...)]` attributes resolved against the CONSUMER
+    // crate's features, immune to workspace feature unification of the
+    // macro crate's own features (which `cfg!` evaluates).
+    let feature_gated = definition.feature_gated;
+    let cfg_server = if feature_gated {
+        quote! { #[cfg(feature = "server")] }
+    } else {
+        quote! {}
+    };
+    let cfg_client = if feature_gated {
+        quote! { #[cfg(feature = "client")] }
+    } else {
+        quote! {}
+    };
+
+    let server_output = if feature_gated || cfg!(feature = "server") {
         quote! {
+        #cfg_server
         mod #server_mod {
             use super::*;
             #server_code
         }
 
+        #cfg_server
         pub use #server_mod::*;
 
+        #cfg_server
         const _: () = {
             #schema_checks
         };
 
+        #cfg_server
         mod #openapi_mod {
             use super::*;
             #openapi_code
         }
 
+        #cfg_server
         pub use #openapi_mod::*;
         }
     } else {
         quote! {}
     };
 
-    let client_output = if cfg!(feature = "client") {
+    let client_output = if feature_gated || cfg!(feature = "client") {
         quote! {
+        #cfg_client
         mod #client_mod {
             use super::*;
             #client_code
         }
 
+        #cfg_client
         pub use #client_mod::*;
         }
     } else {
