@@ -1,0 +1,29 @@
+[package]
+name = "ras-authorization-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "RAS-native authorization control plane: service registry, audience-scoped grants, pluggable service identity, and the internal service token issuer"
+keywords = ["api", "auth", "authorization", "rbac", "tokens"]
+categories = ["authentication", "web-programming"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-api-stack"
+homepage = "https://github.com/JedimEmO/rust-api-stack"
+readme = "README.md"
+
+[dependencies]
+ras-authorization-token = { path = "../ras-authorization-token", version = "0.1.0" }
+ras-auth-core = { path = "../../core/ras-auth-core", version = "0.1.0" }
+ras-permission-manifest = { path = "../../specs/ras-permission-manifest", version = "0.1.0" }
+
+async-trait = { workspace = true }
+axum = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+axum-test = { workspace = true }

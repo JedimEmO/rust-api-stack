@@ -1,0 +1,30 @@
+[package]
+name = "ras-integration-ras"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "RasInternalTokenSource: RAS-issued internal service tokens for the outbound token framework, backed by the RAS authorization control plane"
+keywords = ["api", "auth", "authorization", "tokens", "services"]
+categories = ["authentication", "web-programming"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-api-stack"
+homepage = "https://github.com/JedimEmO/rust-api-stack"
+readme = "README.md"
+
+[dependencies]
+ras-authorization-core = { path = "../../authorization/ras-authorization-core", version = "0.1.0" }
+ras-integration-core = { path = "../ras-integration-core", version = "0.1.0" }
+ras-transport-core = { path = "../../core/ras-transport-core", version = "0.1.0" }
+
+async-trait = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+ras-authorization-token = { path = "../../authorization/ras-authorization-token", version = "0.1.0" }
+ras-permission-manifest = { path = "../../specs/ras-permission-manifest", version = "0.1.0" }
+
+bytes = { workspace = true }
+futures = { workspace = true }

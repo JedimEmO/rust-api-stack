@@ -27,3 +27,10 @@
 - [Permission Manifests](permission-manifests.md)
 - [Identity And Sessions](identity-and-sessions.md)
 - [Observability](observability.md)
+
+# Multi-Service Auth
+
+- [Service-To-Service Auth](service-to-service-auth.md)
+- [Outbound Integrations](outbound-integrations.md)
+- [The Auth Gateway](auth-gateway.md)
+- [Topology](topology.md)

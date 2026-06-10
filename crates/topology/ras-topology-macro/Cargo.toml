@@ -1,0 +1,20 @@
+[package]
+name = "ras-topology-macro"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "ras_topology! macro: declare compile-checked RAS service graphs that generate validated topology builders"
+keywords = ["api", "topology", "macro", "authorization", "codegen"]
+categories = ["development-tools", "web-programming"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-api-stack"
+homepage = "https://github.com/JedimEmO/rust-api-stack"
+readme = "README.md"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true }

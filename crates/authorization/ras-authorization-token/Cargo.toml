@@ -1,0 +1,28 @@
+[package]
+name = "ras-authorization-token"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Shared RAS token claims, signing, JWKS, and validation primitives for sessions, internal service tokens, and gateway-derived tokens"
+keywords = ["api", "auth", "jwt", "jwks", "tokens"]
+categories = ["authentication", "web-programming"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-api-stack"
+homepage = "https://github.com/JedimEmO/rust-api-stack"
+readme = "README.md"
+
+[dependencies]
+base64 = { workspace = true }
+chrono = { workspace = true }
+ed25519-dalek = { workspace = true }
+hmac = { workspace = true }
+p256 = { workspace = true }
+rand_core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
