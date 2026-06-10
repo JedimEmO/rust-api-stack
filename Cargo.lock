@@ -3018,6 +3018,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "ras-integration-ras"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "chrono",
+ "futures",
+ "ras-authorization-core",
+ "ras-authorization-token",
+ "ras-integration-core",
+ "ras-permission-manifest",
+ "ras-transport-core",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "ras-jsonrpc-bidirectional-client"
 version = "0.1.0"
 dependencies = [
