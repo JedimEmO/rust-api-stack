@@ -3292,6 +3292,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "ras-topology-core"
+version = "0.1.0"
+dependencies = [
+ "ras-authorization-core",
+ "ras-authorization-gateway",
+ "ras-permission-manifest",
+ "ras-topology-macro",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+ "toml",
+]
+
+[[package]]
+name = "ras-topology-macro"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "ras-transport-core"
 version = "0.1.0"
 dependencies = [
