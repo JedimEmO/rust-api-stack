@@ -13,7 +13,9 @@ readme = "README.md"
 [features]
 default = []
 server = ["ras-jsonrpc-macro/server", "dep:axum", "dep:ras-jsonrpc-core"]
-client = ["ras-jsonrpc-macro/reqwest", "ras-transport-core/reqwest"]
+client = ["ras-jsonrpc-macro/reqwest", "reqwest"]
+# Enables the generated client's default ReqwestTransport constructor
+reqwest = ["ras-transport-core/reqwest"]
 
 [dependencies]
 # JSON-RPC infrastructure

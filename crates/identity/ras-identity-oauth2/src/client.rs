@@ -208,6 +208,22 @@ impl OAuth2Client {
         provider_config: &OAuth2ProviderConfig,
         additional_params: HashMap<String, String>,
     ) -> OAuth2Result<(String, String)> {
+        self.generate_authorization_url_bound(provider_config, additional_params, None)
+            .await
+    }
+
+    /// Generate an authorization URL bound to the initiating browser session.
+    ///
+    /// `binding` should be an unguessable value the integrator can recover on
+    /// callback (e.g. a random cookie value); the callback must then present
+    /// the identical value, preventing login CSRF where an attacker tricks a
+    /// victim into completing the attacker's flow.
+    pub async fn generate_authorization_url_bound(
+        &self,
+        provider_config: &OAuth2ProviderConfig,
+        additional_params: HashMap<String, String>,
+        binding: Option<String>,
+    ) -> OAuth2Result<(String, String)> {
         let mut url = Url::parse(&provider_config.authorization_endpoint)?;
 
         // Generate PKCE if enabled
@@ -217,13 +233,19 @@ impl OAuth2Client {
             None
         };
 
+        // OIDC nonce: echoed back inside the id_token and verified on
+        // callback, binding the token to this authorization request.
+        let nonce = uuid::Uuid::new_v4().to_string();
+
         // Create and store state
         let state = OAuth2State::new(
             provider_config.provider_id.clone(),
             provider_config.redirect_uri.clone(),
             pkce.as_ref().map(|p| p.code_verifier.clone()),
             self.state_ttl_seconds,
-        );
+        )
+        .with_nonce(nonce.clone())
+        .with_binding(binding);
 
         let state_param = state.state.clone();
         self.state_store.store(state).await?;
@@ -234,6 +256,7 @@ impl OAuth2Client {
         params.append_pair("client_id", &provider_config.client_id);
         params.append_pair("redirect_uri", &provider_config.redirect_uri);
         params.append_pair("state", &state_param);
+        params.append_pair("nonce", &nonce);
 
         // Add scopes
         if !provider_config.scopes.is_empty() {
@@ -280,6 +303,12 @@ impl OAuth2Client {
             return Err(OAuth2Error::InvalidState);
         }
 
+        // When the flow was bound to a browser session, the callback must
+        // present the identical binding value (login-CSRF guard).
+        if state.binding.is_some() && state.binding != callback_response.binding {
+            return Err(OAuth2Error::InvalidState);
+        }
+
         // Check for errors in callback
         if let Some(error) = &callback_response.error {
             let error_desc = callback_response
@@ -300,6 +329,14 @@ impl OAuth2Client {
                 state.code_verifier.as_deref(),
             )
             .await?;
+
+        // Validate id_token claims when the provider returned one. The token
+        // arrived directly from the token endpoint over TLS, which OIDC Core
+        // §3.1.3.7 permits in place of signature validation for the code
+        // flow — but iss / aud / exp / nonce are still mandatory checks.
+        if let Some(id_token) = &token_response.id_token {
+            validate_id_token_claims(provider_config, id_token, state.nonce.as_deref())?;
+        }
 
         Ok(token_response)
     }
@@ -348,6 +385,79 @@ impl OAuth2Client {
             .get_user_info(userinfo_endpoint, access_token)
             .await
     }
+}
+
+/// Claims checked on an id_token returned by the token endpoint.
+#[derive(serde::Deserialize)]
+struct IdTokenClaims {
+    iss: Option<String>,
+    aud: Option<serde_json::Value>,
+    exp: Option<i64>,
+    nonce: Option<String>,
+}
+
+fn decode_id_token_claims(id_token: &str) -> OAuth2Result<IdTokenClaims> {
+    let payload = id_token
+        .split('.')
+        .nth(1)
+        .ok_or_else(|| OAuth2Error::InvalidIdToken("malformed JWT".to_string()))?;
+    let bytes = URL_SAFE_NO_PAD
+        .decode(payload)
+        .map_err(|_| OAuth2Error::InvalidIdToken("invalid base64 payload".to_string()))?;
+    serde_json::from_slice(&bytes)
+        .map_err(|_| OAuth2Error::InvalidIdToken("invalid JSON payload".to_string()))
+}
+
+/// Validate the mandatory id_token claims: issuer (when configured),
+/// audience, expiry, and the nonce echoed from the authorization request.
+///
+/// The signature is not verified: the token was received directly from the
+/// token endpoint over TLS, which OIDC Core §3.1.3.7 permits as a substitute
+/// for signature validation in the authorization-code flow.
+pub(crate) fn validate_id_token_claims(
+    provider_config: &OAuth2ProviderConfig,
+    id_token: &str,
+    expected_nonce: Option<&str>,
+) -> OAuth2Result<()> {
+    let claims = decode_id_token_claims(id_token)?;
+
+    if let Some(expected_issuer) = &provider_config.issuer
+        && claims.iss.as_deref() != Some(expected_issuer.as_str())
+    {
+        return Err(OAuth2Error::InvalidIdToken(format!(
+            "issuer mismatch: expected {expected_issuer}"
+        )));
+    }
+
+    let audience_matches = match &claims.aud {
+        Some(serde_json::Value::String(aud)) => aud == &provider_config.client_id,
+        Some(serde_json::Value::Array(auds)) => auds
+            .iter()
+            .any(|aud| aud.as_str() == Some(provider_config.client_id.as_str())),
+        _ => false,
+    };
+    if !audience_matches {
+        return Err(OAuth2Error::InvalidIdToken(
+            "audience does not include this client".to_string(),
+        ));
+    }
+
+    match claims.exp {
+        Some(exp) if exp > chrono::Utc::now().timestamp() => {}
+        _ => {
+            return Err(OAuth2Error::InvalidIdToken(
+                "token expired or missing exp".to_string(),
+            ));
+        }
+    }
+
+    if let Some(expected) = expected_nonce
+        && claims.nonce.as_deref() != Some(expected)
+    {
+        return Err(OAuth2Error::InvalidIdToken("nonce mismatch".to_string()));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -436,6 +546,7 @@ mod tests {
             authorization_endpoint: "https://example.com/auth".to_string(),
             token_endpoint: "https://example.com/token".to_string(),
             userinfo_endpoint: Some("https://example.com/userinfo".to_string()),
+            issuer: None,
             redirect_uri: "http://localhost:3000/callback".to_string(),
             scopes: vec!["openid".to_string(), "email".to_string()],
             auth_params: HashMap::new(),
@@ -554,6 +665,7 @@ mod tests {
                     state,
                     error: None,
                     error_description: None,
+                    binding: None,
                 },
             )
             .await
@@ -583,6 +695,7 @@ mod tests {
                     state,
                     error: Some("access_denied".to_string()),
                     error_description: Some("user denied consent".to_string()),
+                    binding: None,
                 },
             )
             .await
@@ -618,6 +731,7 @@ mod tests {
                     state,
                     error: None,
                     error_description: None,
+                    binding: None,
                 },
             )
             .await
@@ -677,5 +791,141 @@ mod tests {
                 "access-token".to_string()
             )]
         );
+    }
+
+    fn fake_id_token(payload: serde_json::Value) -> String {
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"RS256","typ":"JWT"}"#);
+        let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
+        format!("{header}.{payload}.signature")
+    }
+
+    #[tokio::test]
+    async fn authorization_url_includes_nonce_and_stores_it() {
+        let state_store = Arc::new(InMemoryStateStore::new());
+        let client = OAuth2Client::new(state_store.clone(), 600, 30);
+
+        let (auth_url, state) = client
+            .generate_authorization_url(&provider_config(), HashMap::new())
+            .await
+            .unwrap();
+
+        let url = Url::parse(&auth_url).unwrap();
+        let params: HashMap<_, _> = url.query_pairs().collect();
+        let url_nonce = params.get("nonce").expect("nonce in URL").to_string();
+        assert!(!url_nonce.is_empty());
+
+        let stored = state_store.retrieve(&state).await.unwrap();
+        assert_eq!(stored.nonce.as_deref(), Some(url_nonce.as_str()));
+    }
+
+    #[test]
+    fn id_token_claim_validation_covers_iss_aud_exp_and_nonce() {
+        let mut config = provider_config();
+        config.issuer = Some("https://issuer.test".to_string());
+        let exp = chrono::Utc::now().timestamp() + 600;
+
+        let good = fake_id_token(serde_json::json!({
+            "iss": "https://issuer.test",
+            "aud": "test_client_id",
+            "exp": exp,
+            "nonce": "nonce-1",
+        }));
+        assert!(validate_id_token_claims(&config, &good, Some("nonce-1")).is_ok());
+
+        // aud may be an array containing this client
+        let aud_array = fake_id_token(serde_json::json!({
+            "iss": "https://issuer.test",
+            "aud": ["other", "test_client_id"],
+            "exp": exp,
+        }));
+        assert!(validate_id_token_claims(&config, &aud_array, None).is_ok());
+
+        let bad_iss = fake_id_token(serde_json::json!({
+            "iss": "https://evil.test", "aud": "test_client_id", "exp": exp,
+        }));
+        assert!(matches!(
+            validate_id_token_claims(&config, &bad_iss, None),
+            Err(OAuth2Error::InvalidIdToken(_))
+        ));
+
+        let bad_aud = fake_id_token(serde_json::json!({
+            "iss": "https://issuer.test", "aud": "someone_else", "exp": exp,
+        }));
+        assert!(validate_id_token_claims(&config, &bad_aud, None).is_err());
+
+        let expired = fake_id_token(serde_json::json!({
+            "iss": "https://issuer.test",
+            "aud": "test_client_id",
+            "exp": chrono::Utc::now().timestamp() - 10,
+        }));
+        assert!(validate_id_token_claims(&config, &expired, None).is_err());
+
+        let wrong_nonce = fake_id_token(serde_json::json!({
+            "iss": "https://issuer.test",
+            "aud": "test_client_id",
+            "exp": exp,
+            "nonce": "other",
+        }));
+        assert!(validate_id_token_claims(&config, &wrong_nonce, Some("nonce-1")).is_err());
+
+        assert!(validate_id_token_claims(&config, "garbage", None).is_err());
+    }
+
+    #[tokio::test]
+    async fn handle_callback_enforces_session_binding() {
+        let state_store = Arc::new(InMemoryStateStore::new());
+        let transport = Arc::new(RecordingTransport::new());
+        let client = client_with_transport(state_store.clone(), transport.clone());
+        let config = provider_config();
+
+        // A callback missing the binding is rejected before any token
+        // exchange (and the one-use state is burned).
+        let (_, state) = client
+            .generate_authorization_url_bound(
+                &config,
+                HashMap::new(),
+                Some("cookie-123".to_string()),
+            )
+            .await
+            .unwrap();
+        let err = client
+            .handle_callback(
+                &config,
+                AuthorizationResponse {
+                    code: "code".to_string(),
+                    state,
+                    error: None,
+                    error_description: None,
+                    binding: None,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, OAuth2Error::InvalidState));
+        assert!(transport.token_requests().is_empty());
+
+        // The matching binding completes the flow.
+        let (_, state) = client
+            .generate_authorization_url_bound(
+                &config,
+                HashMap::new(),
+                Some("cookie-123".to_string()),
+            )
+            .await
+            .unwrap();
+        client
+            .handle_callback(
+                &config,
+                AuthorizationResponse {
+                    code: "code".to_string(),
+                    state,
+                    error: None,
+                    error_description: None,
+                    binding: Some("cookie-123".to_string()),
+                },
+            )
+            .await
+            .expect("bound callback succeeds");
+        assert_eq!(transport.token_requests().len(), 1);
     }
 }

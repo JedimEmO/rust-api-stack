@@ -42,6 +42,8 @@ pub struct Client {
     request_id_counter: Arc<AtomicU64>,
     shutdown_tx: Arc<RwLock<Option<oneshot::Sender<()>>>>,
     message_tx: Arc<RwLock<Option<mpsc::Sender<BidirectionalMessage>>>>,
+    /// Signaled when the server's ConnectionEstablished message arrives
+    connected_notify: Arc<tokio::sync::Notify>,
 }
 
 struct IncomingMessageContext<'a> {
@@ -52,6 +54,7 @@ struct IncomingMessageContext<'a> {
     connection_event_handlers: &'a DashMap<String, ConnectionEventHandler>,
     connection_id: &'a RwLock<Option<ConnectionId>>,
     message_tx: &'a RwLock<Option<mpsc::Sender<BidirectionalMessage>>>,
+    connected_notify: &'a tokio::sync::Notify,
 }
 
 impl Client {
@@ -80,6 +83,7 @@ impl Client {
             request_id_counter: Arc::new(AtomicU64::new(1)),
             shutdown_tx: Arc::new(RwLock::new(None)),
             message_tx: Arc::new(RwLock::new(None)),
+            connected_notify: Arc::new(tokio::sync::Notify::new()),
         })
     }
 
@@ -110,19 +114,37 @@ impl Client {
         // Start message handling task
         self.start_message_handler(message_rx, shutdown_rx).await?;
 
-        // Start heartbeat if configured
+        // Wait for the server's ConnectionEstablished message before
+        // reporting the client as connected. The notify is signaled by the
+        // message handler; bound the wait so a silent server cannot hang us.
+        let handshake = async {
+            loop {
+                if self.connection_id.read().await.is_some() {
+                    break;
+                }
+                self.connected_notify.notified().await;
+            }
+        };
+        if tokio::time::timeout(self.config.connection_timeout, handshake)
+            .await
+            .is_err()
+        {
+            // Tear down the half-open connection
+            let _ = self.disconnect().await;
+            return Err(ClientError::timeout(
+                self.config.connection_timeout.as_secs(),
+            ));
+        }
+
+        *self.state.write().await = ClientState::Connected;
+
+        // Start heartbeat once connected (its loop exits when state leaves
+        // Connected, so starting earlier would race it to an immediate stop)
         if let Some(interval) = self.config.heartbeat_interval {
             self.start_heartbeat(interval).await;
         }
 
-        *self.state.write().await = ClientState::Connected;
         info!("Client connected to {}", self.config.url);
-
-        loop {
-            if self.connection_id.read().await.is_some() {
-                break;
-            }
-        }
 
         Ok(())
     }
@@ -203,19 +225,30 @@ impl Client {
             return Err(ClientError::internal("Too many pending requests"));
         }
 
-        self.pending_requests.insert(request_id, pending);
+        self.pending_requests.insert(request_id.clone(), pending);
 
-        // Send the request
+        // Send the request; on failure, drop our pending entry so the map
+        // cannot fill up with waiters that will never be answered.
         let message = BidirectionalMessage::Request(request);
-        self.send_message(message).await?;
+        if let Err(e) = self.send_message(message).await {
+            self.pending_requests.remove(&request_id);
+            return Err(e);
+        }
 
-        // Wait for response with timeout
-        let response = tokio::time::timeout(self.config.request_timeout, response_rx)
-            .await
-            .map_err(|_| ClientError::timeout(self.config.request_timeout.as_secs()))?
-            .map_err(|_| ClientError::internal("Response channel closed"))?;
-
-        Ok(response)
+        // Wait for response with timeout; every failure path removes our
+        // entry for the same reason (the success path is removed by the
+        // message handler when the response arrives).
+        match tokio::time::timeout(self.config.request_timeout, response_rx).await {
+            Ok(Ok(response)) => Ok(response),
+            Ok(Err(_)) => {
+                self.pending_requests.remove(&request_id);
+                Err(ClientError::internal("Response channel closed"))
+            }
+            Err(_) => {
+                self.pending_requests.remove(&request_id);
+                Err(ClientError::timeout(self.config.request_timeout.as_secs()))
+            }
+        }
     }
 
     /// Send a notification (fire-and-forget)
@@ -358,6 +391,7 @@ impl Client {
         let connection_id = Arc::clone(&self.connection_id);
         let state = Arc::clone(&self.state);
         let message_tx_clone = Arc::clone(&self.message_tx);
+        let connected_notify = Arc::clone(&self.connected_notify);
 
         spawn_background(async move {
             let mut receive_interval = tokio::time::interval(Duration::from_millis(10));
@@ -397,6 +431,7 @@ impl Client {
                                     connection_event_handlers: &connection_event_handlers,
                                     connection_id: &connection_id,
                                     message_tx: &message_tx_clone,
+                                    connected_notify: &connected_notify,
                                 };
                                 Self::handle_incoming_message(
                                     message,
@@ -450,6 +485,10 @@ impl Client {
                 connection_id: conn_id,
             } => {
                 *context.connection_id.write().await = Some(conn_id);
+                // Wake a connect() call waiting on the handshake. notify_one
+                // stores a permit, so this works even if connect() has not
+                // started waiting yet.
+                context.connected_notify.notify_one();
                 Self::emit_connection_event_static(
                     ConnectionEvent::Connected {
                         connection_id: conn_id,
@@ -744,6 +783,7 @@ mod tests {
         connection_event_handlers: DashMap<String, ConnectionEventHandler>,
         connection_id: RwLock<Option<ConnectionId>>,
         message_tx: RwLock<Option<mpsc::Sender<BidirectionalMessage>>>,
+        connected_notify: tokio::sync::Notify,
     }
 
     impl IncomingHarness {
@@ -756,6 +796,7 @@ mod tests {
                 connection_event_handlers: DashMap::new(),
                 connection_id: RwLock::new(None),
                 message_tx: RwLock::new(None),
+                connected_notify: tokio::sync::Notify::new(),
             }
         }
 
@@ -768,6 +809,7 @@ mod tests {
                 connection_event_handlers: &self.connection_event_handlers,
                 connection_id: &self.connection_id,
                 message_tx: &self.message_tx,
+                connected_notify: &self.connected_notify,
             }
         }
     }
@@ -1336,5 +1378,88 @@ mod tests {
         .await;
 
         assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn connection_established_wakes_handshake_waiter() {
+        let harness = std::sync::Arc::new(IncomingHarness::new());
+
+        // Mirrors the wait loop in connect(): park on the notify until the
+        // connection id is set. Without notify_one in the message handler
+        // this would hang and the timeout below would fail the test.
+        let waiter = {
+            let harness = std::sync::Arc::clone(&harness);
+            tokio::spawn(async move {
+                loop {
+                    if harness.connection_id.read().await.is_some() {
+                        break;
+                    }
+                    harness.connected_notify.notified().await;
+                }
+            })
+        };
+
+        tokio::task::yield_now().await;
+
+        Client::handle_incoming_message(
+            BidirectionalMessage::ConnectionEstablished {
+                connection_id: ConnectionId::new(),
+            },
+            harness.context(),
+        )
+        .await;
+
+        tokio::time::timeout(Duration::from_secs(5), waiter)
+            .await
+            .expect("handshake waiter woke up")
+            .expect("waiter task completed");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn call_timeout_removes_pending_entry_and_allows_retry() {
+        let client = ClientBuilder::new("ws://localhost:8080")
+            .with_request_timeout(Duration::from_millis(20))
+            .build()
+            .await
+            .expect("build");
+        *client.state.write().await = ClientState::Connected;
+
+        let (tx, mut rx) = mpsc::channel(8);
+        *client.message_tx.write().await = Some(tx);
+
+        let err = client.call("svc.slow", None).await.unwrap_err();
+        assert!(matches!(err, ClientError::Timeout { .. }));
+        assert!(
+            client.pending_requests.is_empty(),
+            "timed-out call must remove its pending entry"
+        );
+        let _ = rx.recv().await;
+
+        // The map must not fill up with dead waiters: a retry times out
+        // again rather than failing with "Too many pending requests".
+        let err = client.call("svc.slow", None).await.unwrap_err();
+        assert!(matches!(err, ClientError::Timeout { .. }));
+        assert!(client.pending_requests.is_empty());
+    }
+
+    #[tokio::test]
+    async fn call_send_failure_removes_pending_entry() {
+        let client = ClientBuilder::new("ws://localhost:8080")
+            .build()
+            .await
+            .expect("build");
+        *client.state.write().await = ClientState::Connected;
+
+        // Install a sender whose receiver is already gone so send fails.
+        let (tx, rx) = mpsc::channel(1);
+        drop(rx);
+        *client.message_tx.write().await = Some(tx);
+
+        let err = client.call("svc.echo", None).await.unwrap_err();
+        assert!(!matches!(err, ClientError::Timeout { .. }));
+        assert!(
+            client.pending_requests.is_empty(),
+            "failed send must remove its pending entry"
+        );
     }
 }

@@ -57,13 +57,23 @@ pub fn generate_client_code(service_def: &ServiceDefinition) -> proc_macro2::Tok
         .iter()
         .flat_map(generate_client_methods_with_timeout_for_endpoint);
 
-    let build_method = if cfg!(feature = "reqwest") {
+    // With `feature_gated: true` the convenience constructor compiles only
+    // when the CONSUMER crate enables its own `reqwest` feature (which should
+    // activate `ras-transport-core/reqwest`); otherwise the macro crate's
+    // (workspace-unified) feature decides whether to emit it at all.
+    let cfg_reqwest = if service_def.feature_gated {
+        quote! { #[cfg(feature = "reqwest")] }
+    } else {
+        quote! {}
+    };
+    let build_method = if service_def.feature_gated || cfg!(feature = "reqwest") {
         quote! {
             /// Build the client using the default `ReqwestTransport`.
             ///
             /// # Errors
             ///
             /// Returns an error if the underlying transport fails to construct.
+            #cfg_reqwest
             pub fn build(self) -> Result<#client_name, Box<dyn std::error::Error + Send + Sync>> {
                 let transport = std::sync::Arc::new(::ras_transport_core::ReqwestTransport::new());
                 self.build_with_transport(transport)

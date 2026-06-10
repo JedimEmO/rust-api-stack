@@ -21,9 +21,11 @@ server = [
 client = [
     "ras-jsonrpc-bidirectional-macro/client",
     "ras-rest-macro/reqwest",
-    "ras-transport-core/reqwest",
+    "reqwest",
     "dep:ras-jsonrpc-bidirectional-client",
 ]
+# Enables the generated clients' default ReqwestTransport constructor
+reqwest = ["ras-transport-core/reqwest"]
 
 [dependencies]
 serde = { workspace = true }

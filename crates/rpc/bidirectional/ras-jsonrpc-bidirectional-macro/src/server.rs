@@ -99,43 +99,15 @@ pub fn generate_server_code(
                         let user = context.get_user().await
                             .ok_or_else(|| ras_jsonrpc_bidirectional_server::ServerError::AuthenticationFailed(ras_auth_core::AuthError::InvalidToken))?;
 
-                        // Check permissions - AND within groups, OR between groups
+                        // OR-of-AND permission check against the cached
+                        // connection user (shared ras-auth-core implementation)
                         let required_permission_groups: Vec<Vec<String>> = #permission_groups_code;
-                        // Only check permissions if we have non-empty groups
-                        let has_non_empty_groups = required_permission_groups.iter().any(|g| !g.is_empty());
-                        if has_non_empty_groups {
-                            let mut has_permission = false;
-
-                            // Check each permission group (OR logic between groups)
-                            for permission_group in &required_permission_groups {
-                                // Check if user has ALL permissions in this group (AND logic within group)
-                                if permission_group.is_empty() {
-                                    // Empty group means any authenticated user can access
-                                    has_permission = true;
-                                    break;
-                                } else {
-                                    // Check if user has all permissions in this group
-                                    let group_satisfied = permission_group.iter()
-                                        .all(|perm| user.permissions.contains(perm));
-                                    if group_satisfied {
-                                        has_permission = true;
-                                        break;
-                                    }
-                                }
-                            }
-
-                            if !has_permission {
-                                // Find the first non-empty group for error reporting
-                                let first_group = required_permission_groups.iter()
-                                    .find(|g| !g.is_empty())
-                                    .cloned()
-                                    .unwrap_or_default();
-                                let error_response = ras_jsonrpc_types::JsonRpcResponse::error(
-                                    ras_jsonrpc_types::JsonRpcError::new(-32002, "Insufficient permissions".to_string(), None),
-                                    request.id.clone()
-                                );
-                                return Ok(Some(error_response));
-                            }
+                        if !ras_auth_core::user_satisfies_permission_groups(user.as_ref(), &required_permission_groups) {
+                            let error_response = ras_jsonrpc_types::JsonRpcResponse::error(
+                                ras_jsonrpc_types::JsonRpcError::new(-32002, "Insufficient permissions".to_string(), None),
+                                request.id.clone()
+                            );
+                            return Ok(Some(error_response));
                         }
 
                         // Parse parameters
@@ -436,11 +408,14 @@ pub fn generate_server_code(
 
         impl<T: #service_trait_name, A: ras_auth_core::AuthProvider> #builder_name<T, A> {
             /// Create a new builder
+            ///
+            /// Authentication is required by default; call `.require_auth(false)`
+            /// to explicitly allow anonymous connections.
             pub fn new(service: T, auth_provider: A) -> Self {
                 Self {
                     service: std::sync::Arc::new(service),
                     auth_provider: std::sync::Arc::new(auth_provider),
-                    require_auth: false,
+                    require_auth: true,
                 }
             }
 

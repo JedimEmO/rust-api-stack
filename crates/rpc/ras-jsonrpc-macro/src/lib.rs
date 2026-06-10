@@ -28,6 +28,7 @@ struct ServiceDefinition {
     service_name: Ident,
     openrpc: Option<OpenRpcConfig>,
     explorer: Option<ExplorerConfig>,
+    feature_gated: bool,
     methods: Vec<MethodDefinition>,
 }
 
@@ -148,6 +149,7 @@ impl Parse for ServiceDefinition {
         // Check if openrpc field is present
         let mut openrpc = None;
         let mut explorer = None;
+        let mut feature_gated = false;
 
         // Parse optional fields until we hit "methods"
         while content.peek(Ident) {
@@ -193,6 +195,9 @@ impl Parse for ServiceDefinition {
                     let path = explorer_content.parse::<LitStr>()?;
                     explorer = Some(ExplorerConfig::WithPath(path.value()));
                 }
+            } else if field_name == "feature_gated" {
+                let enabled = content.parse::<syn::LitBool>()?;
+                feature_gated = enabled.value();
             }
 
             let _ = content.parse::<Token![,]>()?;
@@ -220,6 +225,7 @@ impl Parse for ServiceDefinition {
             service_name,
             openrpc,
             explorer,
+            feature_gated,
             methods,
         })
     }
@@ -460,8 +466,25 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
         quote! {}
     };
 
-    let server_code = if cfg!(feature = "server") {
+    // With `feature_gated: true` the generated code is wrapped in
+    // `#[cfg(feature = ...)]` attributes resolved against the CONSUMER
+    // crate's features, immune to workspace feature unification of the
+    // macro crate's own features (which `cfg!` evaluates).
+    let feature_gated = service_def.feature_gated;
+    let cfg_server = if feature_gated {
+        quote! { #[cfg(feature = "server")] }
+    } else {
+        quote! {}
+    };
+    let cfg_client = if feature_gated {
+        quote! { #[cfg(feature = "client")] }
+    } else {
+        quote! {}
+    };
+
+    let server_code = if feature_gated || cfg!(feature = "server") {
         quote! {
+        #cfg_server
         mod #server_mod {
             use super::*;
 
@@ -469,6 +492,7 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
             #explorer_code
         }
 
+        #cfg_server
         pub use #server_mod::*;
         }
     } else {
@@ -482,14 +506,16 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
         quote! {}
     };
 
-    let client_code = if cfg!(feature = "client") {
+    let client_code = if feature_gated || cfg!(feature = "client") {
         quote! {
+        #cfg_client
         mod #client_mod {
             use super::*;
 
             #client_impl
         }
 
+        #cfg_client
         pub use #client_mod::*;
         }
     } else {
@@ -799,40 +825,18 @@ fn jsonrpc_auth_check_code(
                         ),
                     };
 
+                    // OR-of-AND permission check (shared ras-auth-core implementation)
                     let required_permission_groups: Vec<Vec<String>> = #permission_groups_code;
-                    let has_non_empty_groups = required_permission_groups.iter().any(|g| !g.is_empty());
-                    if has_non_empty_groups {
-                        let mut has_permission = false;
-
-                        for permission_group in &required_permission_groups {
-                            if permission_group.is_empty() {
-                                has_permission = true;
-                                break;
-                            } else {
-                                let group_result = self.auth_provider
-                                    .as_ref()
-                                    .unwrap()
-                                    .check_permissions(user, permission_group);
-                                if group_result.is_ok() {
-                                    has_permission = true;
-                                    break;
-                                }
-                            }
-                        }
-
-                        if !has_permission {
-                            let first_group = required_permission_groups.iter()
-                                .find(|g| !g.is_empty())
-                                .cloned()
-                                .unwrap_or_default();
-                            return ras_jsonrpc_types::JsonRpcResponse::error(
-                                ras_jsonrpc_types::JsonRpcError::insufficient_permissions(
-                                    first_group,
-                                    user.permissions.iter().cloned().collect()
-                                ),
-                                request.id.clone()
-                            );
-                        }
+                    let provider = self.auth_provider.as_ref().expect("auth provider required for WITH_PERMISSIONS methods");
+                    if let Err(error) = ras_jsonrpc_core::check_permission_groups(provider.as_ref(), user, &required_permission_groups) {
+                        let (required, has) = match error {
+                            ras_jsonrpc_core::AuthError::InsufficientPermissions { required, has } => (required, has),
+                            _ => (Vec::new(), Vec::new()),
+                        };
+                        return ras_jsonrpc_types::JsonRpcResponse::error(
+                            ras_jsonrpc_types::JsonRpcError::insufficient_permissions(required, has),
+                            request.id.clone()
+                        );
                     }
                 },
                 quote! { Some(user) },

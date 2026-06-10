@@ -78,8 +78,13 @@ struct ServiceDefinition {
     base_path: String,
     openapi: Option<OpenApiConfig>,
     static_hosting: static_hosting::StaticHostingConfig,
+    body_limit: Option<usize>,
+    feature_gated: bool,
     endpoints: Vec<EndpointDefinition>,
 }
+
+/// Default maximum JSON body size in bytes (matches axum's default).
+const DEFAULT_BODY_LIMIT: usize = 2 * 1024 * 1024;
 
 #[derive(Debug)]
 enum OpenApiConfig {
@@ -244,9 +249,11 @@ impl Parse for ServiceDefinition {
         let base_path = base_path_lit.value();
         let _ = content.parse::<Token![,]>()?;
 
-        // Parse optional fields (openapi, serve_docs, docs_path, ui_theme)
+        // Parse optional fields (openapi, serve_docs, docs_path, ui_theme, body_limit)
         let mut openapi = None;
         let mut static_hosting = static_hosting::StaticHostingConfig::default();
+        let mut body_limit = None;
+        let mut feature_gated = false;
 
         // Parse optional fields
         while content.peek(Ident) {
@@ -292,6 +299,18 @@ impl Parse for ServiceDefinition {
                 let theme = content.parse::<LitStr>()?;
                 static_hosting.ui_theme = theme.value();
                 let _ = content.parse::<Token![,]>()?;
+            } else if field_name == "body_limit" {
+                let _ = content.parse::<Ident>()?; // "body_limit"
+                let _ = content.parse::<Token![:]>()?;
+                let limit = content.parse::<syn::LitInt>()?;
+                body_limit = Some(limit.base10_parse::<usize>()?);
+                let _ = content.parse::<Token![,]>()?;
+            } else if field_name == "feature_gated" {
+                let _ = content.parse::<Ident>()?; // "feature_gated"
+                let _ = content.parse::<Token![:]>()?;
+                let enabled = content.parse::<syn::LitBool>()?;
+                feature_gated = enabled.value();
+                let _ = content.parse::<Token![,]>()?;
             } else if field_name == "endpoints" {
                 break; // Start parsing endpoints
             } else {
@@ -325,6 +344,8 @@ impl Parse for ServiceDefinition {
             base_path,
             openapi,
             static_hosting,
+            body_limit,
+            feature_gated,
             endpoints,
         })
     }
@@ -766,10 +787,64 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
         quote! {}
     };
 
-    let server_code = if cfg!(feature = "server") {
+    let body_limit = service_def.body_limit.unwrap_or(DEFAULT_BODY_LIMIT);
+
+    // `cfg!(feature = ...)` below evaluates the MACRO crate's features, which
+    // Cargo unifies across the whole workspace — one crate enabling `client`
+    // forces client codegen into every consumer's expansion. With
+    // `feature_gated: true` the generated code is instead wrapped in
+    // `#[cfg(feature = ...)]` attributes that resolve against the CONSUMER
+    // crate's own `server`/`client` features, immune to unification.
+    let feature_gated = service_def.feature_gated;
+    let cfg_server = if feature_gated {
+        quote! { #[cfg(feature = "server")] }
+    } else {
+        quote! {}
+    };
+    let cfg_client = if feature_gated {
+        quote! { #[cfg(feature = "client")] }
+    } else {
+        quote! {}
+    };
+
+    let server_code = if feature_gated || cfg!(feature = "server") {
         quote! {
+        #cfg_server
         mod #server_mod {
             use super::*;
+
+        /// Maximum accepted JSON body size in bytes
+        #[allow(dead_code)]
+        const __RAS_BODY_LIMIT: usize = #body_limit;
+
+        /// Map a shared authorization failure to this service's JSON error shape
+        #[allow(dead_code)]
+        fn __ras_authorize_error_response(error: ras_auth_core::AuthorizeError) -> axum::response::Response {
+            use axum::response::IntoResponse;
+            let (status, message) = match error {
+                ras_auth_core::AuthorizeError::MissingCredential => (
+                    axum::http::StatusCode::UNAUTHORIZED,
+                    "Missing or invalid Authorization header",
+                ),
+                ras_auth_core::AuthorizeError::CsrfValidationFailed => (
+                    axum::http::StatusCode::FORBIDDEN,
+                    "CSRF validation failed",
+                ),
+                ras_auth_core::AuthorizeError::AuthenticationFailed(_) => (
+                    axum::http::StatusCode::UNAUTHORIZED,
+                    "Authentication failed",
+                ),
+                ras_auth_core::AuthorizeError::NoAuthProvider => (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    "No auth provider configured",
+                ),
+                ras_auth_core::AuthorizeError::InsufficientPermissions(_) => (
+                    axum::http::StatusCode::FORBIDDEN,
+                    "Insufficient permissions",
+                ),
+            };
+            (status, axum::Json(serde_json::json!({ "error": message }))).into_response()
+        }
 
         /// Generated service trait
         #[async_trait::async_trait]
@@ -894,20 +969,23 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
 
         }
 
+        #cfg_server
         pub use #server_mod::*;
         }
     } else {
         quote! {}
     };
 
-    let client_code = if cfg!(feature = "client") {
+    let client_code = if feature_gated || cfg!(feature = "client") {
         quote! {
+        #cfg_client
         mod #client_mod {
             use super::*;
 
             #client_impl
         }
 
+        #cfg_client
         pub use #client_mod::*;
         }
     } else {
@@ -1267,20 +1345,7 @@ fn generate_legacy_handler_body(
     let mut canonical_args = rest_canonical_args_from_parts(endpoint, &canonical_parts_ident);
 
     let json_handling = if version.request_type.is_some() {
-        quote! {
-            let body = match body_result {
-                Ok(json) => json.0,
-                Err(_) => {
-                    use axum::response::IntoResponse;
-                    return (
-                        axum::http::StatusCode::BAD_REQUEST,
-                        axum::Json(serde_json::json!({
-                            "error": "Invalid JSON"
-                        }))
-                    ).into_response();
-                },
-            };
-        }
+        generate_body_extraction()
     } else {
         quote! {}
     };
@@ -1365,82 +1430,21 @@ fn generate_legacy_handler_body(
             canonical_args.insert(0, quote! { &user });
 
             quote! {
+                // Authenticate and authorize: credential → CSRF → authenticate
+                // → OR-of-AND permission groups (shared ras-auth-core pipeline)
+                let user = match ras_auth_core::authorize_request(
+                    #method,
+                    &headers,
+                    &auth_transport,
+                    auth_provider.as_deref(),
+                    &required_permission_groups,
+                ).await {
+                    Ok(user) => user,
+                    Err(error) => return __ras_authorize_error_response(error),
+                };
+
+                // Read and parse the body only after auth has succeeded
                 #json_handling
-
-                let auth_credential = match ras_auth_core::extract_auth_credential(&headers, &auth_transport) {
-                    Ok(credential) => credential,
-                    Err(_) => {
-                        use axum::response::IntoResponse;
-                        return (
-                            axum::http::StatusCode::UNAUTHORIZED,
-                            axum::Json(serde_json::json!({
-                                "error": "Missing or invalid Authorization header"
-                            }))
-                        ).into_response();
-                    },
-                };
-
-                if let Err(_) = ras_auth_core::validate_csrf_for_credential(#method, &headers, &auth_credential, &auth_transport) {
-                    use axum::response::IntoResponse;
-                    return (
-                        axum::http::StatusCode::FORBIDDEN,
-                        axum::Json(serde_json::json!({
-                            "error": "CSRF validation failed"
-                        }))
-                    ).into_response();
-                }
-
-                let user = match &auth_provider {
-                    Some(provider) => match provider.authenticate(auth_credential.token().to_string()).await {
-                        Ok(user) => user,
-                        Err(_) => {
-                            use axum::response::IntoResponse;
-                            return (
-                                axum::http::StatusCode::UNAUTHORIZED,
-                                axum::Json(serde_json::json!({
-                                    "error": "Authentication failed"
-                                }))
-                            ).into_response();
-                        },
-                    },
-                    None => {
-                        use axum::response::IntoResponse;
-                        return (
-                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                            axum::Json(serde_json::json!({
-                                "error": "No auth provider configured"
-                            }))
-                        ).into_response();
-                    },
-                };
-
-                let has_non_empty_groups = required_permission_groups.iter().any(|g| !g.is_empty());
-                if has_non_empty_groups {
-                    let mut has_permission = false;
-
-                    for permission_group in &required_permission_groups {
-                        if permission_group.is_empty() {
-                            has_permission = true;
-                            break;
-                        } else {
-                            let group_result = auth_provider.as_ref().unwrap().check_permissions(&user, permission_group);
-                            if group_result.is_ok() {
-                                has_permission = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    if !has_permission {
-                        use axum::response::IntoResponse;
-                        return (
-                            axum::http::StatusCode::FORBIDDEN,
-                            axum::Json(serde_json::json!({
-                                "error": "Insufficient permissions"
-                            }))
-                        ).into_response();
-                    }
-                }
 
                 if let Some(tracker) = &with_usage_tracker {
                     let tracker_headers =
@@ -1546,13 +1550,52 @@ fn generate_axum_handler(
         });
     }
 
-    // Add request body extractor if present - use Result to handle JSON parsing errors
+    // Take the raw request when a body is declared. The body is read and
+    // deserialized inside the handler AFTER auth/CSRF/permission checks, so
+    // unauthenticated clients cannot make the server buffer or parse payloads.
     if request_type.is_some() {
-        extractors.push(quote! { body_result: Result<axum::extract::Json<_>, axum::extract::rejection::JsonRejection> });
+        extractors.push(quote! { request: axum::extract::Request });
     }
 
     quote! {
         #(#extractors),*
+    }
+}
+
+/// Generated code that reads and JSON-deserializes the request body from the
+/// raw `request` extractor, bounded by `__RAS_BODY_LIMIT`.
+///
+/// For authenticated endpoints this must be emitted AFTER the
+/// auth/CSRF/permission block so unauthenticated clients cannot make the
+/// server buffer or parse payloads.
+fn generate_body_extraction() -> proc_macro2::TokenStream {
+    quote! {
+        let body = {
+            let body_bytes = match ::axum::body::to_bytes(request.into_body(), __RAS_BODY_LIMIT).await {
+                Ok(bytes) => bytes,
+                Err(_) => {
+                    use axum::response::IntoResponse;
+                    return (
+                        axum::http::StatusCode::PAYLOAD_TOO_LARGE,
+                        axum::Json(serde_json::json!({
+                            "error": "Request body too large or unreadable"
+                        }))
+                    ).into_response();
+                },
+            };
+            match serde_json::from_slice(&body_bytes) {
+                Ok(body) => body,
+                Err(_) => {
+                    use axum::response::IntoResponse;
+                    return (
+                        axum::http::StatusCode::BAD_REQUEST,
+                        axum::Json(serde_json::json!({
+                            "error": "Invalid JSON"
+                        }))
+                    ).into_response();
+                },
+            }
+        };
     }
 }
 
@@ -1587,21 +1630,7 @@ fn generate_handler_body(
             // Handle JSON body extraction with error handling
             let json_handling = if endpoint.request_type.is_some() {
                 args.push(quote! { body });
-                quote! {
-                    // Handle JSON parsing errors
-                    let body = match body_result {
-                        Ok(json) => json.0,
-                        Err(_) => {
-                            use axum::response::IntoResponse;
-                            return (
-                                axum::http::StatusCode::BAD_REQUEST,
-                                axum::Json(serde_json::json!({
-                                    "error": "Invalid JSON"
-                                }))
-                            ).into_response();
-                        },
-                    };
-                }
+                generate_body_extraction()
             } else {
                 quote! {}
             };
@@ -1681,110 +1710,27 @@ fn generate_handler_body(
             // Handle JSON body extraction with error handling
             let json_handling = if endpoint.request_type.is_some() {
                 args.push(quote! { body });
-                quote! {
-                    // Handle JSON parsing errors
-                    let body = match body_result {
-                        Ok(json) => json.0,
-                        Err(_) => {
-                            use axum::response::IntoResponse;
-                            return (
-                                axum::http::StatusCode::BAD_REQUEST,
-                                axum::Json(serde_json::json!({
-                                    "error": "Invalid JSON"
-                                }))
-                            ).into_response();
-                        },
-                    };
-                }
+                generate_body_extraction()
             } else {
                 quote! {}
             };
 
             quote! {
+                // Authenticate and authorize: credential → CSRF → authenticate
+                // → OR-of-AND permission groups (shared ras-auth-core pipeline)
+                let user = match ras_auth_core::authorize_request(
+                    #method,
+                    &headers,
+                    &auth_transport,
+                    auth_provider.as_deref(),
+                    &required_permission_groups,
+                ).await {
+                    Ok(user) => user,
+                    Err(error) => return __ras_authorize_error_response(error),
+                };
+
+                // Read and parse the body only after auth has succeeded
                 #json_handling
-
-                // Extract and validate auth token
-                let auth_credential = match ras_auth_core::extract_auth_credential(&headers, &auth_transport) {
-                    Ok(credential) => credential,
-                    Err(_) => {
-                        use axum::response::IntoResponse;
-                        return (
-                            axum::http::StatusCode::UNAUTHORIZED,
-                            axum::Json(serde_json::json!({
-                                "error": "Missing or invalid Authorization header"
-                            }))
-                        ).into_response();
-                    },
-                };
-
-                if let Err(_) = ras_auth_core::validate_csrf_for_credential(#method, &headers, &auth_credential, &auth_transport) {
-                    use axum::response::IntoResponse;
-                    return (
-                        axum::http::StatusCode::FORBIDDEN,
-                        axum::Json(serde_json::json!({
-                            "error": "CSRF validation failed"
-                        }))
-                    ).into_response();
-                }
-
-                // Authenticate user
-                let user = match &auth_provider {
-                    Some(provider) => match provider.authenticate(auth_credential.token().to_string()).await {
-                        Ok(user) => user,
-                        Err(_) => {
-                            use axum::response::IntoResponse;
-                            return (
-                                axum::http::StatusCode::UNAUTHORIZED,
-                                axum::Json(serde_json::json!({
-                                    "error": "Authentication failed"
-                                }))
-                            ).into_response();
-                        },
-                    },
-                    None => {
-                        use axum::response::IntoResponse;
-                        return (
-                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                            axum::Json(serde_json::json!({
-                                "error": "No auth provider configured"
-                            }))
-                        ).into_response();
-                    },
-                };
-
-                // Check permissions - AND within groups, OR between groups
-                // Only check permissions if we have non-empty groups
-                let has_non_empty_groups = required_permission_groups.iter().any(|g| !g.is_empty());
-                if has_non_empty_groups {
-                    let mut has_permission = false;
-
-                    // Check each permission group (OR logic between groups)
-                    for permission_group in &required_permission_groups {
-                        // Check if user has ALL permissions in this group (AND logic within group)
-                        if permission_group.is_empty() {
-                            // Empty group means any authenticated user can access
-                            has_permission = true;
-                            break;
-                        } else {
-                            // Check if user has all permissions in this group
-                            let group_result = auth_provider.as_ref().unwrap().check_permissions(&user, permission_group);
-                            if group_result.is_ok() {
-                                has_permission = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    if !has_permission {
-                        use axum::response::IntoResponse;
-                        return (
-                            axum::http::StatusCode::FORBIDDEN,
-                            axum::Json(serde_json::json!({
-                                "error": "Insufficient permissions"
-                            }))
-                        ).into_response();
-                    }
-                }
 
                 // Call usage tracker if configured
                 if let Some(tracker) = &with_usage_tracker {

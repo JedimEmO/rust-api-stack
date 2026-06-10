@@ -28,6 +28,10 @@ pub enum OAuth2AuthPayload {
         state: String,
         error: Option<String>,
         error_description: Option<String>,
+        /// Session-binding value captured when the flow was started (e.g.
+        /// from a cookie); required when the flow was started with one.
+        #[serde(default)]
+        binding: Option<String>,
     },
 }
 
@@ -104,18 +108,38 @@ impl OAuth2Provider {
         })
     }
 
-    /// Handle the start flow request
-    async fn handle_start_flow(
+    /// Start an OAuth2 authorization flow.
+    ///
+    /// Returns the authorization URL to redirect the user to, plus the
+    /// `state` parameter bound to this flow. This is the supported way to
+    /// initiate a flow; `verify()` only completes one (the `Callback`
+    /// payload).
+    pub async fn start_flow(
         &self,
         provider_id: &str,
         additional_params: Option<HashMap<String, String>>,
+    ) -> OAuth2Result<OAuth2Response> {
+        self.start_flow_bound(provider_id, additional_params, None)
+            .await
+    }
+
+    /// Start a flow bound to the initiating browser session.
+    ///
+    /// `binding` should be an unguessable value the integrator can recover on
+    /// callback (e.g. a random cookie value); the callback payload must then
+    /// carry the identical value or it is rejected, preventing login CSRF.
+    pub async fn start_flow_bound(
+        &self,
+        provider_id: &str,
+        additional_params: Option<HashMap<String, String>>,
+        binding: Option<String>,
     ) -> OAuth2Result<OAuth2Response> {
         let provider_config = self.get_provider_config(provider_id)?;
         let params = additional_params.unwrap_or_default();
 
         let (auth_url, state) = self
             .client
-            .generate_authorization_url(provider_config, params)
+            .generate_authorization_url_bound(provider_config, params, binding)
             .await?;
 
         info!("Started OAuth2 flow for provider: {}", provider_id);
@@ -134,6 +158,7 @@ impl OAuth2Provider {
         state: String,
         error: Option<String>,
         error_description: Option<String>,
+        binding: Option<String>,
     ) -> OAuth2Result<VerifiedIdentity> {
         let provider_config = self.get_provider_config(provider_id)?;
 
@@ -142,6 +167,7 @@ impl OAuth2Provider {
             state,
             error,
             error_description,
+            binding,
         };
 
         // Exchange code for tokens
@@ -263,21 +289,11 @@ impl IdentityProvider for OAuth2Provider {
             serde_json::from_value(auth_payload).map_err(|_| IdentityError::InvalidPayload)?;
 
         match payload {
-            OAuth2AuthPayload::StartFlow {
-                provider_id,
-                additional_params,
-            } => {
-                // For start flow, we return an error with the authorization URL
-                let response = self
-                    .handle_start_flow(&provider_id, additional_params)
-                    .await
-                    .map_err(|e| IdentityError::ProviderError(e.to_string()))?;
-
-                // Return the response as a provider error (client should handle this specially)
-                let response_json =
-                    serde_json::to_string(&response).map_err(IdentityError::SerializationError)?;
-
-                Err(IdentityError::ProviderError(response_json))
+            OAuth2AuthPayload::StartFlow { .. } => {
+                // Flow initiation is not identity verification and has no
+                // identity to return. Call `OAuth2Provider::start_flow`
+                // directly to obtain the authorization URL.
+                Err(IdentityError::UnsupportedMethod)
             }
             OAuth2AuthPayload::Callback {
                 provider_id,
@@ -285,9 +301,10 @@ impl IdentityProvider for OAuth2Provider {
                 state,
                 error,
                 error_description,
+                binding,
             } => {
                 // For callback, we complete the flow and return the verified identity
-                self.handle_callback(&provider_id, code, state, error, error_description)
+                self.handle_callback(&provider_id, code, state, error, error_description, binding)
                     .await
                     .map_err(|e| IdentityError::ProviderError(e.to_string()))
             }
@@ -309,6 +326,7 @@ mod tests {
             authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
             token_endpoint: "https://oauth2.googleapis.com/token".to_string(),
             userinfo_endpoint: Some("https://www.googleapis.com/oauth2/v1/userinfo".to_string()),
+            issuer: None,
             redirect_uri: "http://localhost:3000/callback".to_string(),
             scopes: vec![
                 "openid".to_string(),
@@ -334,31 +352,27 @@ mod tests {
     async fn test_start_flow() {
         let provider = create_test_provider();
 
+        let result = provider.start_flow("google", None).await.unwrap();
+        match result {
+            OAuth2Response::AuthorizationUrl { url, state } => {
+                assert!(url.contains("https://accounts.google.com/o/oauth2/v2/auth"));
+                assert!(url.contains("response_type=code"));
+                assert!(url.contains("client_id=test_client_id"));
+                assert!(!state.is_empty());
+            }
+            _ => panic!("Expected AuthorizationUrl response"),
+        }
+
+        // StartFlow payloads are no longer routed through verify()
         let payload = serde_json::json!({
             "type": "StartFlow",
             "provider_id": "google",
             "additional_params": null
         });
-
-        let result = provider.verify(payload).await;
-
-        // Start flow returns an error with the authorization URL
-        assert!(result.is_err());
-
-        if let Err(IdentityError::ProviderError(response_json)) = result {
-            let response: OAuth2Response = serde_json::from_str(&response_json).unwrap();
-            match response {
-                OAuth2Response::AuthorizationUrl { url, state } => {
-                    assert!(url.contains("https://accounts.google.com/o/oauth2/v2/auth"));
-                    assert!(url.contains("response_type=code"));
-                    assert!(url.contains("client_id=test_client_id"));
-                    assert!(!state.is_empty());
-                }
-                _ => panic!("Expected AuthorizationUrl response"),
-            }
-        } else {
-            panic!("Expected ProviderError");
-        }
+        assert!(matches!(
+            provider.verify(payload).await,
+            Err(IdentityError::UnsupportedMethod)
+        ));
     }
 
     #[tokio::test]
@@ -379,17 +393,16 @@ mod tests {
     async fn verify_reports_unknown_provider() {
         let provider = create_test_provider();
 
-        let result = provider
-            .verify(serde_json::json!({
-                "type": "StartFlow",
-                "provider_id": "missing"
-            }))
-            .await;
+        let result = provider.start_flow("missing", None).await;
 
-        let Err(IdentityError::ProviderError(message)) = result else {
-            panic!("expected provider error for missing provider");
+        let Err(error) = result else {
+            panic!("expected error for missing provider");
         };
-        assert!(message.contains("Provider 'missing' not configured"));
+        assert!(
+            error
+                .to_string()
+                .contains("Provider 'missing' not configured")
+        );
     }
 
     #[tokio::test]
@@ -398,20 +411,13 @@ mod tests {
         let mut provider = OAuth2Provider::new(OAuth2Config::default(), state_store);
         provider.add_provider(google_config());
 
-        let result = provider
-            .verify(serde_json::json!({
-                "type": "StartFlow",
-                "provider_id": "google",
-                "additional_params": {
-                    "prompt": "consent"
-                }
-            }))
-            .await;
+        let mut params = HashMap::new();
+        params.insert("prompt".to_string(), "consent".to_string());
+        let response = provider
+            .start_flow("google", Some(params))
+            .await
+            .expect("start_flow succeeds");
 
-        let Err(IdentityError::ProviderError(response_json)) = result else {
-            panic!("expected authorization URL response encoded as provider error");
-        };
-        let response: OAuth2Response = serde_json::from_str(&response_json).unwrap();
         let OAuth2Response::AuthorizationUrl { url, state } = response else {
             panic!("expected authorization URL response");
         };

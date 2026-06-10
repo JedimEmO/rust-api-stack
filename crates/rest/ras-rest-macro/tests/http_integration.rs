@@ -1308,3 +1308,70 @@ async fn test_query_parameters_with_path_params() {
     let posts_response: PostsResponse = response.json();
     assert_eq!(posts_response.posts.len(), 20); // Default per_page
 }
+
+// Minimal service exercising the body_limit option.
+rest_service!({
+    service_name: TinyBodyService,
+    base_path: "/tiny",
+    body_limit: 64,
+    endpoints: [
+        POST UNAUTHORIZED echo(Value) -> Value,
+    ]
+});
+
+struct TinyBodyServiceImpl;
+
+#[async_trait::async_trait]
+impl TinyBodyServiceTrait for TinyBodyServiceImpl {
+    async fn post_echo(&self, request: Value) -> ras_rest_core::RestResult<Value> {
+        Ok(RestResponse::ok(request))
+    }
+}
+
+#[tokio::test]
+async fn test_body_is_not_parsed_before_auth() {
+    let server = create_rest_test_server();
+
+    // Invalid JSON without credentials must be rejected by auth (401, not
+    // 400), proving the body is neither read nor parsed before the
+    // auth/CSRF/permission checks succeed.
+    let response = server
+        .post("/api/v1/users")
+        .text("{invalid json")
+        .content_type("application/json")
+        .await;
+    assert_eq!(response.status_code().as_u16(), 401);
+
+    // Same body with an invalid token: still rejected by auth.
+    let response = server
+        .post("/api/v1/users")
+        .authorization_bearer("wrong-token")
+        .text("{invalid json")
+        .content_type("application/json")
+        .await;
+    assert_eq!(response.status_code().as_u16(), 401);
+
+    // With valid credentials the malformed body is now parsed and rejected.
+    let response = server
+        .post("/api/v1/users")
+        .authorization_bearer("admin-token")
+        .text("{invalid json")
+        .content_type("application/json")
+        .await;
+    assert_eq!(response.status_code().as_u16(), 400);
+}
+
+#[tokio::test]
+async fn test_body_limit_option_enforced() {
+    let app = TinyBodyServiceBuilder::new(TinyBodyServiceImpl).build();
+    let server = TestServer::builder().mock_transport().build(app).unwrap();
+
+    let response = server.post("/tiny/echo").json(&json!({"ok": true})).await;
+    assert_eq!(response.status_code().as_u16(), 200);
+
+    let response = server
+        .post("/tiny/echo")
+        .json(&json!({"data": "x".repeat(200)}))
+        .await;
+    assert_eq!(response.status_code().as_u16(), 413);
+}

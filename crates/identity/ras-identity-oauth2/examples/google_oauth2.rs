@@ -6,7 +6,6 @@
 //! 3. Handling the OAuth2 flow
 //! 4. Issuing JWTs after successful authentication
 
-use ras_identity_core::IdentityError;
 use ras_identity_oauth2::{
     InMemoryStateStore, OAuth2Config, OAuth2Provider, OAuth2ProviderConfig, OAuth2Response,
 };
@@ -29,6 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
         token_endpoint: "https://oauth2.googleapis.com/token".to_string(),
         userinfo_endpoint: Some("https://www.googleapis.com/oauth2/v1/userinfo".to_string()),
+        issuer: Some("https://accounts.google.com".to_string()),
         redirect_uri: "http://localhost:3000/auth/google/callback".to_string(),
         scopes: vec![
             "openid".to_string(),
@@ -46,7 +46,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_state_ttl(600) // 10 minutes
         .with_http_timeout(30); // 30 seconds
 
-    // Create state store and OAuth2 provider
+    // Create state store and OAuth2 provider. The provider is cheap to clone;
+    // keep one handle for flow initiation and register the other for
+    // verification through the session service.
     let state_store = Arc::new(InMemoryStateStore::new());
     let oauth2_provider = OAuth2Provider::new(oauth2_config, state_store);
 
@@ -57,7 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Register OAuth2 provider with session service
     session_service
-        .register_provider(Box::new(oauth2_provider))
+        .register_provider(Box::new(oauth2_provider.clone()))
         .await;
 
     println!("OAuth2 Example - Google Authentication");
@@ -66,36 +68,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Step 1: Start OAuth2 flow
     println!("\n1. Starting OAuth2 flow...");
 
-    let start_payload = serde_json::json!({
-        "type": "StartFlow",
-        "provider_id": "google"
-    });
+    match oauth2_provider.start_flow("google", None).await {
+        Ok(OAuth2Response::AuthorizationUrl { url, state }) => {
+            println!("Authorization URL: {}", url);
+            println!("State: {}", state);
+            println!("\nIn a real application, you would:");
+            println!("1. Redirect the user to the authorization URL");
+            println!("2. Handle the callback with the authorization code");
+            println!("3. Exchange the code for a JWT token");
 
-    match session_service.begin_session("oauth2", start_payload).await {
-        Err(ras_identity_session::SessionError::IdentityError(IdentityError::ProviderError(
-            json,
-        ))) => {
-            let response: OAuth2Response = serde_json::from_str(&json)?;
-
-            match response {
-                OAuth2Response::AuthorizationUrl { url, state } => {
-                    println!("Authorization URL: {}", url);
-                    println!("State: {}", state);
-                    println!("\nIn a real application, you would:");
-                    println!("1. Redirect the user to the authorization URL");
-                    println!("2. Handle the callback with the authorization code");
-                    println!("3. Exchange the code for a JWT token");
-
-                    // Simulate callback (in real app, this comes from OAuth2 provider)
-                    simulate_callback(&session_service, state).await?;
-                }
-                _ => {
-                    println!("Unexpected response from OAuth2 provider");
-                }
-            }
+            // Simulate callback (in real app, this comes from OAuth2 provider)
+            simulate_callback(&session_service, state).await?;
         }
-        Ok(_) => {
-            println!("Unexpected success from start flow");
+        Ok(OAuth2Response::Error { message }) => {
+            println!("OAuth2 error: {}", message);
         }
         Err(e) => {
             println!("Error starting OAuth2 flow: {}", e);
@@ -168,6 +154,7 @@ mod tests {
             authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
             token_endpoint: "https://oauth2.googleapis.com/token".to_string(),
             userinfo_endpoint: Some("https://www.googleapis.com/oauth2/v1/userinfo".to_string()),
+            issuer: Some("https://accounts.google.com".to_string()),
             redirect_uri: "http://localhost:3000/callback".to_string(),
             scopes: vec!["openid".to_string(), "email".to_string()],
             auth_params: HashMap::new(),

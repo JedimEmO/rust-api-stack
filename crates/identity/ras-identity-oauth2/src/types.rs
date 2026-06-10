@@ -21,6 +21,11 @@ pub struct AuthorizationResponse {
     pub state: String,
     pub error: Option<String>,
     pub error_description: Option<String>,
+    /// Session-binding value captured by the integrator when the flow was
+    /// started (e.g. from a cookie). Must match the value given to
+    /// `start_flow` for the same state, when one was supplied.
+    #[serde(default)]
+    pub binding: Option<String>,
 }
 
 /// OAuth2 token response

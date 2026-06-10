@@ -259,3 +259,65 @@ async fn send_to_missing_connection_is_silent_ok() {
 async fn default_impl_is_equivalent_to_new() {
     let _ = Arc::new(DefaultConnectionManager::default());
 }
+
+#[tokio::test]
+async fn broadcast_to_full_channel_does_not_block_map_access() {
+    // A slow consumer with a full bounded channel must not wedge the manager:
+    // if shard guards were held across the send await (the old behavior),
+    // the concurrent remove_connection below would deadlock and trip the
+    // timeout.
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mgr = Arc::new(DefaultConnectionManager::new());
+
+        // Connection with a capacity-1 channel, pre-filled so sends park.
+        let id = ConnectionId::new();
+        let (tx, mut rx) = mpsc::channel(1);
+        tx.send(BidirectionalMessage::Ping).await.unwrap();
+        let sender = ChannelMessageSender::new(id, tx);
+        mgr.add_connection_with_sender_direct(ConnectionInfo::new(id), sender)
+            .await
+            .unwrap();
+        mgr.add_subscription(id, "topic".into()).await.unwrap();
+
+        let broadcast = {
+            let mgr = Arc::clone(&mgr);
+            tokio::spawn(async move {
+                mgr.broadcast_to_topic("topic", BidirectionalMessage::Pong)
+                    .await
+            })
+        };
+
+        // Give the broadcast a chance to park on the full channel.
+        tokio::task::yield_now().await;
+
+        // Must complete while the broadcast is still parked.
+        mgr.remove_connection(id).await.unwrap();
+        assert_eq!(mgr.connection_count(), 0);
+
+        // Drain one message so the parked send resolves and the broadcast
+        // can finish.
+        let _ = rx.recv().await;
+        let sent = broadcast.await.unwrap().unwrap();
+        assert_eq!(sent, 1);
+    })
+    .await
+    .expect("manager deadlocked under a slow consumer");
+}
+
+#[tokio::test]
+async fn subscribe_missing_connection_leaves_no_zombie_topic_entry() {
+    let mgr = DefaultConnectionManager::new();
+    let ghost = ConnectionId::new();
+    mgr.add_subscription(ghost, "t".into()).await.unwrap();
+    assert!(mgr.get_topic_connections("t").is_empty());
+    assert!(mgr.get_active_topics().is_empty());
+}
+
+#[tokio::test]
+async fn duplicate_subscription_is_tracked_once() {
+    let mgr = DefaultConnectionManager::new();
+    let (a, _ra) = join(&mgr).await;
+    mgr.add_subscription(a, "t".into()).await.unwrap();
+    mgr.add_subscription(a, "t".into()).await.unwrap();
+    assert_eq!(mgr.get_topic_connections("t"), vec![a]);
+}

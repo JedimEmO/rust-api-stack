@@ -16,6 +16,13 @@ pub struct OAuth2State {
     pub provider_id: String,
     pub redirect_uri: String,
     pub code_verifier: Option<String>,
+    /// OIDC nonce sent in the authorization request; the id_token returned
+    /// on callback must echo it.
+    pub nonce: Option<String>,
+    /// Optional caller-supplied value binding this flow to the browser
+    /// session that started it (e.g. a random cookie value). When set, the
+    /// callback must present the identical value, preventing login CSRF.
+    pub binding: Option<String>,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub metadata: Option<serde_json::Value>,
@@ -37,10 +44,24 @@ impl OAuth2State {
             provider_id,
             redirect_uri,
             code_verifier,
+            nonce: None,
+            binding: None,
             created_at,
             expires_at,
             metadata: None,
         }
+    }
+
+    /// Attach an OIDC nonce to the flow.
+    pub fn with_nonce(mut self, nonce: String) -> Self {
+        self.nonce = Some(nonce);
+        self
+    }
+
+    /// Bind the flow to the initiating browser session (login-CSRF guard).
+    pub fn with_binding(mut self, binding: Option<String>) -> Self {
+        self.binding = binding;
+        self
     }
 
     pub fn is_expired(&self) -> bool {
@@ -62,14 +83,26 @@ pub trait OAuth2StateStore: Send + Sync {
 }
 
 /// In-memory implementation of OAuth2StateStore
+/// Default cap on concurrently pending flows held in memory.
+const DEFAULT_MAX_PENDING_STATES: usize = 10_000;
+
 pub struct InMemoryStateStore {
     states: Arc<RwLock<HashMap<String, OAuth2State>>>,
+    max_states: usize,
 }
 
 impl InMemoryStateStore {
     pub fn new() -> Self {
+        Self::with_capacity(DEFAULT_MAX_PENDING_STATES)
+    }
+
+    /// Create a store holding at most `max_states` pending flows. Expired
+    /// states are pruned opportunistically on every `store`, so no external
+    /// cleanup scheduling is required; `store` fails once the cap is hit.
+    pub fn with_capacity(max_states: usize) -> Self {
         Self {
             states: Arc::new(RwLock::new(HashMap::new())),
+            max_states,
         }
     }
 }
@@ -84,6 +117,16 @@ impl Default for InMemoryStateStore {
 impl OAuth2StateStore for InMemoryStateStore {
     async fn store(&self, state: OAuth2State) -> OAuth2Result<()> {
         let mut states = self.states.write().await;
+
+        // Opportunistic pruning: abandoned flows must not accumulate just
+        // because nobody schedules cleanup_expired.
+        let now = Utc::now();
+        states.retain(|_, stored| now <= stored.expires_at);
+
+        if states.len() >= self.max_states {
+            return Err(OAuth2Error::TooManyPendingFlows);
+        }
+
         states.insert(state.state.clone(), state);
         Ok(())
     }
@@ -177,5 +220,58 @@ mod tests {
         // Verify the state is gone
         let result = store.retrieve(&state.state).await;
         assert!(matches!(result, Err(OAuth2Error::StateNotFound)));
+    }
+
+    #[tokio::test]
+    async fn store_rejects_when_capacity_reached() {
+        let store = InMemoryStateStore::with_capacity(2);
+        for _ in 0..2 {
+            store
+                .store(OAuth2State::new(
+                    "google".to_string(),
+                    "http://localhost/cb".to_string(),
+                    None,
+                    300,
+                ))
+                .await
+                .unwrap();
+        }
+
+        let err = store
+            .store(OAuth2State::new(
+                "google".to_string(),
+                "http://localhost/cb".to_string(),
+                None,
+                300,
+            ))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, OAuth2Error::TooManyPendingFlows));
+    }
+
+    #[tokio::test]
+    async fn store_prunes_expired_states_opportunistically() {
+        let store = InMemoryStateStore::with_capacity(1);
+
+        // An already-expired flow occupies the only slot...
+        let mut expired = OAuth2State::new(
+            "google".to_string(),
+            "http://localhost/cb".to_string(),
+            None,
+            300,
+        );
+        expired.expires_at = Utc::now() - Duration::seconds(10);
+        store.store(expired).await.unwrap();
+
+        // ...but is pruned when the next flow is stored.
+        store
+            .store(OAuth2State::new(
+                "google".to_string(),
+                "http://localhost/cb".to_string(),
+                None,
+                300,
+            ))
+            .await
+            .expect("expired state must be pruned to make room");
     }
 }

@@ -31,6 +31,7 @@ pub fn jsonrpc_bidirectional_service(input: TokenStream) -> TokenStream {
 #[derive(Debug)]
 struct BidirectionalServiceDefinition {
     service_name: Ident,
+    feature_gated: bool,
     client_to_server: Vec<MethodDefinition>,
     server_to_client: Vec<NotificationDefinition>,
     server_to_client_calls: Vec<MethodDefinition>,
@@ -67,6 +68,20 @@ impl Parse for BidirectionalServiceDefinition {
         let _ = content.parse::<Token![:]>()?;
         let service_name = content.parse::<Ident>()?;
         let _ = content.parse::<Token![,]>()?;
+
+        // Optional: feature_gated: <bool>,
+        let mut feature_gated = false;
+        if content
+            .fork()
+            .parse::<Ident>()
+            .map(|ident| ident == "feature_gated")
+            .unwrap_or(false)
+        {
+            let _ = content.parse::<Ident>()?; // "feature_gated"
+            let _ = content.parse::<Token![:]>()?;
+            feature_gated = content.parse::<syn::LitBool>()?.value();
+            let _ = content.parse::<Token![,]>()?;
+        }
 
         // Parse client_to_server: [...]
         let _ = content.parse::<Ident>()?; // "client_to_server"
@@ -128,6 +143,7 @@ impl Parse for BidirectionalServiceDefinition {
 
         Ok(BidirectionalServiceDefinition {
             service_name,
+            feature_gated,
             client_to_server,
             server_to_client,
             server_to_client_calls,
@@ -279,28 +295,48 @@ fn generate_service_code(
         quote! {}
     };
 
-    let server_output = if cfg!(feature = "server") {
+    // With `feature_gated: true` the generated code is wrapped in
+    // `#[cfg(feature = ...)]` attributes resolved against the CONSUMER
+    // crate's features, immune to workspace feature unification of the
+    // macro crate's own features (which `cfg!` evaluates).
+    let feature_gated = service_def.feature_gated;
+    let cfg_server = if feature_gated {
+        quote! { #[cfg(feature = "server")] }
+    } else {
+        quote! {}
+    };
+    let cfg_client = if feature_gated {
+        quote! { #[cfg(feature = "client")] }
+    } else {
+        quote! {}
+    };
+
+    let server_output = if feature_gated || cfg!(feature = "server") {
         quote! {
+        #cfg_server
         mod #server_mod {
             use super::*;
 
             #server_code
         }
 
+        #cfg_server
         pub use #server_mod::*;
         }
     } else {
         quote! {}
     };
 
-    let client_output = if cfg!(feature = "client") {
+    let client_output = if feature_gated || cfg!(feature = "client") {
         quote! {
+        #cfg_client
         mod #client_mod {
             use super::*;
 
             #client_code
         }
 
+        #cfg_client
         pub use #client_mod::*;
         }
     } else {

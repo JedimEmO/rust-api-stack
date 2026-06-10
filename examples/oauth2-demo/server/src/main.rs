@@ -6,7 +6,6 @@ use axum::{
     response::{Html, Redirect},
     routing::{get, post},
 };
-use ras_identity_core::{IdentityError, IdentityProvider};
 use ras_identity_oauth2::{
     InMemoryStateStore, OAuth2AuthPayload, OAuth2Config, OAuth2Provider, OAuth2ProviderConfig,
     OAuth2Response,
@@ -130,6 +129,7 @@ fn create_oauth2_provider(config: &AppConfig) -> Result<OAuth2Provider> {
         authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
         token_endpoint: "https://oauth2.googleapis.com/token".to_string(),
         userinfo_endpoint: Some("https://www.googleapis.com/oauth2/v3/userinfo".to_string()),
+        issuer: Some("https://accounts.google.com".to_string()),
         redirect_uri: config.redirect_uri.clone(),
         scopes: vec![
             "openid".to_string(),
@@ -183,30 +183,17 @@ async fn start_oauth2_handler(
 ) -> Result<Json<StartOAuth2Response>, String> {
     info!("Starting OAuth2 flow for provider: {}", request.provider_id);
 
-    let auth_payload = OAuth2AuthPayload::StartFlow {
-        provider_id: request.provider_id.clone(),
-        additional_params: request.additional_params,
-    };
-
-    let payload_json = serde_json::to_value(auth_payload)
-        .map_err(|e| format!("Failed to serialize OAuth2 payload: {}", e))?;
-
-    // The OAuth2 provider returns an error with the authorization URL for start flow
-    match state.oauth2_provider.verify(payload_json).await {
-        Err(IdentityError::ProviderError(response_json)) => {
-            let oauth2_response: OAuth2Response = serde_json::from_str(&response_json)
-                .map_err(|e| format!("Failed to parse OAuth2 response: {}", e))?;
-
-            match oauth2_response {
-                OAuth2Response::AuthorizationUrl { url, state } => Ok(Json(StartOAuth2Response {
-                    authorization_url: url,
-                    state,
-                })),
-                OAuth2Response::Error { message } => Err(format!("OAuth2 error: {}", message)),
-            }
-        }
+    match state
+        .oauth2_provider
+        .start_flow(&request.provider_id, request.additional_params)
+        .await
+    {
+        Ok(OAuth2Response::AuthorizationUrl { url, state }) => Ok(Json(StartOAuth2Response {
+            authorization_url: url,
+            state,
+        })),
+        Ok(OAuth2Response::Error { message }) => Err(format!("OAuth2 error: {}", message)),
         Err(e) => Err(format!("OAuth2 provider error: {}", e)),
-        Ok(_) => Err("Unexpected success response from start flow".to_string()),
     }
 }
 
@@ -242,6 +229,7 @@ async fn oauth2_callback_handler(
         state: state_param,
         error: callback_query.error,
         error_description: callback_query.error_description,
+        binding: None,
     };
 
     let payload_json = serde_json::to_value(auth_payload)
