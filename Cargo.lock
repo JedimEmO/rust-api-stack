@@ -2858,6 +2858,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "ras-authorization-gateway"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "axum-test",
+ "bytes",
+ "chrono",
+ "cookie",
+ "futures",
+ "futures-util",
+ "ras-authorization-token",
+ "ras-transport-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml",
+ "tracing",
+]
+
+[[package]]
 name = "ras-authorization-token"
 version = "0.1.0"
 dependencies = [
