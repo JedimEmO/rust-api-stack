@@ -1,0 +1,32 @@
+[package]
+name = "ras-integration-oauth2"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "OAuth2/OIDC token source for the RAS outbound token framework: refresh-token and client-credentials flows with rotation persistence and PKCE consent helpers"
+keywords = ["api", "auth", "oauth2", "oidc", "tokens"]
+categories = ["authentication", "web-programming"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-api-stack"
+homepage = "https://github.com/JedimEmO/rust-api-stack"
+readme = "README.md"
+
+[dependencies]
+ras-integration-core = { path = "../ras-integration-core", version = "0.1.0" }
+ras-transport-core = { path = "../../core/ras-transport-core", version = "0.1.0" }
+
+async-trait = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_urlencoded = { workspace = true }
+sha2 = { workspace = true }
+tokio = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+bytes = { workspace = true }
+futures = { workspace = true }
+http = { workspace = true }

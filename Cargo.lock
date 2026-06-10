@@ -2979,6 +2979,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "ras-integration-oauth2"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "futures",
+ "http",
+ "rand 0.8.6",
+ "ras-integration-core",
+ "ras-transport-core",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "sha2",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "ras-jsonrpc-bidirectional-client"
 version = "0.1.0"
 dependencies = [
