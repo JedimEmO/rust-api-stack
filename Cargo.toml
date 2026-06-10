@@ -12,6 +12,7 @@ members = [
     "crates/rpc/ras-jsonrpc-types",
     "crates/specs/*",
     "crates/topology/*",
+    "examples/authorization-demo",
     "examples/basic-jsonrpc/*",
     "examples/bidirectional-chat/api",
     "examples/bidirectional-chat/server",

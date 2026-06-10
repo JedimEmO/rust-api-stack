@@ -41,5 +41,6 @@ mod model;
 pub use artifacts::ARTIFACT_SCHEMA_VERSION;
 pub use error::TopologyError;
 pub use model::{
-    CallEdge, Exposure, GatewayNode, RouteDecl, ServiceNode, Topology, TopologyBuilder,
+    CallEdge, Exposure, GatewayNode, IntoManifest, RouteDecl, ServiceNode, Topology,
+    TopologyBuilder,
 };

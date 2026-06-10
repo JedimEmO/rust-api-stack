@@ -1,0 +1,42 @@
+[package]
+name = "authorization-demo"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "End-to-end demo of the RAS authorization extension: embedded authority, internal service tokens, auth gateway, and topology artifacts"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-api-stack"
+homepage = "https://github.com/JedimEmO/rust-api-stack"
+publish = false
+readme = "README.md"
+
+[dependencies]
+ras-auth-core = { path = "../../crates/core/ras-auth-core", version = "0.1.0" }
+ras-authorization-core = { path = "../../crates/authorization/ras-authorization-core", version = "0.1.0" }
+ras-authorization-gateway = { path = "../../crates/authorization/ras-authorization-gateway", version = "0.1.0" }
+ras-authorization-token = { path = "../../crates/authorization/ras-authorization-token", version = "0.1.0" }
+ras-integration-core = { path = "../../crates/integration/ras-integration-core", version = "0.1.0" }
+ras-integration-ras = { path = "../../crates/integration/ras-integration-ras", version = "0.1.0" }
+ras-permission-manifest = { path = "../../crates/specs/ras-permission-manifest", version = "0.1.0" }
+ras-rest-core = { path = "../../crates/rest/ras-rest-core", version = "0.1.1" }
+ras-rest-macro = { path = "../../crates/rest/ras-rest-macro", version = "0.2.1", default-features = false, features = ["permissions", "server", "client"] }
+ras-topology-core = { path = "../../crates/topology/ras-topology-core", version = "0.1.0" }
+ras-topology-macro = { path = "../../crates/topology/ras-topology-macro", version = "0.1.0" }
+ras-transport-core = { path = "../../crates/core/ras-transport-core", version = "0.1.0", features = ["reqwest"] }
+
+async-trait = { workspace = true }
+axum = { workspace = true }
+axum-extra = { workspace = true }
+chrono = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+ras-transport-core = { path = "../../crates/core/ras-transport-core", version = "0.1.0", features = ["axum-test"] }
+axum-test = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }

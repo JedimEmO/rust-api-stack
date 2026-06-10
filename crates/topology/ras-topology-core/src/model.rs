@@ -2,9 +2,29 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ras_permission_manifest::PermissionManifest;
+use ras_permission_manifest::{PermissionManifest, ServicePermissions};
 
 use crate::error::TopologyError;
+
+/// Anything usable as a service's permission manifest in a topology:
+/// either a combined [`PermissionManifest`] or a single generated
+/// [`ServicePermissions`] (what `generate_*_permission_manifest` functions
+/// return).
+pub trait IntoManifest {
+    fn into_manifest(self) -> PermissionManifest;
+}
+
+impl IntoManifest for PermissionManifest {
+    fn into_manifest(self) -> PermissionManifest {
+        self
+    }
+}
+
+impl IntoManifest for ServicePermissions {
+    fn into_manifest(self) -> PermissionManifest {
+        PermissionManifest::from_services([self])
+    }
+}
 
 /// Whether a node may be reached from outside the deployment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,13 +153,13 @@ impl TopologyBuilder {
         id: impl Into<String>,
         audience: impl Into<String>,
         exposure: Exposure,
-        manifest: PermissionManifest,
+        manifest: impl IntoManifest,
     ) -> Self {
         self.services.push(ServiceNode {
             id: id.into(),
             audience: audience.into(),
             exposure,
-            manifest,
+            manifest: manifest.into_manifest(),
         });
         self
     }
