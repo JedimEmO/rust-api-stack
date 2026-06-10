@@ -2962,6 +2962,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ras-integration-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "chrono",
+ "futures",
+ "http",
+ "ras-transport-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "ras-jsonrpc-bidirectional-client"
 version = "0.1.0"
 dependencies = [

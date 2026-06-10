@@ -3,6 +3,7 @@ members = [
     "crates/authorization/*",
     "crates/core/*",
     "crates/identity/*",
+    "crates/integration/*",
     "crates/observability/*",
     "crates/rest/*",
     "crates/rpc/bidirectional/*",
