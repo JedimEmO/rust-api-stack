@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added - 2026-06-10
+- Service-coms and gateway extension (issues #12–#15), shipped as new 0.1.0 crate families:
+  - `ras-authorization-token`: shared RAS token claims (`ras_web_session`, `ras_internal_access`, `ras_gateway_access` families), ES256/EdDSA/HS256 signing, `kid`-based key rotation with JWKS publication, and a strict validator (asymmetric-only algorithm allowlist by default, issuer/audience/token-type pinning, key-type-confusion guard, clock-skew-aware expiry).
+  - `ras-integration-core` (#12): outbound token framework — pluggable `TokenSource`s with token families, bounds-checked caching `TokenManager` (family/subject/audience/scopes/config-version cache keys, early refresh, concurrent-refresh dedup), `GrantStore` trait, `SecretString` redaction, and capability-scoped `AuthorizedHttpClient`s over `ras-transport-core` with exact-host outbound validation and no automatic replay.
+  - `ras-integration-oauth2`: OAuth2/OIDC token source (refresh-token flow with grant scope subset checks and transactional rotation persistence, client credentials with audience forwarding, typed `ConsentRequired` errors) plus a PKCE S256 `ConsentFlow` with single-use, expiring, fully-bound state.
+  - `ras-authorization-core` (#13, embedded mode): RAS-native authorization control plane — service registry, audience-scoped grants and roles, permission-manifest import with unknown-permission rejection, pluggable `ServiceIdentityVerifier` (constant-time static-secret dev verifier included), fail-closed internal token issuer with topology policy enforcement, JWKS/key rotation, append-only audit events, embedded axum authority routes, and `RasTokenAuthProvider` for downstream validation through existing generated services.
+  - `ras-integration-ras`: `RasInternalTokenSource` bridging the two — obtains internal service tokens from the authority (in-process `EmbeddedAuthority` or HTTP `HttpAuthority`), never minting locally.
+  - `ras-authorization-gateway` (#14): optional token-narrowing reverse proxy — local web-session validation via JWKS, deterministic longest-prefix routing, single-audience derived tokens that never outlive the session, header hygiene, streaming bodies, generated-profile consumption, and fail-closed WebSocket upgrades (v1).
+  - `ras-topology-core` + `ras-topology-macro` (#15): `ras_topology!` compile-checked service graphs with build-time validation (audience uniqueness, route conflicts, exposure rules, manifest-checked edge permissions) emitting deterministic authorization-policy, gateway-profile, and Mermaid artifacts consumed by the authority and gateway.
+  - `examples/authorization-demo`: end-to-end demo wiring topology, embedded authority, internal service calls through generated clients, and the gateway in front of two generated REST services, with a full in-process integration test suite.
+- New mdBook chapters: Service-To-Service Auth, Outbound Integrations, The Auth Gateway, and Topology.
+
 ### Changed - 2026-06-06
 - REST, JSON-RPC, and file generated-client APIs are now consistent: builders take the URL at construction, auth state is cloned, `build_with_transport(...)` is always available for generated clients, public timeout variants take `Duration`, and default reqwest-backed `build()` is emitted only when the macro crate's `reqwest` feature is enabled.
 - Macro client features now distinguish transport-injected clients from default reqwest clients: `client` emits generated clients using `ras-transport-core`, while `reqwest` enables the default `ReqwestTransport` constructor.

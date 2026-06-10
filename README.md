@@ -8,6 +8,7 @@ Published documentation: <https://jedimemo.github.io/rust-api-stack/>
 
 The Rust Agent Stack provides reusable building blocks for distributed agent systems:
 - **Pluggable Authentication** - JWT sessions, OAuth2, local username/password auth, secure cookie transport, and reusable authorization traits
+- **Multi-Service Authorization** - RAS-native authorization control plane with audience-scoped grants, internal service-to-service tokens (JWKS-validated), an outbound token framework for third-party and internal APIs, an optional token-narrowing auth gateway, and compile-checked service topologies with generated policy artifacts
 - **Type-Safe APIs** - Procedural macros for JSON-RPC, REST, and file services
 - **WebSocket Support** - Bidirectional real-time communication
 - **File Services** - Type-safe file upload/download with streaming support
