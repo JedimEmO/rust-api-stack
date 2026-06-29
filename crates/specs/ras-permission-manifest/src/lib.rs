@@ -9,7 +9,12 @@ use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 
 /// Current permission manifest schema version.
-pub const SCHEMA_VERSION: u32 = 1;
+///
+/// v2 added the `AuthRequirementInfo::Optional` variant (the `OPTIONAL_AUTH`
+/// route level). A consumer pinned to an older crate version will fail to
+/// deserialize a manifest containing `"type":"optional"`; the bumped
+/// `schema_version` lets such tooling detect the mismatch up front.
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// A combined permission manifest for one or more services.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -138,8 +143,14 @@ pub struct OperationPermissions {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AuthRequirementInfo {
     Public,
+    /// Public route that opportunistically identifies its caller (`OPTIONAL_AUTH`):
+    /// anonymous callers are allowed, but a valid credential is authenticated and
+    /// surfaced to the handler. No permission is required.
+    Optional,
     Authenticated,
-    Permissions { any_of: Vec<PermissionGroupInfo> },
+    Permissions {
+        any_of: Vec<PermissionGroupInfo>,
+    },
 }
 
 impl AuthRequirementInfo {

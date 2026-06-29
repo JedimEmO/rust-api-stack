@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added - 2026-06-29
+- New `OPTIONAL_AUTH` route level for `rest_service!`, `file_service!`, `jsonrpc_service!`, and `jsonrpc_bidirectional_service!`. An `OPTIONAL_AUTH` route is public — never rejected for auth reasons — but opportunistically identifies its caller: the handler receives a `ras_auth_core::Caller` (`Anonymous` / `Authenticated(user)`) as its first argument (the file service surfaces it through `FileRequestContext`). Resolution is fully lenient: a missing, invalid, or expired credential, or a cookie that fails CSRF on an unsafe method, resolves to `Caller::Anonymous` rather than a 401/403.
+- `ras-auth-core`: new `Caller` enum (`#[must_use]`) and non-rejecting `resolve_caller` resolver alongside `authorize_request`.
+- `ras-permission-manifest`: new `AuthRequirementInfo::Optional` variant so manifests distinguish `OPTIONAL_AUTH` from public/authenticated operations; `SCHEMA_VERSION` bumped to `2` (older pinned consumers will fail to deserialize a manifest containing `"type":"optional"`).
+- OpenAPI emits an optional security requirement (`[{}, {"bearerAuth": []}]`) and OpenRPC emits `x-authentication: { required: false }` for `OPTIONAL_AUTH` operations.
+- Existing `UNAUTHORIZED` and `WITH_PERMISSIONS` behavior is unchanged.
+
 ### Changed - 2026-06-06
 - REST, JSON-RPC, and file generated-client APIs are now consistent: builders take the URL at construction, auth state is cloned, `build_with_transport(...)` is always available for generated clients, public timeout variants take `Duration`, and default reqwest-backed `build()` is emitted only when the macro crate's `reqwest` feature is enabled.
 - Macro client features now distinguish transport-injected clients from default reqwest clients: `client` emits generated clients using `ras-transport-core`, while `reqwest` enables the default `ReqwestTransport` constructor.

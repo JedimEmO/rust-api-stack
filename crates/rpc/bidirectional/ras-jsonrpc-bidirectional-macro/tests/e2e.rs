@@ -42,6 +42,7 @@ jsonrpc_bidirectional_service!({
     service_name: Demo,
     client_to_server: [
         UNAUTHORIZED hello(String) -> String,
+        OPTIONAL_AUTH whoami(String) -> String,
         WITH_PERMISSIONS(["user"]) echo(EchoIn) -> EchoOut,
     ],
     server_to_client: [
@@ -91,6 +92,20 @@ impl DemoService for DemoImpl {
         Ok(EchoOut {
             msg: req.msg,
             user: user.user_id.clone(),
+        })
+    }
+
+    async fn whoami(
+        &self,
+        _client: ConnectionId,
+        _conns: &dyn ras_jsonrpc_bidirectional_types::ConnectionManager,
+        caller: ras_auth_core::Caller,
+        _req: String,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        // OPTIONAL_AUTH: report the connection's user when present, anonymous otherwise.
+        Ok(match caller {
+            ras_auth_core::Caller::Authenticated(user) => user.user_id,
+            ras_auth_core::Caller::Anonymous => "anonymous".to_string(),
         })
     }
 
@@ -259,6 +274,42 @@ async fn generated_handler_round_trips_without_socket() {
         messages.last().unwrap(),
         BidirectionalMessage::ConnectionClosed { .. }
     ));
+}
+
+#[tokio::test]
+async fn optional_auth_handler_is_anonymous_without_user() {
+    let messages = run_generated_handler(
+        JsonRpcRequest::new(
+            "whoami".into(),
+            Some(serde_json::json!("ignored")),
+            Some(5.into()),
+        ),
+        None,
+        None,
+    )
+    .await;
+
+    let response = response_from(&messages);
+    assert!(response.error.is_none());
+    assert_eq!(response.result, Some(serde_json::json!("anonymous")));
+}
+
+#[tokio::test]
+async fn optional_auth_handler_identifies_connection_user() {
+    let messages = run_generated_handler(
+        JsonRpcRequest::new(
+            "whoami".into(),
+            Some(serde_json::json!("ignored")),
+            Some(6.into()),
+        ),
+        Some(test_user("user-1", &[])),
+        None,
+    )
+    .await;
+
+    let response = response_from(&messages);
+    assert!(response.error.is_none());
+    assert_eq!(response.result, Some(serde_json::json!("user-1")));
 }
 
 #[tokio::test]

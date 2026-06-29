@@ -99,6 +99,7 @@ jsonrpc_service!({
                 },
             ],
         },
+        OPTIONAL_AUTH whoami(EchoRequest) -> EchoResponse,
         WITH_PERMISSIONS(["user"]) add(AddRequest) -> AddResponse,
         WITH_PERMISSIONS(["admin"]) admin_only(EchoRequest) -> EchoResponse,
     ]
@@ -143,6 +144,18 @@ impl DemoTrait for DemoImpl {
         Ok(EchoResponse {
             msg: req.msg,
             user_id: Some(user.user_id.clone()),
+        })
+    }
+
+    async fn whoami(
+        &self,
+        caller: ras_jsonrpc_core::Caller,
+        req: EchoRequest,
+    ) -> Result<EchoResponse, Box<dyn std::error::Error + Send + Sync>> {
+        // OPTIONAL_AUTH: report the caller when present, anonymous otherwise.
+        Ok(EchoResponse {
+            msg: req.msg,
+            user_id: caller.authenticated().map(|user| user.user_id.clone()),
         })
     }
 }
@@ -365,6 +378,62 @@ async fn unauth_method_round_trips() {
     .expect("ping ok");
 
     assert_eq!(resp.msg, "hello");
+    assert_eq!(resp.user_id, None);
+}
+
+#[tokio::test]
+async fn optional_auth_method_anonymous_without_token() {
+    let server = server();
+
+    let resp: EchoResponse = call_rpc(
+        &server,
+        "whoami",
+        json!(EchoRequest {
+            msg: "hi".to_string()
+        }),
+        None,
+    )
+    .await
+    .expect("whoami ok for anonymous");
+
+    assert_eq!(resp.msg, "hi");
+    assert_eq!(resp.user_id, None);
+}
+
+#[tokio::test]
+async fn optional_auth_method_identifies_valid_token() {
+    let server = server();
+
+    let resp: EchoResponse = call_rpc(
+        &server,
+        "whoami",
+        json!(EchoRequest {
+            msg: "hi".to_string()
+        }),
+        Some("user-token"),
+    )
+    .await
+    .expect("whoami ok for authenticated");
+
+    assert_eq!(resp.user_id.as_deref(), Some("user-1"));
+}
+
+#[tokio::test]
+async fn optional_auth_method_is_lenient_with_bad_token() {
+    let server = server();
+
+    // A present-but-invalid token must NOT reject an OPTIONAL_AUTH method.
+    let resp: EchoResponse = call_rpc(
+        &server,
+        "whoami",
+        json!(EchoRequest {
+            msg: "hi".to_string()
+        }),
+        Some("not-a-real-token"),
+    )
+    .await
+    .expect("whoami stays lenient for a bad token");
+
     assert_eq!(resp.user_id, None);
 }
 

@@ -120,7 +120,11 @@ impl OperationEntry<'_> {
 fn operation_entries(service_def: &BidirectionalServiceDefinition) -> Vec<OperationEntry<'_>> {
     let mut entries = Vec::new();
     for method in &service_def.client_to_server {
-        let is_protected = !matches!(method.auth, AuthRequirement::Unauthorized);
+        // OPTIONAL_AUTH is a public method (no guard) — like Unauthorized, it is not protected.
+        let is_protected = !matches!(
+            method.auth,
+            AuthRequirement::Unauthorized | AuthRequirement::OptionalAuth
+        );
         entries.push(OperationEntry {
             operation_id: format!(
                 "{}.client_to_server.{}",
@@ -136,7 +140,11 @@ fn operation_entries(service_def: &BidirectionalServiceDefinition) -> Vec<Operat
         });
     }
     for method in &service_def.server_to_client_calls {
-        let is_protected = !matches!(method.auth, AuthRequirement::Unauthorized);
+        // OPTIONAL_AUTH is a public method (no guard) — like Unauthorized, it is not protected.
+        let is_protected = !matches!(
+            method.auth,
+            AuthRequirement::Unauthorized | AuthRequirement::OptionalAuth
+        );
         entries.push(OperationEntry {
             operation_id: format!(
                 "{}.server_to_client_call.{}",
@@ -158,6 +166,9 @@ fn auth_tokens(auth: &AuthRequirement) -> TokenStream {
     match auth {
         AuthRequirement::Unauthorized => {
             quote! { ras_permission_manifest::AuthRequirementInfo::Public }
+        }
+        AuthRequirement::OptionalAuth => {
+            quote! { ras_permission_manifest::AuthRequirementInfo::Optional }
         }
         AuthRequirement::WithPermissions(groups) => {
             if groups.is_empty() || groups.iter().any(Vec::is_empty) {
@@ -182,7 +193,9 @@ fn auth_tokens(auth: &AuthRequirement) -> TokenStream {
 
 fn static_requirement_tokens(auth: &AuthRequirement) -> TokenStream {
     match auth {
-        AuthRequirement::Unauthorized => {
+        // Public methods (Unauthorized / OptionalAuth) are not protected, so this
+        // placeholder is never emitted — it only keeps the match exhaustive.
+        AuthRequirement::Unauthorized | AuthRequirement::OptionalAuth => {
             quote! { ras_permission_manifest::StaticPermissionRequirement::authenticated_only() }
         }
         AuthRequirement::WithPermissions(groups) => {

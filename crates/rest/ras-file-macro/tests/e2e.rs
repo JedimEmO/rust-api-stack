@@ -59,6 +59,10 @@ file_service!({
             content_types: ["application/octet-stream"],
             ranges: true,
         },
+        DOWNLOAD OPTIONAL_AUTH peek/{file_id: String} {
+            content_types: ["application/octet-stream"],
+            ranges: false,
+        },
     ]
 });
 
@@ -179,6 +183,21 @@ impl DemoTrait for DemoImpl {
         DownloadResponse::bytes(bytes)
             .content_type("application/octet-stream")?
             .attachment(format!("{}.bin", path.file_id))
+    }
+
+    async fn peek_by_file_id(
+        &self,
+        ctx: &FileRequestContext<'_>,
+        path: DemoPeekByFileIdPath,
+    ) -> ras_file_core::FileResult<DownloadResponse> {
+        // OPTIONAL_AUTH: the caller is surfaced through the context, never rejected.
+        let caller = match ctx.user {
+            Some(user) => user.user_id.clone(),
+            None => "anonymous".to_string(),
+        };
+        DownloadResponse::bytes(Bytes::from(format!("{caller}:{}", path.file_id)))
+            .content_type("application/octet-stream")?
+            .attachment(format!("{}.txt", path.file_id))
     }
 }
 
@@ -369,6 +388,43 @@ async fn download_returns_not_found_for_missing_file() {
     let response = server.get("/files/download/missing").await;
 
     response.assert_status(StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn optional_auth_download_without_token_is_anonymous() {
+    let server = demo_server(DemoImpl::new());
+
+    let response = server.get("/files/peek/x1").await;
+
+    response.assert_status(StatusCode::OK);
+    assert_eq!(response.text(), "anonymous:x1");
+}
+
+#[tokio::test]
+async fn optional_auth_download_with_valid_token_sees_user() {
+    let server = demo_server(DemoImpl::new());
+
+    let response = server
+        .get("/files/peek/x2")
+        .authorization_bearer("user-token")
+        .await;
+
+    response.assert_status(StatusCode::OK);
+    assert_eq!(response.text(), "user-1:x2");
+}
+
+#[tokio::test]
+async fn optional_auth_download_with_invalid_token_is_lenient() {
+    let server = demo_server(DemoImpl::new());
+
+    let response = server
+        .get("/files/peek/x3")
+        .authorization_bearer("not-a-real-token")
+        .await;
+
+    // Lenient: a bad credential downgrades to anonymous rather than 401.
+    response.assert_status(StatusCode::OK);
+    assert_eq!(response.text(), "anonymous:x3");
 }
 
 #[test]
@@ -743,4 +799,11 @@ fn generated_openapi_documents_v2_multipart_contract() {
         "#/components/schemas/BinaryFileResponse"
     );
     assert_eq!(download["x-ras-file"]["ranges"], true);
+
+    // OPTIONAL_AUTH route advertises an optional security requirement.
+    let peek = &doc["paths"]["/peek/{file_id}"]["get"];
+    assert_eq!(
+        peek["security"],
+        serde_json::json!([{}, { "bearerAuth": [] }])
+    );
 }

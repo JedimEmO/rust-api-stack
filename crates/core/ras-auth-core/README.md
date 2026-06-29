@@ -63,6 +63,41 @@ pub enum AuthError {
 }
 ```
 
+### Caller and `resolve_caller` (OPTIONAL_AUTH)
+
+Service macros support three auth levels: `UNAUTHORIZED`, `OPTIONAL_AUTH`, and
+`WITH_PERMISSIONS([...])`. An `OPTIONAL_AUTH` route is **public but opportunistically
+identified** — it is never rejected for authentication reasons, and the handler
+receives a `Caller`:
+
+```rust
+pub enum Caller {
+    Anonymous,
+    Authenticated(AuthenticatedUser),
+}
+```
+
+`resolve_caller` is the non-rejecting counterpart to `authorize_request`. It reuses
+the same credential extraction, CSRF validation, and `AuthProvider::authenticate`
+steps, but maps every failure to `Caller::Anonymous` instead of an error:
+
+```rust
+pub async fn resolve_caller<P: AuthProvider + ?Sized>(
+    method: &str,
+    headers: &HeaderMap,
+    auth_transport: &AuthTransportConfig,
+    auth_provider: Option<&P>,
+) -> Caller;
+```
+
+It is **fully lenient**: a missing credential, an invalid/expired token, a missing
+auth provider, or a cookie credential that fails CSRF on an unsafe method all
+resolve to `Caller::Anonymous`. A forged or stale credential therefore gains
+nothing — it simply executes as the public path. No permission check is performed
+(an `OPTIONAL_AUTH` route has no required groups). The generated REST/JSON-RPC/
+bidirectional handlers take `Caller` as their first argument; the file service
+surfaces the same optional caller through `FileRequestContext`.
+
 ### HTTP Credential Transport
 
 `AuthProvider` still validates a token string. HTTP services can choose how the

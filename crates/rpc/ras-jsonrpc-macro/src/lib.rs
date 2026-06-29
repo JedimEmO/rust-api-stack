@@ -12,7 +12,27 @@ mod static_hosting;
 /// This macro generates a service trait and builder that integrates with axum
 /// for handling JSON-RPC requests with authentication and authorization.
 ///
-/// See the tests for usage examples.
+/// Each method declares one of three auth levels:
+///
+/// * `UNAUTHORIZED` — public; the handler receives no caller.
+/// * `OPTIONAL_AUTH` — public, but opportunistically identified: never rejected
+///   for auth reasons, the handler receives a `ras_jsonrpc_core::Caller`
+///   (`Anonymous`, or `Authenticated(user)` for a valid credential). A
+///   present-but-bad credential downgrades to `Anonymous`.
+/// * `WITH_PERMISSIONS([...])` — authenticated and gated.
+///
+/// ```ignore
+/// jsonrpc_service!({
+///     service_name: ApiService,
+///     methods: [
+///         UNAUTHORIZED register(UserRequest) -> UserResponse,
+///         OPTIONAL_AUTH feed(FeedRequest) -> FeedResponse,
+///         WITH_PERMISSIONS(["user.read"]) get_profile(()) -> UserResponse,
+///     ]
+/// });
+/// ```
+///
+/// See the tests for further usage examples.
 #[proc_macro]
 pub fn jsonrpc_service(input: TokenStream) -> TokenStream {
     let service_definition = parse_macro_input!(input as ServiceDefinition);
@@ -91,6 +111,9 @@ impl DocComment {
 #[derive(Debug)]
 enum AuthRequirement {
     Unauthorized,
+    /// Public method that opportunistically identifies its caller. Never rejected
+    /// for auth reasons; the handler receives a `ras_jsonrpc_core::Caller`.
+    OptionalAuth,
     WithPermissions(Vec<Vec<String>>), // Vec of permission groups - OR between groups, AND within groups
 }
 
@@ -240,6 +263,7 @@ impl Parse for MethodDefinition {
             let auth_ident = input.parse::<Ident>()?;
             match auth_ident.to_string().as_str() {
                 "UNAUTHORIZED" => AuthRequirement::Unauthorized,
+                "OPTIONAL_AUTH" => AuthRequirement::OptionalAuth,
                 "WITH_PERMISSIONS" => {
                     // Parse ([...] | [...] | ...)
                     let perms_content;
@@ -286,7 +310,7 @@ impl Parse for MethodDefinition {
                 _ => {
                     return Err(syn::Error::new(
                         auth_ident.span(),
-                        "Expected UNAUTHORIZED or WITH_PERMISSIONS",
+                        "Expected UNAUTHORIZED, OPTIONAL_AUTH, or WITH_PERMISSIONS",
                     ));
                 }
             }
@@ -562,6 +586,11 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
                     fn #method_name(&self, request: #request_type) -> impl std::future::Future<Output = Result<#response_type, Box<dyn std::error::Error + Send + Sync>>> + Send;
                 }
             }
+            AuthRequirement::OptionalAuth => {
+                quote! {
+                    fn #method_name(&self, caller: ras_jsonrpc_core::Caller, request: #request_type) -> impl std::future::Future<Output = Result<#response_type, Box<dyn std::error::Error + Send + Sync>>> + Send;
+                }
+            }
             AuthRequirement::WithPermissions(_) => {
                 quote! {
                     fn #method_name(&self, user: &ras_jsonrpc_core::AuthenticatedUser, request: #request_type) -> impl std::future::Future<Output = Result<#response_type, Box<dyn std::error::Error + Send + Sync>>> + Send;
@@ -569,6 +598,28 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
             }
         }
     });
+
+    // Wire names of OPTIONAL_AUTH methods (canonical + legacy versions). The
+    // request-level auth step rejects bad credentials globally; for these methods
+    // we instead downgrade to anonymous so the route stays lenient/public.
+    let optional_auth_wire_names: Vec<String> = service_def
+        .methods
+        .iter()
+        .filter(|method| matches!(method.auth, AuthRequirement::OptionalAuth))
+        .flat_map(|method| {
+            std::iter::once(jsonrpc_method_wire_name(method)).chain(
+                method
+                    .versions
+                    .iter()
+                    .map(|version| version.wire_name.clone()),
+            )
+        })
+        .collect();
+    let optional_method_check = if optional_auth_wire_names.is_empty() {
+        quote! { false }
+    } else {
+        quote! { matches!(request.method.as_str(), #(#optional_auth_wire_names)|*) }
+    };
 
     // Generate method dispatch logic for the JSON-RPC handler
     let method_dispatch = service_def
@@ -726,41 +777,58 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
                     return ras_jsonrpc_types::JsonRpcResponse::error(ras_jsonrpc_types::JsonRpcError::invalid_request(), request_id);
                 }
 
-                // Try to authenticate user if auth provider is available
-                let auth_result = if let Some(auth_provider) = &self.auth_provider {
+                // Resolve the credential to Ok(Some/None) or Err(error response), then
+                // apply a single downgrade decision: OPTIONAL_AUTH methods are public,
+                // so any credential failure (failed CSRF, invalid/expired token)
+                // downgrades to anonymous rather than rejecting the whole request.
+                let __ras_method_is_optional = #optional_method_check;
+
+                let auth_outcome: Result<
+                    Option<ras_jsonrpc_core::AuthenticatedUser>,
+                    ras_jsonrpc_types::JsonRpcResponse,
+                > = if let Some(auth_provider) = &self.auth_provider {
                     match ras_jsonrpc_core::extract_auth_credential(&headers, &self.auth_transport) {
                         Ok(credential) => {
-                            if let Err(_) = ras_jsonrpc_core::validate_csrf_for_credential("POST", &headers, &credential, &self.auth_transport) {
-                                return ras_jsonrpc_types::JsonRpcResponse::error(
+                            if ras_jsonrpc_core::validate_csrf_for_credential("POST", &headers, &credential, &self.auth_transport).is_err() {
+                                Err(ras_jsonrpc_types::JsonRpcResponse::error(
                                     ras_jsonrpc_types::JsonRpcError::csrf_validation_failed(),
-                                    request_id
-                                );
+                                    request_id.clone(),
+                                ))
+                            } else {
+                                match auth_provider.authenticate(credential.token().to_string()).await {
+                                    Ok(user) => Ok(Some(user)),
+                                    Err(ras_jsonrpc_core::AuthError::TokenExpired) => {
+                                        Err(ras_jsonrpc_types::JsonRpcResponse::error(
+                                            ras_jsonrpc_types::JsonRpcError::token_expired(),
+                                            request_id.clone(),
+                                        ))
+                                    }
+                                    Err(_) => Err(ras_jsonrpc_types::JsonRpcResponse::error(
+                                        ras_jsonrpc_types::JsonRpcError::authentication_required(),
+                                        request_id.clone(),
+                                    )),
+                                }
                             }
-
-                            Some(auth_provider.authenticate(credential.token().to_string()).await)
-                        },
-                        Err(ras_jsonrpc_core::AuthTransportError::MissingCredentials) => None,
-                        Err(_) => Some(Err(ras_jsonrpc_core::AuthError::AuthenticationRequired)),
+                        }
+                        Err(ras_jsonrpc_core::AuthTransportError::MissingCredentials) => Ok(None),
+                        Err(_) => Err(ras_jsonrpc_types::JsonRpcResponse::error(
+                            ras_jsonrpc_types::JsonRpcError::authentication_required(),
+                            request_id.clone(),
+                        )),
                     }
                 } else {
-                    None
+                    Ok(None)
                 };
 
-                let authenticated_user = match auth_result {
-                    Some(Ok(user)) => Some(user),
-                    Some(Err(ras_jsonrpc_core::AuthError::TokenExpired)) => {
-                        return ras_jsonrpc_types::JsonRpcResponse::error(
-                            ras_jsonrpc_types::JsonRpcError::token_expired(),
-                            request_id
-                        );
+                let authenticated_user = match auth_outcome {
+                    Ok(user) => user,
+                    Err(error_response) => {
+                        if __ras_method_is_optional {
+                            None
+                        } else {
+                            return error_response;
+                        }
                     }
-                    Some(Err(_)) => {
-                        return ras_jsonrpc_types::JsonRpcResponse::error(
-                            ras_jsonrpc_types::JsonRpcError::authentication_required(),
-                            request_id
-                        );
-                    }
-                    None => None,
                 };
 
                 // Call usage tracker if configured
@@ -793,7 +861,7 @@ fn jsonrpc_method_wire_name(method: &MethodDefinition) -> String {
 
 fn jsonrpc_permission_groups_code(auth: &AuthRequirement) -> proc_macro2::TokenStream {
     let permission_groups = match auth {
-        AuthRequirement::Unauthorized => Vec::new(),
+        AuthRequirement::Unauthorized | AuthRequirement::OptionalAuth => Vec::new(),
         AuthRequirement::WithPermissions(groups) => groups.clone(),
     };
 
@@ -813,6 +881,16 @@ fn jsonrpc_auth_check_code(
 ) -> (proc_macro2::TokenStream, proc_macro2::TokenStream) {
     match auth {
         AuthRequirement::Unauthorized => (quote! {}, quote! { None }),
+        AuthRequirement::OptionalAuth => (
+            quote! {
+                // OPTIONAL_AUTH: surface the (optional) caller. The request-level
+                // auth step already resolved `authenticated_user` best-effort; a
+                // present-but-bad credential was downgraded to None for this method.
+                // Cloned because `authenticated_user` is still needed for tracking below.
+                let caller = ras_jsonrpc_core::Caller::from(authenticated_user.clone());
+            },
+            quote! { authenticated_user.as_ref() },
+        ),
         AuthRequirement::WithPermissions(_) => {
             let permission_groups_code = jsonrpc_permission_groups_code(auth);
             (
@@ -890,6 +968,9 @@ fn generate_jsonrpc_canonical_dispatch(method: &MethodDefinition) -> proc_macro2
 
     let handler_call = match &method.auth {
         AuthRequirement::Unauthorized => quote! { self.service.#method_name(#params_ident).await },
+        AuthRequirement::OptionalAuth => {
+            quote! { self.service.#method_name(caller, #params_ident).await }
+        }
         AuthRequirement::WithPermissions(_) => {
             quote! { self.service.#method_name(user, #params_ident).await }
         }
@@ -945,6 +1026,9 @@ fn generate_jsonrpc_legacy_dispatch(
 
     let handler_call = match &method.auth {
         AuthRequirement::Unauthorized => quote! { self.service.#method_name(#params_ident).await },
+        AuthRequirement::OptionalAuth => {
+            quote! { self.service.#method_name(caller, #params_ident).await }
+        }
         AuthRequirement::WithPermissions(_) => {
             quote! { self.service.#method_name(user, #params_ident).await }
         }

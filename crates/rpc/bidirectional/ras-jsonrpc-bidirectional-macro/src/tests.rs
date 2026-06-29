@@ -98,3 +98,42 @@ fn test_server_to_client_calls_parse_without_auth_prefix() {
         AuthRequirement::Unauthorized
     ));
 }
+
+#[test]
+fn test_optional_auth_parses_on_client_to_server() {
+    let input = r#"{
+            service_name: Demo,
+            client_to_server: [
+                OPTIONAL_AUTH whoami(String) -> String,
+            ],
+            server_to_client: [],
+            server_to_client_calls: []
+        }"#;
+
+    let parsed: BidirectionalServiceDefinition = syn::parse_str(input).unwrap();
+    assert!(matches!(
+        parsed.client_to_server[0].auth,
+        AuthRequirement::OptionalAuth
+    ));
+}
+
+#[test]
+fn test_optional_auth_rejected_on_server_to_client_calls() {
+    // OPTIONAL_AUTH has no inbound caller on an outbound call, so it must be a
+    // hard parse error rather than silently behaving like UNAUTHORIZED.
+    let input = r#"{
+            service_name: Demo,
+            client_to_server: [],
+            server_to_client: [],
+            server_to_client_calls: [
+                OPTIONAL_AUTH get_status(String) -> bool,
+            ]
+        }"#;
+
+    let err = syn::parse_str::<BidirectionalServiceDefinition>(input)
+        .expect_err("OPTIONAL_AUTH must be rejected on server_to_client calls");
+    assert!(
+        err.to_string().contains("OPTIONAL_AUTH is not supported"),
+        "unexpected error: {err}"
+    );
+}

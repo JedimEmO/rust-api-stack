@@ -16,6 +16,20 @@ mod static_hosting;
 /// Supports path parameters and request bodies
 /// Generates OpenAPI 3.0 documents using schemars
 ///
+/// # Auth levels
+///
+/// Each endpoint declares one of three auth levels:
+///
+/// * `UNAUTHORIZED` — public; the handler receives no caller.
+/// * `OPTIONAL_AUTH` — public, but opportunistically identified: the route is
+///   never rejected for auth reasons and the handler receives a
+///   [`ras_auth_core::Caller`] (`Anonymous`, or `Authenticated(user)` when a
+///   valid credential is present). A present-but-bad credential (invalid/expired
+///   token, or a cookie that fails CSRF on an unsafe method) resolves to
+///   `Anonymous` rather than rejecting.
+/// * `WITH_PERMISSIONS([...])` — authenticated and gated; a missing or
+///   insufficient credential is rejected before the handler runs.
+///
 /// # Example
 ///
 /// ```rust
@@ -53,6 +67,7 @@ mod static_hosting;
 ///     ui_theme: "default",
 ///     endpoints: [
 ///         GET UNAUTHORIZED users() -> UsersResponse,
+///         GET OPTIONAL_AUTH feed() -> UsersResponse,
 ///         POST WITH_PERMISSIONS(["admin"]) users(CreateUserRequest) -> UserResponse,
 ///         GET WITH_PERMISSIONS(["user"]) users/{id: String}() -> UserResponse,
 ///         PUT WITH_PERMISSIONS(["admin"]) users/{id: String}(UpdateUserRequest) -> UserResponse,
@@ -187,6 +202,9 @@ struct QueryParam {
 #[derive(Debug)]
 enum AuthRequirement {
     Unauthorized,
+    /// Public route that opportunistically identifies its caller. Never rejected
+    /// for auth reasons; the handler receives a `ras_auth_core::Caller`.
+    OptionalAuth,
     WithPermissions(Vec<Vec<String>>), // Vec of permission groups - OR between groups, AND within groups
 }
 
@@ -456,6 +474,7 @@ impl Parse for EndpointDefinition {
             let auth_ident = input.parse::<Ident>()?;
             match auth_ident.to_string().as_str() {
                 "UNAUTHORIZED" => AuthRequirement::Unauthorized,
+                "OPTIONAL_AUTH" => AuthRequirement::OptionalAuth,
                 "WITH_PERMISSIONS" => {
                     // Parse ([...] | [...] | ...)
                     let perms_content;
@@ -502,7 +521,7 @@ impl Parse for EndpointDefinition {
                 _ => {
                     return Err(syn::Error::new(
                         auth_ident.span(),
-                        "Expected UNAUTHORIZED or WITH_PERMISSIONS",
+                        "Expected UNAUTHORIZED, OPTIONAL_AUTH, or WITH_PERMISSIONS",
                     ));
                 }
             }
@@ -717,6 +736,9 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
         // Add authenticated user parameter if needed
         match &endpoint.auth {
             AuthRequirement::Unauthorized => {}
+            AuthRequirement::OptionalAuth => {
+                params.push(quote! { caller: ras_auth_core::Caller });
+            }
             AuthRequirement::WithPermissions(_) => {
                 params.push(quote! { user: &ras_auth_core::AuthenticatedUser });
             }
@@ -1003,7 +1025,7 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
 
 fn rest_permission_groups_code(auth: &AuthRequirement) -> proc_macro2::TokenStream {
     let permission_groups = match auth {
-        AuthRequirement::Unauthorized => Vec::new(),
+        AuthRequirement::Unauthorized | AuthRequirement::OptionalAuth => Vec::new(),
         AuthRequirement::WithPermissions(groups) => groups.clone(),
     };
 
@@ -1426,6 +1448,97 @@ fn generate_legacy_handler_body(
 
             result
         },
+        AuthRequirement::OptionalAuth => {
+            canonical_args.insert(0, quote! { caller });
+
+            quote! {
+                // Best-effort authentication for an OPTIONAL_AUTH route — never
+                // rejected: resolves to Caller::Anonymous for a missing/invalid
+                // credential, Caller::Authenticated for a valid one.
+                let caller = ras_auth_core::resolve_caller(
+                    #method,
+                    &headers,
+                    &auth_transport,
+                    auth_provider.as_deref(),
+                ).await;
+                // Snapshot the user for tracking; `caller` is moved into the handler.
+                let __ras_caller_user = caller.authenticated().cloned();
+
+                #json_handling
+
+                if let Some(tracker) = &with_usage_tracker {
+                    let tracker_headers =
+                        ras_auth_core::redact_sensitive_headers_for_auth_transport(&headers, &auth_transport);
+                    tracker(&tracker_headers, __ras_caller_user.as_ref(), #method, #path).await;
+                }
+
+                let legacy_parts: #legacy_request_ident = #legacy_parts_init;
+                let #canonical_parts_ident: #canonical_request_ident =
+                    match <#migration_type as ras_rest_core::VersionMigration<#legacy_request_ident, #canonical_request_ident>>::migrate(legacy_parts) {
+                        Ok(parts) => parts,
+                        Err(e) => {
+                            use axum::response::IntoResponse;
+                            return (
+                                axum::http::StatusCode::BAD_REQUEST,
+                                axum::Json(serde_json::json!({
+                                    "error": e.to_string()
+                                }))
+                            ).into_response();
+                        },
+                    };
+
+                let start_time = std::time::Instant::now();
+
+                let result = match service.#handler_name(#(#canonical_args),*).await {
+                    Ok(rest_response) => {
+                        use axum::response::IntoResponse;
+                        let status_code = axum::http::StatusCode::from_u16(rest_response.status)
+                            .unwrap_or(axum::http::StatusCode::OK);
+                        let body: #legacy_response_type =
+                            match <#migration_type as ras_rest_core::VersionMigration<#canonical_response_type, #legacy_response_type>>::migrate(rest_response.body) {
+                                Ok(body) => body,
+                                Err(e) => {
+                                    tracing::error!(error = %e, "Response migration failed");
+                                    return (
+                                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                                        axum::Json(serde_json::json!({
+                                            "error": "Internal server error"
+                                        }))
+                                    ).into_response();
+                                },
+                            };
+                        (
+                            status_code,
+                            axum::Json(body)
+                        ).into_response()
+                    },
+                    Err(rest_error) => {
+                        use axum::response::IntoResponse;
+
+                        if let Some(internal) = &rest_error.internal_error {
+                            tracing::error!(error = ?internal, "Request failed with status {}", rest_error.status);
+                        }
+
+                        let status_code = axum::http::StatusCode::from_u16(rest_error.status)
+                            .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+
+                        (
+                            status_code,
+                            axum::Json(serde_json::json!({
+                                "error": &rest_error.message
+                            }))
+                        ).into_response()
+                    },
+                };
+
+                let duration = start_time.elapsed();
+                if let Some(tracker) = &with_method_duration_tracker {
+                    tracker(#method, #path, __ras_caller_user.as_ref(), duration).await;
+                }
+
+                result
+            }
+        }
         AuthRequirement::WithPermissions(_) => {
             canonical_args.insert(0, quote! { &user });
 
@@ -1682,6 +1795,97 @@ fn generate_handler_body(
                 let duration = start_time.elapsed();
                 if let Some(tracker) = &with_method_duration_tracker {
                     tracker(#method, #path, None, duration).await;
+                }
+
+                result
+            }
+        }
+        AuthRequirement::OptionalAuth => {
+            // Build argument list; the caller is passed by value as the first arg.
+            let mut args = vec![quote! { caller }];
+
+            // Add path parameters
+            if endpoint.path_params.len() == 1 {
+                args.push(quote! { path_params });
+            } else {
+                for (i, _) in endpoint.path_params.iter().enumerate() {
+                    let idx = syn::Index::from(i);
+                    args.push(quote! { path_params.#idx });
+                }
+            }
+
+            // Add query parameters
+            for query_param in &endpoint.query_params {
+                let param_name = &query_param.name;
+                args.push(quote! { query_params.#param_name });
+            }
+
+            // Handle JSON body extraction with error handling
+            let json_handling = if endpoint.request_type.is_some() {
+                args.push(quote! { body });
+                generate_body_extraction()
+            } else {
+                quote! {}
+            };
+
+            quote! {
+                // Best-effort authentication for an OPTIONAL_AUTH route: never
+                // rejected — Caller::Anonymous when no/invalid credential is
+                // present, Caller::Authenticated otherwise.
+                let caller = ras_auth_core::resolve_caller(
+                    #method,
+                    &headers,
+                    &auth_transport,
+                    auth_provider.as_deref(),
+                ).await;
+                // Snapshot the user for tracking; `caller` is moved into the handler.
+                let __ras_caller_user = caller.authenticated().cloned();
+
+                #json_handling
+
+                // Call usage tracker if configured
+                if let Some(tracker) = &with_usage_tracker {
+                    let tracker_headers =
+                        ras_auth_core::redact_sensitive_headers_for_auth_transport(&headers, &auth_transport);
+                    tracker(&tracker_headers, __ras_caller_user.as_ref(), #method, #path).await;
+                }
+
+                // Track duration
+                let start_time = std::time::Instant::now();
+
+                let result = match service.#handler_name(#(#args),*).await {
+                    Ok(rest_response) => {
+                        use axum::response::IntoResponse;
+                        let status_code = axum::http::StatusCode::from_u16(rest_response.status)
+                            .unwrap_or(axum::http::StatusCode::OK);
+                        (
+                            status_code,
+                            axum::Json(rest_response.body)
+                        ).into_response()
+                    },
+                    Err(rest_error) => {
+                        use axum::response::IntoResponse;
+
+                        if let Some(internal) = &rest_error.internal_error {
+                            tracing::error!(error = ?internal, "Request failed with status {}", rest_error.status);
+                        }
+
+                        let status_code = axum::http::StatusCode::from_u16(rest_error.status)
+                            .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+
+                        (
+                            status_code,
+                            axum::Json(serde_json::json!({
+                                "error": &rest_error.message
+                            }))
+                        ).into_response()
+                    },
+                };
+
+                // Call duration tracker if configured
+                let duration = start_time.elapsed();
+                if let Some(tracker) = &with_method_duration_tracker {
+                    tracker(#method, #path, __ras_caller_user.as_ref(), duration).await;
                 }
 
                 result
