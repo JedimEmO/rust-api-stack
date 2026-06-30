@@ -37,7 +37,10 @@ DELETE WITH_PERMISSIONS(["admin"] | ["project:owner"]) projects/{project_id: Str
 `WITH_PERMISSIONS(["a", "b"])` means the authenticated user needs both
 permissions. `WITH_PERMISSIONS(["a"] | ["b", "c"])` means either the first group
 or the second group is enough. `WITH_PERMISSIONS([])` means authenticated, with
-no extra permission requirement.
+no extra permission requirement. `UNAUTHORIZED` is fully public, and
+`OPTIONAL_AUTH` is public but hands the handler a `Caller` so it can tailor the
+response when a valid credential is present (see
+[Auth In The API Contract](../auth-in-api-contract.md)).
 
 ## Keep DTOs Boring
 

@@ -20,6 +20,9 @@ secrets/
 **/pkg/
 tests/playwright/test-results/
 
+# mdBook build output
+documentation/book/
+
 # Local config and test files
 examples/bidirectional-chat/server/config.toml
 test_login.sh

@@ -79,6 +79,7 @@ rest_service!({
     docs_path: "/docs",
     endpoints: [
         GET UNAUTHORIZED users() -> Vec<User>,
+        GET OPTIONAL_AUTH feed() -> Vec<User>,
         GET WITH_PERMISSIONS(["user"]) users/{id: String}() -> User,
         POST WITH_PERMISSIONS(["admin"]) users(CreateUserRequest) -> User,
         DELETE WITH_PERMISSIONS(["admin"] | ["support", "users:delete"]) users/{id: String}() -> (),
@@ -93,6 +94,11 @@ METHOD AUTH_REQUIREMENT path/{param: Type}/segments(RequestType) -> ResponseType
 ```
 
 Supported methods are `GET`, `POST`, `PUT`, `DELETE`, and `PATCH`.
+`AUTH_REQUIREMENT` is one of `UNAUTHORIZED`, `OPTIONAL_AUTH`, or
+`WITH_PERMISSIONS([...])` — see
+[Auth In The API Contract](../auth-in-api-contract.md). An `OPTIONAL_AUTH`
+handler receives a `ras_auth_core::Caller` as its first argument: the route is
+public, but identifies the caller when a valid credential is present.
 
 ## Implement The Generated Trait
 

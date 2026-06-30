@@ -13,7 +13,7 @@ This crate provides the `jsonrpc_service!` procedural macro that generates type-
 ## Features
 
 - **Declarative service definition**: Clean, readable syntax for defining JSON-RPC methods
-- **Authentication integration**: Built-in support for `UNAUTHORIZED` and `WITH_PERMISSIONS` methods
+- **Authentication integration**: Built-in support for `UNAUTHORIZED`, `OPTIONAL_AUTH` (public, but hands the handler a `Caller`), and `WITH_PERMISSIONS` methods
 - **Type safety**: Compile-time validation of request/response types
 - **Axum integration**: Generates standard axum `Router` for easy composition
 - **Trait-based service wiring**: Implement one generated trait and pass it to the service builder
@@ -82,6 +82,7 @@ jsonrpc_service!({
     service_name: MyService,
     methods: [
         UNAUTHORIZED sign_in(SignInRequest) -> SignInResponse,
+        OPTIONAL_AUTH feed(FeedRequest) -> FeedResponse,  // public; handler receives a `Caller`
         WITH_PERMISSIONS(["user"]) get_profile(()) -> UserProfile,
         WITH_PERMISSIONS(["admin"]) delete_user(UserId) -> (),
     ]
@@ -188,6 +189,7 @@ jsonrpc_service!({
     openrpc: true,              // Optional: Enable OpenRPC generation
     methods: [
         UNAUTHORIZED sign_in(SignInRequest) -> SignInResponse,
+        OPTIONAL_AUTH feed(FeedRequest) -> FeedResponse,  // public; handler receives a `Caller`
         WITH_PERMISSIONS(["user"]) get_profile(()) -> UserProfile,
         WITH_PERMISSIONS(["admin"]) delete_user(UserId) -> (),
     ]

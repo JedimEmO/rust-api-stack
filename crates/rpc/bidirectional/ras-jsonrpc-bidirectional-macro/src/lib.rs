@@ -17,6 +17,13 @@ mod tests;
 /// - Client struct with type-safe method calls and notification handlers
 /// - Type-safe message enums for both directions
 ///
+/// `client_to_server` methods declare one of three auth levels — `UNAUTHORIZED`,
+/// `OPTIONAL_AUTH`, or `WITH_PERMISSIONS([...])`. An `OPTIONAL_AUTH` handler
+/// receives a `ras_auth_core::Caller` built from the connection's optional user
+/// (the server must allow anonymous connections for anonymous callers to reach
+/// it). `OPTIONAL_AUTH` is rejected on `server_to_client` calls (outbound — no
+/// inbound caller to identify).
+///
 /// See the tests for usage examples.
 #[proc_macro]
 pub fn jsonrpc_bidirectional_service(input: TokenStream) -> TokenStream {
@@ -197,7 +204,7 @@ fn parse_server_to_client_call(input: syn::parse::ParseStream) -> syn::Result<Me
 
 impl Parse for MethodDefinition {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        // Parse auth requirement (UNAUTHORIZED or WITH_PERMISSIONS([...]))
+        // Parse auth requirement (UNAUTHORIZED, OPTIONAL_AUTH, or WITH_PERMISSIONS([...]))
         let auth = if input.peek(syn::Ident) {
             let auth_ident = input.parse::<Ident>()?;
             match auth_ident.to_string().as_str() {

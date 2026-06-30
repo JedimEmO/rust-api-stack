@@ -188,16 +188,25 @@ Path parameters become `by_*` method name segments. For example,
 
 ## Auth Syntax
 
-File services use the same auth syntax as the other service macros:
+File services use the same auth syntax as the other service macros —
+`UNAUTHORIZED`, `OPTIONAL_AUTH`, and `WITH_PERMISSIONS([...])` (see
+[Auth In The API Contract](../auth-in-api-contract.md)):
 
 ```rust,ignore
+UNAUTHORIZED
+OPTIONAL_AUTH
 WITH_PERMISSIONS(["files:write"])
 WITH_PERMISSIONS(["files:write", "tenant:active"])
 WITH_PERMISSIONS(["admin"] | ["files:write", "tenant:active"])
 WITH_PERMISSIONS([])
 ```
 
-Use `WITH_PERMISSIONS([])` for authenticated-only file operations.
+Use `WITH_PERMISSIONS([])` for authenticated-only file operations. Use
+`OPTIONAL_AUTH` for a public download/upload that should still recognise a
+signed-in caller: the route is never rejected for auth reasons, and the
+(optional) caller is surfaced through `FileRequestContext` — `ctx.user` is
+`Some(user)` for a valid credential and `None` otherwise — rather than as a
+separate `Caller` parameter.
 
 ## Use The Generated Rust Client
 

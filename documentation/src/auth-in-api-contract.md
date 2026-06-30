@@ -4,6 +4,7 @@ RAS puts auth requirements next to the endpoint or method declaration:
 
 ```rust,ignore
 UNAUTHORIZED health(()) -> HealthStatus,
+OPTIONAL_AUTH feed(()) -> Feed,
 WITH_PERMISSIONS(["user"]) get_profile(()) -> UserProfile,
 WITH_PERMISSIONS(["admin"] | ["owner", "editor"]) update_project(UpdateProject) -> Project,
 ```
@@ -40,6 +41,27 @@ override that method for custom policy.
 `UNAUTHORIZED` means the generated server does not require a credential for the
 operation.
 
+`OPTIONAL_AUTH` means the operation is **public, but opportunistically
+identified**. The route is never rejected for auth reasons; instead the handler
+receives a `ras_auth_core::Caller` as its first argument:
+
+```rust,ignore
+pub enum Caller {
+    Anonymous,
+    Authenticated(AuthenticatedUser),
+}
+```
+
+Resolution is **fully lenient**: a missing credential, an invalid or expired
+token, a missing auth provider, or a cookie credential that fails CSRF on an
+unsafe method (`POST`/`PUT`/`PATCH`/`DELETE`) all resolve to `Caller::Anonymous`
+— a forged or stale credential simply executes as the public path. A valid
+credential resolves to `Caller::Authenticated(user)`. No permission check is
+performed. Reach for it on "public, but richer when signed in" endpoints
+(per-document ACLs, personalization, author previews). The `file_service!`
+macro surfaces the same optional caller through `FileRequestContext` rather than
+a `Caller` parameter.
+
 `WITH_PERMISSIONS(["a", "b"])` means the generated server requires a valid
 credential and a permission group containing both `a` and `b`.
 
@@ -71,3 +93,8 @@ Permission names are also emitted as extension metadata so explorer UIs and
 client-generation workflows can show what a call requires. `x-permissions`
 contains a flattened compatibility list, while `x-permission-groups` preserves
 the real OR/AND grouping.
+
+`OPTIONAL_AUTH` operations advertise an **optional** security requirement: REST
+and file services emit `security: [{}, { "bearerAuth": [] }]` (anonymous is
+acceptable, and a bearer token is honoured), and JSON-RPC methods emit
+`x-authentication` with `"required": false`.

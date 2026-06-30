@@ -10,6 +10,13 @@ mod server;
 
 use parser::FileServiceDefinition;
 
+/// Generates a multipart file upload/download service (axum server + typed client).
+///
+/// Each endpoint declares one of three auth levels — `UNAUTHORIZED`,
+/// `OPTIONAL_AUTH`, or `WITH_PERMISSIONS([...])`. For `OPTIONAL_AUTH` the route
+/// is public (never rejected for auth reasons) and the best-effort caller is
+/// surfaced through `FileRequestContext` (`ctx.user` is `Some(user)` when a valid
+/// credential is present, `None` otherwise) rather than a `Caller` parameter.
 #[proc_macro]
 pub fn file_service(input: TokenStream) -> TokenStream {
     let definition = parse_macro_input!(input as FileServiceDefinition);

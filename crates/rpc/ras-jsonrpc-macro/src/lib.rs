@@ -258,7 +258,7 @@ impl Parse for MethodDefinition {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let docs = parse_doc_comment_attrs(input.call(syn::Attribute::parse_outer)?, "method")?;
 
-        // Parse auth requirement (UNAUTHORIZED or WITH_PERMISSIONS([...]))
+        // Parse auth requirement (UNAUTHORIZED, OPTIONAL_AUTH, or WITH_PERMISSIONS([...]))
         let auth = if input.peek(syn::Ident) {
             let auth_ident = input.parse::<Ident>()?;
             match auth_ident.to_string().as_str() {

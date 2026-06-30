@@ -45,6 +45,7 @@ rest_service!({
     openapi: true,
     endpoints: [
         GET UNAUTHORIZED users() -> Vec<User>,
+        GET OPTIONAL_AUTH feed() -> Vec<User>,  // public; handler receives a `Caller`
         POST WITH_PERMISSIONS(["admin"]) users(CreateUserRequest) -> User,
         GET WITH_PERMISSIONS(["user"]) users/{id: i32}() -> User,
         PUT WITH_PERMISSIONS(["admin"]) users/{id: i32}(CreateUserRequest) -> User,

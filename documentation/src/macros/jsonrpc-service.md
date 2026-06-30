@@ -70,6 +70,7 @@ jsonrpc_service!({
     openrpc: true,
     methods: [
         UNAUTHORIZED sign_in(SignInRequest) -> SignInResponse,
+        OPTIONAL_AUTH feed(FeedRequest) -> FeedResponse,
         WITH_PERMISSIONS(["user"]) get_profile(()) -> UserProfile,
         WITH_PERMISSIONS(["admin"] | ["support", "users:write"]) disable_user(String) -> (),
     ]
@@ -77,11 +78,15 @@ jsonrpc_service!({
 ```
 
 The Rust method name is the JSON-RPC wire method unless a versioned method block
-sets an explicit `wire` name.
+sets an explicit `wire` name. The auth requirement is one of `UNAUTHORIZED`,
+`OPTIONAL_AUTH`, or `WITH_PERMISSIONS([...])`; see
+[Auth In The API Contract](../auth-in-api-contract.md).
 
 ## Implement The Generated Trait
 
-Protected methods receive `&AuthenticatedUser` before their request payload:
+Protected (`WITH_PERMISSIONS`) methods receive `&AuthenticatedUser` before their
+request payload; `OPTIONAL_AUTH` methods receive a `ras_jsonrpc_core::Caller`
+instead (the request is never rejected for auth reasons):
 
 ```rust,ignore
 struct UserServiceImpl;
