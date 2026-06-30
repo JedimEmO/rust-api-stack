@@ -128,7 +128,11 @@ fn operation_entries(definition: &FileServiceDefinition) -> Vec<OperationEntry<'
                     quote! { ras_permission_manifest::OperationKind::FileDownload },
                 ),
             };
-            let is_protected = !matches!(endpoint.auth, AuthRequirement::Unauthorized);
+            // OPTIONAL_AUTH is a public route (no guard) — like Unauthorized, it is not protected.
+            let is_protected = !matches!(
+                endpoint.auth,
+                AuthRequirement::Unauthorized | AuthRequirement::OptionalAuth
+            );
             OperationEntry {
                 operation_id: format!("{}.{}", definition.service_name, endpoint.name),
                 operation_name: endpoint.name.to_string(),
@@ -159,6 +163,9 @@ fn auth_tokens(auth: &AuthRequirement) -> TokenStream {
         AuthRequirement::Unauthorized => {
             quote! { ras_permission_manifest::AuthRequirementInfo::Public }
         }
+        AuthRequirement::OptionalAuth => {
+            quote! { ras_permission_manifest::AuthRequirementInfo::Optional }
+        }
         AuthRequirement::WithPermissions(groups) => {
             if groups.is_empty() || groups.iter().any(Vec::is_empty) {
                 quote! { ras_permission_manifest::AuthRequirementInfo::Authenticated }
@@ -182,7 +189,9 @@ fn auth_tokens(auth: &AuthRequirement) -> TokenStream {
 
 fn static_requirement_tokens(auth: &AuthRequirement) -> TokenStream {
     match auth {
-        AuthRequirement::Unauthorized => {
+        // Public routes (Unauthorized / OptionalAuth) are not protected, so this
+        // placeholder is never emitted — it only keeps the match exhaustive.
+        AuthRequirement::Unauthorized | AuthRequirement::OptionalAuth => {
             quote! { ras_permission_manifest::StaticPermissionRequirement::authenticated_only() }
         }
         AuthRequirement::WithPermissions(groups) => {

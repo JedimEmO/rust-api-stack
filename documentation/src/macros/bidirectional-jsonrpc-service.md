@@ -76,13 +76,19 @@ jsonrpc_bidirectional_service!({
 });
 ```
 
-`client_to_server` methods support the same `UNAUTHORIZED` and
-`WITH_PERMISSIONS(["a"] | ["b", "c"])` style as the HTTP JSON-RPC macro.
+`client_to_server` methods support the same `UNAUTHORIZED`, `OPTIONAL_AUTH`, and
+`WITH_PERMISSIONS(["a"] | ["b", "c"])` style as the HTTP JSON-RPC macro (see
+[Auth In The API Contract](../auth-in-api-contract.md)). An `OPTIONAL_AUTH`
+method is built from the connection's optional user, so the server must allow
+anonymous connections (`require_auth(false)`) for anonymous callers to reach it.
+`OPTIONAL_AUTH` is **not** allowed on `server_to_client` calls — those are
+outbound, so there is no inbound caller to identify.
 
 ## Implement And Mount The Server
 
-Server handlers receive the connection id and connection manager. Protected
-methods also receive `&AuthenticatedUser`.
+Server handlers receive the connection id and connection manager. `WITH_PERMISSIONS`
+methods also receive `&AuthenticatedUser`; `OPTIONAL_AUTH` methods receive a
+`ras_auth_core::Caller` (in the same position) instead.
 
 ```rust,ignore
 #[async_trait::async_trait]

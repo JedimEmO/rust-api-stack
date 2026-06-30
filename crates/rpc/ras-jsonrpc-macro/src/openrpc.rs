@@ -164,9 +164,10 @@ pub fn generate_openrpc_code(
                 None => quote! { None },
             };
             let auth_required = matches!(method.auth, AuthRequirement::WithPermissions(_));
+            let auth_optional = matches!(method.auth, AuthRequirement::OptionalAuth);
             // Flatten permission groups for OpenRPC documentation
             let permissions = match &method.auth {
-                AuthRequirement::Unauthorized => vec![],
+                AuthRequirement::Unauthorized | AuthRequirement::OptionalAuth => vec![],
                 AuthRequirement::WithPermissions(groups) => {
                     // For OpenRPC docs, flatten all permission groups into a single list
                     groups.iter().flatten().cloned().collect()
@@ -195,6 +196,7 @@ pub fn generate_openrpc_code(
                     summary: #summary,
                     description: #description,
                     auth_required: #auth_required,
+                    auth_optional: #auth_optional,
                     permissions: vec![#(#permissions.to_string()),*],
                     permission_groups: #permission_groups_tokens,
                     request_type_name: stringify!(#request_type).to_string(),
@@ -225,6 +227,7 @@ pub fn generate_openrpc_code(
                         summary: #summary,
                         description: #description,
                         auth_required: #auth_required,
+                        auth_optional: #auth_optional,
                         permissions: vec![#(#permissions.to_string()),*],
                         permission_groups: #permission_groups_tokens,
                         request_type_name: stringify!(#request_type).to_string(),
@@ -247,6 +250,7 @@ pub fn generate_openrpc_code(
             summary: Option<String>,
             description: Option<String>,
             auth_required: bool,
+            auth_optional: bool,
             permissions: Vec<String>,
             permission_groups: Vec<Vec<String>>,
             request_type_name: String,
@@ -430,6 +434,12 @@ pub fn generate_openrpc_code(
                     if !method.permission_groups.is_empty() {
                         extensions.insert("x-permission-groups".to_string(), json!(method.permission_groups));
                     }
+                } else if method.auth_optional {
+                    // OPTIONAL_AUTH: authentication is honoured but not required.
+                    extensions.insert("x-authentication".to_string(), json!({
+                        "required": false,
+                        "type": "bearer"
+                    }));
                 }
 
                 if let Some(version) = &method.version {
@@ -580,7 +590,7 @@ pub fn generate_openrpc_code(
 
 fn permission_groups_for_spec(auth: &AuthRequirement) -> Vec<Vec<String>> {
     match auth {
-        AuthRequirement::Unauthorized => vec![],
+        AuthRequirement::Unauthorized | AuthRequirement::OptionalAuth => vec![],
         AuthRequirement::WithPermissions(groups) => groups.clone(),
     }
 }

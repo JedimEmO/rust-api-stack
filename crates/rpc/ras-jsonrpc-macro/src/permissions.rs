@@ -120,7 +120,11 @@ fn operation_entries(service_def: &ServiceDefinition) -> Vec<OperationEntry<'_>>
             .wire_name
             .clone()
             .unwrap_or_else(|| method.name.to_string());
-        let is_protected = !matches!(method.auth, AuthRequirement::Unauthorized);
+        // OPTIONAL_AUTH is a public method (no guard) — like Unauthorized, it is not protected.
+        let is_protected = !matches!(
+            method.auth,
+            AuthRequirement::Unauthorized | AuthRequirement::OptionalAuth
+        );
 
         entries.push(OperationEntry {
             operation_id: canonical_operation_id.clone(),
@@ -158,6 +162,9 @@ fn auth_tokens(auth: &AuthRequirement) -> TokenStream {
         AuthRequirement::Unauthorized => {
             quote! { ras_permission_manifest::AuthRequirementInfo::Public }
         }
+        AuthRequirement::OptionalAuth => {
+            quote! { ras_permission_manifest::AuthRequirementInfo::Optional }
+        }
         AuthRequirement::WithPermissions(groups) => {
             if groups.is_empty() || groups.iter().any(Vec::is_empty) {
                 quote! { ras_permission_manifest::AuthRequirementInfo::Authenticated }
@@ -181,7 +188,9 @@ fn auth_tokens(auth: &AuthRequirement) -> TokenStream {
 
 fn static_requirement_tokens(auth: &AuthRequirement) -> TokenStream {
     match auth {
-        AuthRequirement::Unauthorized => {
+        // Public methods (Unauthorized / OptionalAuth) are not protected, so this
+        // placeholder is never emitted — it only keeps the match exhaustive.
+        AuthRequirement::Unauthorized | AuthRequirement::OptionalAuth => {
             quote! { ras_permission_manifest::StaticPermissionRequirement::authenticated_only() }
         }
         AuthRequirement::WithPermissions(groups) => {

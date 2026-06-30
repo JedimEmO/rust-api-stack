@@ -45,6 +45,8 @@ pub fn generate_openapi_code(
         };
         let path = endpoint.path.value();
         let auth_required = matches!(endpoint.auth, AuthRequirement::WithPermissions(_));
+        // OPTIONAL_AUTH advertises an *optional* security requirement.
+        let auth_optional = matches!(endpoint.auth, AuthRequirement::OptionalAuth);
         let permissions = permissions_for_openapi(&endpoint.auth);
         let permission_groups = permission_groups_for_openapi(&endpoint.auth);
         let permission_groups_tokens = permission_groups_tokens(&permission_groups);
@@ -77,6 +79,7 @@ pub fn generate_openapi_code(
                         operation: #operation.to_string(),
                         path: #path.to_string(),
                         auth_required: #auth_required,
+                        auth_optional: #auth_optional,
                         permissions: vec![#(#permissions.to_string()),*],
                         permission_groups: #permission_groups_tokens,
                         path_params: vec![#(#path_params),*],
@@ -98,6 +101,7 @@ pub fn generate_openapi_code(
                         operation: #operation.to_string(),
                         path: #path.to_string(),
                         auth_required: #auth_required,
+                        auth_optional: #auth_optional,
                         permissions: vec![#(#permissions.to_string()),*],
                         permission_groups: #permission_groups_tokens,
                         path_params: vec![#(#path_params),*],
@@ -131,6 +135,7 @@ pub fn generate_openapi_code(
             operation: String,
             path: String,
             auth_required: bool,
+            auth_optional: bool,
             permissions: Vec<String>,
             permission_groups: Vec<Vec<String>>,
             path_params: Vec<(String, String)>,
@@ -323,6 +328,9 @@ pub fn generate_openapi_code(
                     if !endpoint.permission_groups.is_empty() {
                         operation["x-permission-groups"] = json!(endpoint.permission_groups);
                     }
+                } else if endpoint.auth_optional {
+                    // OPTIONAL_AUTH: anonymous is acceptable ({}), and a bearer is honoured.
+                    operation["security"] = json!([{}, { "bearerAuth": [] }]);
                 }
 
                 path_item[method_lower] = operation;
@@ -495,14 +503,14 @@ fn part_info_tokens(part: &UploadPart, part_info_name: &syn::Ident) -> TokenStre
 
 fn permissions_for_openapi(auth: &AuthRequirement) -> Vec<String> {
     match auth {
-        AuthRequirement::Unauthorized => vec![],
+        AuthRequirement::Unauthorized | AuthRequirement::OptionalAuth => vec![],
         AuthRequirement::WithPermissions(groups) => groups.iter().flatten().cloned().collect(),
     }
 }
 
 fn permission_groups_for_openapi(auth: &AuthRequirement) -> Vec<Vec<String>> {
     match auth {
-        AuthRequirement::Unauthorized => vec![],
+        AuthRequirement::Unauthorized | AuthRequirement::OptionalAuth => vec![],
         AuthRequirement::WithPermissions(groups) => groups.clone(),
     }
 }

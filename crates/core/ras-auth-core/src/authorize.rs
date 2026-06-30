@@ -7,8 +7,8 @@
 //! response shape.
 
 use crate::{
-    AuthError, AuthProvider, AuthTransportConfig, AuthenticatedUser, extract_auth_credential,
-    validate_csrf_for_credential,
+    AuthError, AuthProvider, AuthTransportConfig, AuthenticatedUser, Caller,
+    extract_auth_credential, validate_csrf_for_credential,
 };
 use http::HeaderMap;
 
@@ -109,6 +109,47 @@ where
         .map_err(AuthorizeError::InsufficientPermissions)?;
 
     Ok(user)
+}
+
+/// Best-effort authentication for `OPTIONAL_AUTH` routes — the non-rejecting
+/// counterpart to [`authorize_request`].
+///
+/// An `OPTIONAL_AUTH` route is public, so this **never** rejects: it resolves to
+/// [`Caller::Anonymous`] for a missing credential, an unauthenticatable
+/// credential (invalid/expired token), a cookie credential that fails CSRF on an
+/// unsafe method, or a missing auth provider; and to [`Caller::Authenticated`]
+/// only when a presented credential authenticates. It performs **no** permission
+/// check (an `OPTIONAL_AUTH` route has no required groups).
+///
+/// CSRF mirrors [`authorize_request`]: bearer credentials are exempt, GET/HEAD
+/// are exempt, and a cookie credential on an unsafe method must pass CSRF — but
+/// here a CSRF failure downgrades to anonymous rather than producing a 403, so a
+/// forged/stale ambient credential simply executes as the public path.
+pub async fn resolve_caller<P>(
+    method: &str,
+    headers: &HeaderMap,
+    auth_transport: &AuthTransportConfig,
+    auth_provider: Option<&P>,
+) -> Caller
+where
+    P: AuthProvider + ?Sized,
+{
+    let Ok(credential) = extract_auth_credential(headers, auth_transport) else {
+        return Caller::Anonymous;
+    };
+
+    if validate_csrf_for_credential(method, headers, &credential, auth_transport).is_err() {
+        return Caller::Anonymous;
+    }
+
+    let Some(provider) = auth_provider else {
+        return Caller::Anonymous;
+    };
+
+    match provider.authenticate(credential.token().to_string()).await {
+        Ok(user) => Caller::Authenticated(user),
+        Err(_) => Caller::Anonymous,
+    }
 }
 
 #[cfg(test)]
@@ -248,6 +289,35 @@ mod tests {
         )
         .await
         .unwrap();
+        assert_eq!(user.user_id, "u");
+    }
+
+    #[tokio::test]
+    async fn resolve_caller_is_lenient() {
+        let transport = AuthTransportConfig::default();
+
+        // No credential -> anonymous.
+        let caller =
+            resolve_caller("GET", &HeaderMap::new(), &transport, Some(&StaticProvider)).await;
+        assert!(matches!(caller, Caller::Anonymous));
+
+        // Present but unauthenticatable credential -> anonymous (lenient).
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer bad".parse().unwrap());
+        let caller = resolve_caller("GET", &headers, &transport, Some(&StaticProvider)).await;
+        assert!(matches!(caller, Caller::Anonymous));
+
+        // No auth provider configured -> anonymous, never panics.
+        let caller = resolve_caller("GET", &headers, &transport, None::<&StaticProvider>).await;
+        assert!(matches!(caller, Caller::Anonymous));
+
+        // Valid credential -> authenticated.
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer good".parse().unwrap());
+        let caller = resolve_caller("POST", &headers, &transport, Some(&StaticProvider)).await;
+        let Caller::Authenticated(user) = caller else {
+            panic!("expected authenticated caller");
+        };
         assert_eq!(user.user_id, "u");
     }
 }

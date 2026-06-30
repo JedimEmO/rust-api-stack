@@ -102,6 +102,7 @@ jsonrpc_service!({
     openrpc: true,  // Generate OpenRPC docs
     methods: [
         UNAUTHORIZED sign_in(SignInRequest) -> SignInResponse,
+        OPTIONAL_AUTH feed(FeedRequest) -> FeedResponse,  // public, but identifies the caller
         WITH_PERMISSIONS(["user"]) create_task(CreateTaskRequest) -> Task,
         WITH_PERMISSIONS(["admin"]) delete_all_tasks(()) -> (),
     ]
@@ -133,6 +134,7 @@ rest_service!({
     serve_docs: true,  // Serve the built-in API explorer at /api/v1/docs
     endpoints: [
         GET UNAUTHORIZED users() -> UsersResponse,
+        GET OPTIONAL_AUTH feed() -> UsersResponse,  // public, caller as `Caller` arg
         POST WITH_PERMISSIONS(["admin"]) users(CreateUserRequest) -> UserResponse,
         GET WITH_PERMISSIONS(["user"]) users/{id: String}() -> User,
         DELETE WITH_PERMISSIONS(["admin"]) users/{id: String}() -> (),

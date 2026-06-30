@@ -76,6 +76,7 @@ jsonrpc_bidirectional_service!({
     service_name: UserService,
     client_to_server: [
         UNAUTHORIZED get_user(UserRequest) -> UserResponse,
+        OPTIONAL_AUTH feed(FeedRequest) -> FeedResponse,  // public; handler receives a `Caller`
         WITH_PERMISSIONS(["admin"]) delete_user(UserRequest) -> bool,
         WITH_PERMISSIONS(["write"] | ["admin"]) update_user(UserRequest) -> UserResponse,
     ],

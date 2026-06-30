@@ -42,6 +42,9 @@ pub enum Operation {
 #[derive(Debug)]
 pub enum AuthRequirement {
     Unauthorized,
+    /// Public route that opportunistically identifies its caller. Never rejected
+    /// for auth reasons; the caller is surfaced through `FileRequestContext`.
+    OptionalAuth,
     WithPermissions(Vec<Vec<String>>),
 }
 
@@ -460,6 +463,7 @@ fn parse_auth(input: ParseStream) -> Result<AuthRequirement> {
     let auth_ident: Ident = input.parse()?;
     match auth_ident.to_string().as_str() {
         "UNAUTHORIZED" => Ok(AuthRequirement::Unauthorized),
+        "OPTIONAL_AUTH" => Ok(AuthRequirement::OptionalAuth),
         "WITH_PERMISSIONS" => {
             let content;
             syn::parenthesized!(content in input);
@@ -487,7 +491,7 @@ fn parse_auth(input: ParseStream) -> Result<AuthRequirement> {
         }
         _ => Err(Error::new(
             auth_ident.span(),
-            "Expected UNAUTHORIZED or WITH_PERMISSIONS",
+            "Expected UNAUTHORIZED, OPTIONAL_AUTH, or WITH_PERMISSIONS",
         )),
     }
 }

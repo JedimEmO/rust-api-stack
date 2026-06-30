@@ -53,6 +53,67 @@ pub struct AuthenticatedUser {
     pub metadata: Option<serde_json::Value>,
 }
 
+/// The caller of an `OPTIONAL_AUTH` route.
+///
+/// An `OPTIONAL_AUTH` route is public — it is never rejected for authentication
+/// reasons — but it opportunistically identifies its caller. The handler receives
+/// this value as its first argument and decides how much to reveal:
+///
+/// * [`Caller::Anonymous`] — no credential, or a credential that failed to
+///   authenticate (lenient: invalid/expired tokens and cookies that fail CSRF on
+///   an unsafe method all resolve to anonymous).
+/// * [`Caller::Authenticated`] — a valid credential was presented.
+///
+/// Deliberately **not** `Serialize`/`Deserialize`: a `Caller` represents a
+/// *resolved* identity and must only be produced by [`resolve_caller`], never
+/// reconstructed from request input. The `#[must_use]` attribute flags a
+/// discarded [`resolve_caller`] result; note it cannot catch a handler that
+/// receives `caller` as a parameter and never reads it (Rust applies `must_use`
+/// to discarded expression results, not to unused bindings).
+#[must_use]
+#[derive(Debug, Clone)]
+pub enum Caller {
+    /// No authenticated caller — treat the request as public/anonymous.
+    Anonymous,
+    /// A caller whose credential authenticated successfully.
+    Authenticated(AuthenticatedUser),
+}
+
+impl From<Option<AuthenticatedUser>> for Caller {
+    /// Maps a best-effort authentication result to a caller: `Some(user)` ⇒
+    /// [`Caller::Authenticated`], `None` ⇒ [`Caller::Anonymous`]. Used by the
+    /// generated services that already hold an `Option<AuthenticatedUser>`.
+    fn from(user: Option<AuthenticatedUser>) -> Self {
+        match user {
+            Some(user) => Caller::Authenticated(user),
+            None => Caller::Anonymous,
+        }
+    }
+}
+
+impl Caller {
+    /// Borrows the authenticated user, or `None` when anonymous.
+    pub fn authenticated(&self) -> Option<&AuthenticatedUser> {
+        match self {
+            Caller::Authenticated(user) => Some(user),
+            Caller::Anonymous => None,
+        }
+    }
+
+    /// Returns `true` when a caller authenticated.
+    pub fn is_authenticated(&self) -> bool {
+        matches!(self, Caller::Authenticated(_))
+    }
+
+    /// Consumes the caller, yielding the authenticated user when present.
+    pub fn into_authenticated(self) -> Option<AuthenticatedUser> {
+        match self {
+            Caller::Authenticated(user) => Some(user),
+            Caller::Anonymous => None,
+        }
+    }
+}
+
 /// Result type for authentication operations.
 pub type AuthResult<T = AuthenticatedUser> = Result<T, AuthError>;
 

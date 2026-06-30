@@ -26,6 +26,11 @@ pub fn generate_server_code(
                     async fn #method_name(&self, client_id: ras_jsonrpc_bidirectional_types::ConnectionId, connection_manager: &dyn ras_jsonrpc_bidirectional_types::ConnectionManager, request: #request_type) -> Result<#response_type, Box<dyn std::error::Error + Send + Sync>>;
                 }
             }
+            AuthRequirement::OptionalAuth => {
+                quote! {
+                    async fn #method_name(&self, client_id: ras_jsonrpc_bidirectional_types::ConnectionId, connection_manager: &dyn ras_jsonrpc_bidirectional_types::ConnectionManager, caller: ras_auth_core::Caller, request: #request_type) -> Result<#response_type, Box<dyn std::error::Error + Send + Sync>>;
+                }
+            }
             AuthRequirement::WithPermissions(_) => {
                 quote! {
                     async fn #method_name(&self, client_id: ras_jsonrpc_bidirectional_types::ConnectionId, connection_manager: &dyn ras_jsonrpc_bidirectional_types::ConnectionManager, user: &ras_auth_core::AuthenticatedUser, request: #request_type) -> Result<#response_type, Box<dyn std::error::Error + Send + Sync>>;
@@ -51,7 +56,7 @@ pub fn generate_server_code(
         let method_str = method_name.to_string();
         let request_type = &method.request_type;
         let permission_groups = match &method.auth {
-            AuthRequirement::Unauthorized => Vec::new(),
+            AuthRequirement::Unauthorized | AuthRequirement::OptionalAuth => Vec::new(),
             AuthRequirement::WithPermissions(groups) => groups.clone(),
         };
 
@@ -71,6 +76,38 @@ pub fn generate_server_code(
 
                         // Call handler with client ID and connection manager reference
                         match self.service.#method_name(context.id, self.connection_manager.as_ref(), params).await {
+                            Ok(result) => {
+                                let result_value = serde_json::to_value(result)
+                                    .map_err(|e| ras_jsonrpc_bidirectional_server::ServerError::Internal(e.to_string()))?;
+                                Ok(Some(ras_jsonrpc_types::JsonRpcResponse::success(result_value, request.id.clone())))
+                            }
+                            Err(e) => Err(ras_jsonrpc_bidirectional_server::ServerError::Internal(e.to_string())),
+                        }
+                    }
+                }
+            }
+            AuthRequirement::OptionalAuth => {
+                quote! {
+                    #method_str => {
+                        // OPTIONAL_AUTH: surface the connection's (optional) user as
+                        // a Caller. Never rejected; no permission check. (The user is
+                        // cloned out of the connection's Arc into the owned Caller.)
+                        let caller = ras_auth_core::Caller::from(
+                            context.get_user().await.map(|user| (*user).clone()),
+                        );
+
+                        // Parse parameters
+                        let params: #request_type = if let Some(params) = request.params {
+                            serde_json::from_value(params)
+                                .map_err(|e| ras_jsonrpc_bidirectional_server::ServerError::InvalidRequest(format!("Invalid params: {}", e)))?
+                        } else {
+                            // For unit type (), we can deserialize from null
+                            serde_json::from_value(serde_json::Value::Null)
+                                .map_err(|e| ras_jsonrpc_bidirectional_server::ServerError::InvalidRequest(format!("Invalid params: {}", e)))?
+                        };
+
+                        // Call handler with client ID, connection manager reference, and caller
+                        match self.service.#method_name(context.id, self.connection_manager.as_ref(), caller, params).await {
                             Ok(result) => {
                                 let result_value = serde_json::to_value(result)
                                     .map_err(|e| ras_jsonrpc_bidirectional_server::ServerError::Internal(e.to_string()))?;

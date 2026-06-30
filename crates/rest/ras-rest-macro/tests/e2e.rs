@@ -28,6 +28,11 @@ struct ItemsResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+struct WhoamiResponse {
+    caller: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 struct RenameItemV1 {
     name: String,
 }
@@ -66,6 +71,8 @@ rest_service!({
     endpoints: [
         /// List all items.
         GET UNAUTHORIZED items() -> ItemsResponse,
+        GET OPTIONAL_AUTH whoami() -> WhoamiResponse,
+        POST OPTIONAL_AUTH whoami/echo(CreateItem) -> WhoamiResponse,
         GET WITH_PERMISSIONS(["user"]) items/{id: u32}() -> Item,
         POST WITH_PERMISSIONS(["admin"]) items(CreateItem) -> Item,
         GET UNAUTHORIZED search ? q: String & limit: Option<u32> & exact: bool () -> ItemsResponse,
@@ -82,6 +89,20 @@ rest_service!({
                     body: RenameItemV1,
                     response: RenamedItemV1,
                     migration: RenameItemCompat,
+                },
+            ],
+        },
+        // Versioned OPTIONAL_AUTH endpoint — exercises the legacy/migration handler
+        // arm with caller wiring (otherwise instantiated by nothing in the workspace).
+        POST OPTIONAL_AUTH v2/items/{id: u32}/touch ? notify: bool (RenameItemV2) -> RenamedItemV2 {
+            version: v2,
+            versions: [
+                v1 {
+                    path: v1/items/{id: u32}/touch,
+                    query: [notify: Option<bool>],
+                    body: RenameItemV1,
+                    response: RenamedItemV1,
+                    migration: TouchCompat,
                 },
             ],
         },
@@ -124,10 +145,69 @@ impl ras_rest_core::VersionMigration<RenamedItemV2, RenamedItemV1> for RenameIte
     }
 }
 
+struct TouchCompat;
+
+impl
+    ras_rest_core::VersionMigration<
+        DemoPostV2ItemsByIdTouchV1Request,
+        DemoPostV2ItemsByIdTouchV2Request,
+    > for TouchCompat
+{
+    type Error = std::convert::Infallible;
+
+    fn migrate(
+        value: DemoPostV2ItemsByIdTouchV1Request,
+    ) -> Result<DemoPostV2ItemsByIdTouchV2Request, Self::Error> {
+        Ok(DemoPostV2ItemsByIdTouchV2Request {
+            path: DemoPostV2ItemsByIdTouchV2Path { id: value.path.id },
+            query: DemoPostV2ItemsByIdTouchV2Query {
+                notify: value.query.notify.unwrap_or(false),
+            },
+            body: RenameItemV2 {
+                display_name: value.body.name,
+                notify: value.query.notify.unwrap_or(false),
+            },
+        })
+    }
+}
+
+impl ras_rest_core::VersionMigration<RenamedItemV2, RenamedItemV1> for TouchCompat {
+    type Error = std::convert::Infallible;
+
+    fn migrate(value: RenamedItemV2) -> Result<RenamedItemV1, Self::Error> {
+        Ok(RenamedItemV1 {
+            name: value.display_name,
+        })
+    }
+}
+
+fn caller_label(caller: &ras_auth_core::Caller) -> String {
+    match caller {
+        ras_auth_core::Caller::Authenticated(user) => user.user_id.clone(),
+        ras_auth_core::Caller::Anonymous => "anonymous".to_string(),
+    }
+}
+
 struct DemoImpl;
 
 #[async_trait::async_trait]
 impl DemoTrait for DemoImpl {
+    async fn get_whoami(&self, caller: ras_auth_core::Caller) -> RestResult<WhoamiResponse> {
+        Ok(RestResponse::ok(WhoamiResponse {
+            caller: caller_label(&caller),
+        }))
+    }
+
+    async fn post_whoami_echo(
+        &self,
+        caller: ras_auth_core::Caller,
+        body: CreateItem,
+    ) -> RestResult<WhoamiResponse> {
+        Ok(RestResponse::ok(WhoamiResponse {
+            caller: format!("{}:{}", caller_label(&caller), body.name),
+        }))
+    }
+
     async fn get_items(&self) -> RestResult<ItemsResponse> {
         Ok(RestResponse::ok(ItemsResponse {
             items: vec![Item {
@@ -257,6 +337,21 @@ impl DemoTrait for DemoImpl {
             notified: notify || request.notify,
         }))
     }
+
+    async fn post_v2_items_by_id_touch(
+        &self,
+        caller: ras_auth_core::Caller,
+        id: u32,
+        notify: bool,
+        request: RenameItemV2,
+    ) -> RestResult<RenamedItemV2> {
+        // Encode the resolved caller so the legacy/migration arm's caller wiring is asserted.
+        Ok(RestResponse::ok(RenamedItemV2 {
+            id,
+            display_name: format!("{}:{}", caller_label(&caller), request.display_name),
+            notified: notify || request.notify,
+        }))
+    }
 }
 
 fn router() -> axum::Router {
@@ -307,6 +402,38 @@ async fn legacy_rest_version_round_trips_through_canonical_handler() {
             name: "renamed".to_string()
         }
     );
+}
+
+#[tokio::test]
+async fn optional_auth_versioned_legacy_path_threads_caller() {
+    // v1 (legacy) path with a valid token: exercises the legacy/migration arm AND
+    // caller resolution. The migrated v1 response carries display_name only.
+    let response = server()
+        .post("/api/v1/items/7/touch?notify=true")
+        .authorization_bearer("user-token")
+        .json(&RenameItemV1 {
+            name: "hello".to_string(),
+        })
+        .await;
+    response.assert_status_ok();
+    let resp: RenamedItemV1 = response.json();
+    // RenamedItemV1.name == migrated display_name == "<caller>:<input>".
+    assert_eq!(resp.name, "user-1:hello");
+}
+
+#[tokio::test]
+async fn optional_auth_versioned_canonical_path_is_anonymous_without_token() {
+    let response = server()
+        .post("/api/v2/items/9/touch?notify=false")
+        .json(&RenameItemV2 {
+            display_name: "world".to_string(),
+            notify: false,
+        })
+        .await;
+    response.assert_status_ok();
+    let resp: RenamedItemV2 = response.json();
+    assert_eq!(resp.id, 9);
+    assert_eq!(resp.display_name, "anonymous:world");
 }
 
 #[tokio::test]
@@ -375,6 +502,58 @@ async fn auth_post_with_admin_succeeds_and_user_id_propagates() {
     assert_eq!(item.name, "foo");
     // admin-1 is 7 chars long.
     assert_eq!(item.id, 7);
+}
+
+#[tokio::test]
+async fn optional_auth_without_token_sees_anonymous_caller() {
+    let response = server().get("/api/whoami").await;
+    response.assert_status_ok();
+    let resp: WhoamiResponse = response.json();
+    assert_eq!(resp.caller, "anonymous");
+}
+
+#[tokio::test]
+async fn optional_auth_with_valid_token_sees_authenticated_caller() {
+    let response = server()
+        .get("/api/whoami")
+        .authorization_bearer("user-token")
+        .await;
+    response.assert_status_ok();
+    let resp: WhoamiResponse = response.json();
+    assert_eq!(resp.caller, "user-1");
+}
+
+#[tokio::test]
+async fn optional_auth_with_invalid_token_is_lenient_and_anonymous() {
+    // A present-but-bad credential must NOT reject an OPTIONAL_AUTH route; it
+    // downgrades to anonymous.
+    let response = server()
+        .get("/api/whoami")
+        .authorization_bearer("not-a-real-token")
+        .await;
+    response.assert_status_ok();
+    let resp: WhoamiResponse = response.json();
+    assert_eq!(resp.caller, "anonymous");
+}
+
+#[tokio::test]
+async fn optional_auth_post_threads_caller_and_body() {
+    // Anonymous POST with a body still reaches the handler.
+    let anon = server()
+        .post("/api/whoami/echo")
+        .json(&CreateItem { name: "hi".into() })
+        .await;
+    anon.assert_status_ok();
+    assert_eq!(anon.json::<WhoamiResponse>().caller, "anonymous:hi");
+
+    // Authenticated POST sees the caller and the body.
+    let authed = server()
+        .post("/api/whoami/echo")
+        .authorization_bearer("user-token")
+        .json(&CreateItem { name: "hi".into() })
+        .await;
+    authed.assert_status_ok();
+    assert_eq!(authed.json::<WhoamiResponse>().caller, "user-1:hi");
 }
 
 #[tokio::test]

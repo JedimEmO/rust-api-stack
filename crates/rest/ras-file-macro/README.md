@@ -43,6 +43,12 @@ file_service!({
             content_types: ["application/octet-stream"],
             ranges: true,
         },
+        // Public download that still recognises a signed-in caller via
+        // `FileRequestContext` (ctx.user is Some(..) when authenticated).
+        DOWNLOAD OPTIONAL_AUTH preview/{file_id: String} {
+            content_types: ["application/octet-stream"],
+            ranges: false,
+        },
     ]
 });
 ```

@@ -169,6 +169,7 @@ jsonrpc_service!({
     service_name: MyService,
     methods: [
         UNAUTHORIZED sign_in(SignInRequest) -> SignInResponse,
+        OPTIONAL_AUTH feed(FeedRequest) -> FeedResponse,
         WITH_PERMISSIONS(["user"]) get_profile(()) -> UserProfile,
         WITH_PERMISSIONS(["admin"]) delete_user(UserId) -> (),
     ]

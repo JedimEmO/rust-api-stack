@@ -17,6 +17,13 @@ mod tests;
 /// - Client struct with type-safe method calls and notification handlers
 /// - Type-safe message enums for both directions
 ///
+/// `client_to_server` methods declare one of three auth levels — `UNAUTHORIZED`,
+/// `OPTIONAL_AUTH`, or `WITH_PERMISSIONS([...])`. An `OPTIONAL_AUTH` handler
+/// receives a `ras_auth_core::Caller` built from the connection's optional user
+/// (the server must allow anonymous connections for anonymous callers to reach
+/// it). `OPTIONAL_AUTH` is rejected on `server_to_client` calls (outbound — no
+/// inbound caller to identify).
+///
 /// See the tests for usage examples.
 #[proc_macro]
 pub fn jsonrpc_bidirectional_service(input: TokenStream) -> TokenStream {
@@ -54,6 +61,10 @@ struct NotificationDefinition {
 #[derive(Debug)]
 enum AuthRequirement {
     Unauthorized,
+    /// Public method that opportunistically identifies its caller. Never rejected
+    /// for auth reasons; the handler receives a `ras_auth_core::Caller` built from
+    /// the connection's (optional) authenticated user.
+    OptionalAuth,
     WithPermissions(Vec<Vec<String>>), // Vec of permission groups - OR between groups, AND within groups
 }
 
@@ -156,7 +167,20 @@ fn parse_server_to_client_call(input: syn::parse::ParseStream) -> syn::Result<Me
     if fork.peek(syn::Ident) {
         let ident = fork.parse::<Ident>()?;
         match ident.to_string().as_str() {
-            "UNAUTHORIZED" | "WITH_PERMISSIONS" => return input.parse::<MethodDefinition>(),
+            // A server_to_client call is outbound — there is no inbound caller to
+            // identify, and the generated call/handler signatures carry no `Caller`.
+            // Reject OPTIONAL_AUTH here rather than silently treating it as public.
+            "OPTIONAL_AUTH" => {
+                return Err(syn::Error::new(
+                    ident.span(),
+                    "OPTIONAL_AUTH is not supported on server_to_client calls: there is \
+                     no inbound caller to identify. Use UNAUTHORIZED (it is only meaningful \
+                     on client_to_server methods).",
+                ));
+            }
+            "UNAUTHORIZED" | "WITH_PERMISSIONS" => {
+                return input.parse::<MethodDefinition>();
+            }
             _ => {}
         }
     }
@@ -180,11 +204,12 @@ fn parse_server_to_client_call(input: syn::parse::ParseStream) -> syn::Result<Me
 
 impl Parse for MethodDefinition {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        // Parse auth requirement (UNAUTHORIZED or WITH_PERMISSIONS([...]))
+        // Parse auth requirement (UNAUTHORIZED, OPTIONAL_AUTH, or WITH_PERMISSIONS([...]))
         let auth = if input.peek(syn::Ident) {
             let auth_ident = input.parse::<Ident>()?;
             match auth_ident.to_string().as_str() {
                 "UNAUTHORIZED" => AuthRequirement::Unauthorized,
+                "OPTIONAL_AUTH" => AuthRequirement::OptionalAuth,
                 "WITH_PERMISSIONS" => {
                     // Parse ([...] | [...] | ...)
                     let perms_content;
@@ -231,7 +256,7 @@ impl Parse for MethodDefinition {
                 _ => {
                     return Err(syn::Error::new(
                         auth_ident.span(),
-                        "Expected UNAUTHORIZED or WITH_PERMISSIONS",
+                        "Expected UNAUTHORIZED, OPTIONAL_AUTH, or WITH_PERMISSIONS",
                     ));
                 }
             }
