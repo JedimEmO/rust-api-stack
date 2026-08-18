@@ -98,11 +98,70 @@ pub fn generate_static_routes(
         service_def.service_name.to_string().to_lowercase()
     );
 
+    if !service_def.docs_require_auth {
+        // Default: docs and openapi.json are public (conventional API-explorer
+        // behavior). Documented as such on the `docs_require_auth` field.
+        return quote! {
+            {
+                router = router
+                    .route(#docs_path, ::axum::routing::get(#docs_handler_name))
+                    .route(#openapi_path, ::axum::routing::get(openapi_json_handler));
+            }
+        };
+    }
+
+    // Gated: require an authenticated caller (any authenticated user — empty
+    // permission groups) before serving the docs page or the OpenAPI document.
+    // Uses the same shared authorization pipeline as the endpoints.
     quote! {
         {
+            let auth_provider = self.auth_provider.clone();
+            let auth_transport = self.auth_transport.clone();
             router = router
-                .route(#docs_path, ::axum::routing::get(#docs_handler_name))
-                .route(#openapi_path, ::axum::routing::get(openapi_json_handler));
+                .route(#docs_path, ::axum::routing::get({
+                    let auth_provider = auth_provider.clone();
+                    let auth_transport = auth_transport.clone();
+                    move |headers: ::axum::http::HeaderMap| {
+                        let auth_provider = auth_provider.clone();
+                        let auth_transport = auth_transport.clone();
+                        async move {
+                            use ::axum::response::IntoResponse;
+                            let __ras_docs_groups: Vec<Vec<String>> = Vec::new();
+                            match ras_auth_core::authorize_request(
+                                "GET",
+                                &headers,
+                                &auth_transport,
+                                auth_provider.as_deref(),
+                                &__ras_docs_groups,
+                            ).await {
+                                Ok(_) => #docs_handler_name().await.into_response(),
+                                Err(error) => __ras_authorize_error_response(error),
+                            }
+                        }
+                    }
+                }))
+                .route(#openapi_path, ::axum::routing::get({
+                    let auth_provider = auth_provider.clone();
+                    let auth_transport = auth_transport.clone();
+                    move |headers: ::axum::http::HeaderMap| {
+                        let auth_provider = auth_provider.clone();
+                        let auth_transport = auth_transport.clone();
+                        async move {
+                            use ::axum::response::IntoResponse;
+                            let __ras_docs_groups: Vec<Vec<String>> = Vec::new();
+                            match ras_auth_core::authorize_request(
+                                "GET",
+                                &headers,
+                                &auth_transport,
+                                auth_provider.as_deref(),
+                                &__ras_docs_groups,
+                            ).await {
+                                Ok(_) => openapi_json_handler().await.into_response(),
+                                Err(error) => __ras_authorize_error_response(error),
+                            }
+                        }
+                    }
+                }));
         }
     }
 }

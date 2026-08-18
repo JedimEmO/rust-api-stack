@@ -1,6 +1,6 @@
 [package]
 name = "ras-jsonrpc-bidirectional-types"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Shared types for bidirectional JSON-RPC clients and servers"
@@ -17,8 +17,8 @@ futures = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }
-ras-auth-core = { path = "../../../core/ras-auth-core", version = "0.1.0" }
-ras-jsonrpc-types = { path = "../../ras-jsonrpc-types", version = "0.1.1" }
+ras-auth-core = { path = "../../../core/ras-auth-core", version = "0.2.0" }
+ras-jsonrpc-types = { path = "../../ras-jsonrpc-types", version = "0.2.0" }
 uuid = { version = "1.11", features = ["v4", "serde", "js"] }
 chrono = { workspace = true }
 

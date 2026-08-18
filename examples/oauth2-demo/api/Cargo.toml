@@ -19,10 +19,10 @@ reqwest = ["ras-transport-core/reqwest"]
 
 [dependencies]
 # JSON-RPC infrastructure
-ras-jsonrpc-macro = { path = "../../../crates/rpc/ras-jsonrpc-macro", version = "0.2.0", default-features = false, features = ["permissions"] }
-ras-jsonrpc-core = { path = "../../../crates/rpc/ras-jsonrpc-core", version = "0.1.2", optional = true }
+ras-jsonrpc-macro = { path = "../../../crates/rpc/ras-jsonrpc-macro", version = "0.3.0", default-features = false, features = ["permissions"] }
+ras-jsonrpc-core = { path = "../../../crates/rpc/ras-jsonrpc-core", version = "0.2.0", optional = true }
 ras-transport-core = { path = "../../../crates/core/ras-transport-core", version = "0.1.0" }
-ras-jsonrpc-types = { path = "../../../crates/rpc/ras-jsonrpc-types", version = "0.1.1" }
+ras-jsonrpc-types = { path = "../../../crates/rpc/ras-jsonrpc-types", version = "0.2.0" }
 ras-permission-manifest = { path = "../../../crates/specs/ras-permission-manifest", version = "0.1.0" }
 
 # Web framework and utilities

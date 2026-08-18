@@ -4,6 +4,70 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed - 2026-08-18 (`rest_service!` hardening — device-integration feedback)
+- **`rest_service!` now requires `application/json` on bodied endpoints by default.** A request whose `Content-Type` is not `application/json` (parameters like `; charset=utf-8` are allowed) is rejected with `415 Unsupported Media Type` before the body is read. This forces a CORS preflight for cross-origin requests, closing the simple-request CSRF shape (a cross-origin `text/plain` POST), and matches `file_service!`, which already validated. **Breaking:** clients that POST/PUT/PATCH a body without an `application/json` content type now get `415`; opt out per-service with `require_json_content_type: false`. Rides in the already-unreleased `ras-rest-macro` `0.3.0`.
+
+### Added - 2026-08-18 (`rest_service!` hardening)
+- **`require_json_content_type: <bool>`** service option (default `true`) — opt out of the strict `Content-Type` check above.
+- **`docs_require_auth: <bool>`** service option (default `false`) — gate the generated docs page and `openapi.json` behind authentication (any authenticated user) when `serve_docs` is enabled. Previously these routes were always public, exposing method names, schemas, and permission requirements; they remain public by default (conventional API-explorer behavior) and are now documented as such.
+- **Per-endpoint `body_limit: <bytes>`** — override the service body limit for a single endpoint.
+- **Per-endpoint `headers: true`** — pass the request `axum::http::HeaderMap` to the handler as an extra argument (after the caller/user, before path params), so header-derived data no longer requires a separate tower layer.
+
+### Fixed - 2026-08-18 (`rest_service!` hardening)
+- **`204 No Content` no longer carries a serialized body.** `RestResponse::no_content()` previously emitted a `204` with a `null` JSON body and `Content-Type: application/json`, violating RFC 9110; `204`/`304` responses now have an empty body.
+- **`413` (too large) is distinguished from `400` (unreadable body).** A body whose declared `Content-Length` exceeds the limit is rejected up front; an over-limit streamed body is `413`, while a genuine stream read error is now `400` — previously both were reported as `413`.
+- **Body-decode failures are logged.** A malformed JSON body is logged at `warn` with the serde error category and line/column (never the rejected value) before the generic `400`, matching the handler-error logging convention.
+- **Authorization rejections are observable.** `401`/`403`/`500` responses from the shared authorize pipeline are logged at `warn` (server-side detail only); previously rejections bypassed both the usage and duration trackers and were logged nowhere.
+- **A permissioned service built without an auth provider now panics at `build()`** with a clear message instead of returning a runtime `500` (`NoAuthProvider`) on the first request.
+
+### Changed - 2026-08-18 (`jsonrpc_service!` parity)
+- **`jsonrpc_service!` now requires `application/json` by default.** A request whose `Content-Type` is not `application/json` is rejected with `415` before the envelope is parsed. **Breaking** for clients that POST without that content type; opt out per-service with `require_json_content_type: false`. Rides in the already-unreleased `ras-jsonrpc-macro` `0.3.0`.
+- `ras-jsonrpc-core` now depends on and re-exports `tracing` (`ras_jsonrpc_core::tracing`) so generated JSON-RPC server code can log without every consumer crate declaring a direct `tracing` dependency. Additive; folds into the already-unreleased `ras-jsonrpc-core` `0.2.0`.
+
+### Added - 2026-08-18 (`jsonrpc_service!` parity)
+- **`require_json_content_type: <bool>`** service option (default `true`) — opt out of the strict `Content-Type` check.
+- **`body_limit: <bytes>`** service option (default 2 MiB) — cap the request body size via a `DefaultBodyLimit` layer.
+- **`docs_require_auth: <bool>`** service option (default `false`) — gate the explorer page and `openrpc.json` behind authentication (any authenticated user) when the explorer is enabled. The RPC endpoint itself is never gated by this option. Previously these routes were always public.
+
+### Fixed - 2026-08-18 (`jsonrpc_service!` parity)
+- **Malformed request bodies are logged.** A JSON parse failure is logged at `warn` with the serde error category and line/column (never the rejected value) before the `-32700` parse error.
+- **Authorization rejections are observable.** `401`/`403` responses (authentication required, token expired, CSRF, insufficient permissions) are logged at `warn`; previously rejections were logged nowhere and bypassed the usage tracker.
+- **`build()` now fails when a permissioned service (or a gated explorer) has no auth provider**, returning a clear `Err(String)` instead of silently rejecting every such call at runtime.
+- **Dependency advisory:** bumped `h2` `0.4.13` → `0.4.16` for RUSTSEC-2026-0258 (unbounded empty DATA frames); `cargo deny check advisories` and `cargo audit` are clean again (transitive via the axum/hyper/reqwest HTTP stack).
+
+### Changed - 2026-08-18 (multi-agent review remediation)
+- **Semver:** bumped six crates that re-export a bumped dependency in their public API — `ras-rest-core` `0.1.1` → `0.2.0`, `ras-file-core` `0.1.0` → `0.2.0`, `ras-observability-core` / `ras-observability-otel` `0.1.0` → `0.2.0`, `ras-jsonrpc-bidirectional-types` / `ras-jsonrpc-bidirectional-client` `0.1.0` → `0.2.0` — and cascaded the `{ path, version }` requirements. (Also records the earlier `ras-jsonrpc-bidirectional-macro` `0.1.0` → `0.2.0` bump for the M4 compile-error contract.)
+- **REST generated code logs via `ras_rest_core::tracing`.** `ras-rest-core` now depends on and re-exports `tracing`, mirroring the JSON-RPC fix, so `rest_service!` consumers no longer need an undeclared direct `tracing` dependency.
+- Corrected every documented dependency version pin (book pages + crate READMEs) to the current crate versions; stale pins would have resolved a pre-hardening macro or linked two incompatible copies of a core crate.
+
+### Fixed - 2026-08-18 (multi-agent review remediation)
+- **Generated REST client tolerates an empty 204/304 success body.** A `204` on a non-unit response type now deserializes as `null` (so `Option<T>` / `serde_json::Value` resolve to `None` / `Null`) instead of failing with a serde EOF error; the server also omits the body for `205 Reset Content`.
+- **OAuth2 reserved-parameter denylist widened (H1).** `request`, `request_uri`, `response_mode`, `resource`, `audience`, and `id_token_hint` are now rejected in `additional_params` / provider `auth_params`, closing the OIDC request-object override path.
+- **OAuth2 id_token `sub` is now required (M6).** `validate_id_token_claims` rejects an id_token without a `sub` claim, and the userinfo↔id_token subject binding fails closed instead of silently no-opping.
+- **CSRF header names are validated (L2 follow-up).** `CsrfConfig::validate()` rejects a CORS-safelisted or browser-controlled header name (`accept`, `content-type`, `cookie`, …), which would otherwise satisfy the fail-closed cookie/CSRF check while providing no protection.
+- Documentation fidelity: `ras-jsonrpc-types` README uses the single-argument `insufficient_permissions`; `ras-auth-core` README states the cookie-always-carries-CSRF invariant; the `docs_require_auth` browser-transport limitation, the Content-Type gate's bodied-endpoint scope, and the `headers: true` credential-exposure caveat are now documented.
+
+### Changed - 2026-08-12 (security review remediation)
+- **Cookie auth now requires CSRF (H2).** `AuthTransportConfig::validate` rejects a config with a cookie transport and no CSRF config, and `with_cookie(...)` / the generated `auth_cookie(...)` builders now install a default double-submit `CsrfConfig` when none is set. There is no builder path to cookie auth without CSRF. Existing apps that enabled cookies and omitted CSRF will now fail at `build()`/`validate()` — this is intended. Bumped `ras-auth-core` `0.1.0` → `0.2.0`, `ras-rest-macro` `0.2.1` → `0.3.0`, `ras-jsonrpc-macro` `0.2.0` → `0.3.0`, `ras-file-macro` `0.1.0` → `0.2.0`.
+- **Empty permission group mixed with non-empty groups no longer grants any authenticated user (M4).** `WITH_PERMISSIONS(["admin"] | [])` previously granted access to any logged-in user; it now denies at runtime (`check_permission_groups` / `user_satisfies_permission_groups` in `ras-auth-core`) and is a compile error in all four service macros. `WITH_PERMISSIONS([])` (authenticated-only) is unchanged. Generated-code contract change on the REST/JSON-RPC/file/bidirectional macros.
+- **JSON-RPC `-32002` no longer returns the caller's permission set (M1).** `JsonRpcError::insufficient_permissions` now takes only `required` and omits `has` from the error `data`; the caller's grant set is never echoed. Public JSON shape and function-signature change. Bumped `ras-jsonrpc-types` `0.1.1` → `0.2.0`, `ras-jsonrpc-core` `0.1.2` → `0.2.0`.
+- **WebSocket JSON-RPC and upgrade errors are sanitized (H3).** Handler and `AuthError` internals are no longer stringified onto the wire; `ServerError::client_message()` returns a generic per-class message (the full error is logged server-side). Matches the HTTP JSON-RPC / REST sanitization. Bumped `ras-jsonrpc-bidirectional-server` `0.1.0` → `0.2.0`.
+- **WebSocket credential extraction matches HTTP (M5).** Only `Authorization: Bearer <token>` (case-insensitive, non-empty) is treated as a bearer token; raw values and non-Bearer schemes are rejected and a malformed header no longer falls through to a weaker transport. Client-claimed IP metadata is relabelled `claimed_client_ip` (untrusted).
+- **OAuth2 default start-flow binds against login CSRF (M2).** `OAuth2Provider::start_flow` now generates a session binding and returns it in `OAuth2Response::AuthorizationUrl { url, state, binding }` (new field); the callback must echo it. `start_flow_bound(.., None)` remains the explicit unbound escape hatch. Bumped `ras-identity-oauth2` `0.1.2` → `0.2.0`.
+- **OAuth2 reserved-parameter injection blocked (H1).** `additional_params` / provider `auth_params` can no longer override reserved OAuth/OIDC parameters (`redirect_uri`, `state`, PKCE, etc.); a collision returns the new `OAuth2Error::InvalidAuthorizationParam`.
+- **OAuth2 ID-token / client hardening (M6).** `issuer` is now required (fail-closed) to accept an id_token; userinfo `sub` must match the id_token `sub`; multi-audience tokens require a matching `azp`; `OAuth2Client::new` no longer silently falls back to a timeout-less HTTP client (it now panics — use `try_new`).
+- **JWT sessions gain optional `iss`/`aud` (M3).** `SessionConfig` and `JwtClaims` carry optional `iss`/`aud`; when configured they are encoded and verified, rejecting cross-service token reuse. Removed the unused `refresh_enabled` flag (no refresh-token rotation exists). Bumped `ras-identity-session` `0.2.0` → `0.3.0`.
+
+### Fixed - 2026-08-12 (security review remediation)
+- **Secrets no longer appear in `Debug` (L1).** `SessionConfig` (`jwt_secret`), `OAuth2ProviderConfig` (`client_secret`), and `LocalUser` (`password_hash`) now use redacting `Debug` impls. OAuth2 token-exchange / userinfo error paths log the status code only, not the response body. Bumped `ras-identity-local` `0.2.0` → `0.2.1`.
+- **CSRF token comparison is constant-time (L2).** `CsrfConfig::validate_headers` uses `subtle::ConstantTimeEq` (new direct dependency of `ras-auth-core`).
+- **Dependency advisories (D1).** `cargo update` bumped `crossbeam-epoch` (`0.9.18` → `0.9.20`), `quinn-proto` (`0.11.14` → `0.11.16`), and `spin` (`0.9.8` → `0.9.9`); `cargo deny check advisories` and `cargo audit` are clean. `lru`/`paste` warnings remain (transitive via `ratatui` in the TUI example only; not compiled into any library crate).
+- **oauth2-demo hardened (H4).** Dropped the client-controlled `additional_params`; the JWT is delivered in the URL fragment (never sent to the server / not in `Referer`) and scrubbed from the URL immediately instead of the query string; a login-CSRF binding cookie is set and verified; `enforce_active_sessions` is enabled; CORS is restricted to the demo origin; and admin permissions are only granted on a verified email.
+
+### Documentation - 2026-08-12
+- `identity-and-sessions.md` and crate READMEs describe cookie auth as cookie **and** CSRF (H2) and the bound OAuth2 flow as the primary path (M2).
+- The root README's "Rate Limiting" bullet is corrected: the local-auth `Semaphore` is a concurrency bound, not a rate limiter (L3).
+
 ### Added - 2026-06-29
 - New `OPTIONAL_AUTH` route level for `rest_service!`, `file_service!`, `jsonrpc_service!`, and `jsonrpc_bidirectional_service!`. An `OPTIONAL_AUTH` route is public — never rejected for auth reasons — but opportunistically identifies its caller: the handler receives a `ras_auth_core::Caller` (`Anonymous` / `Authenticated(user)`) as its first argument (the file service surfaces it through `FileRequestContext`). Resolution is fully lenient: a missing, invalid, or expired credential, or a cookie that fails CSRF on an unsafe method, resolves to `Caller::Anonymous` rather than a 401/403.
 - `ras-auth-core`: new `Caller` enum (`#[must_use]`) and non-rejecting `resolve_caller` resolver alongside `authorize_request`.

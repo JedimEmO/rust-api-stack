@@ -20,7 +20,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-ras-jsonrpc-types = "0.1.1"
+ras-jsonrpc-types = "0.2.0"
 ```
 
 ### Basic Types
@@ -62,9 +62,10 @@ let internal_error = JsonRpcError::internal_error("Server error".to_string());
 
 // Custom authentication errors
 let auth_required = JsonRpcError::authentication_required();
+// Only the *required* permissions are surfaced; the caller's own grant set is
+// deliberately not echoed back in the error data.
 let insufficient_perms = JsonRpcError::insufficient_permissions(
     vec!["admin".to_string()],
-    vec!["user".to_string()]
 );
 let token_expired = JsonRpcError::token_expired();
 ```

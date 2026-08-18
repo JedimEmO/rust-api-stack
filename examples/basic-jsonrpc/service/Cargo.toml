@@ -17,8 +17,8 @@ client = ["basic-jsonrpc-api/client"]
 
 [dependencies]
 basic-jsonrpc-api = { path = "../api", version = "0.1.0", features = ["server"] }
-ras-jsonrpc-core = { path = "../../../crates/rpc/ras-jsonrpc-core", version = "0.1.2" }
-ras-jsonrpc-types = { path = "../../../crates/rpc/ras-jsonrpc-types", version = "0.1.1" }
+ras-jsonrpc-core = { path = "../../../crates/rpc/ras-jsonrpc-core", version = "0.2.0" }
+ras-jsonrpc-types = { path = "../../../crates/rpc/ras-jsonrpc-types", version = "0.2.0" }
 axum = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -30,5 +30,5 @@ uuid = { workspace = true, features = ["v4"] }
 anyhow = { workspace = true }
 
 # Observability
-ras-observability-core = { path = "../../../crates/core/ras-observability-core", version = "0.1.0" }
-ras-observability-otel = { path = "../../../crates/observability/ras-observability-otel", version = "0.1.0" }
+ras-observability-core = { path = "../../../crates/core/ras-observability-core", version = "0.2.0" }
+ras-observability-otel = { path = "../../../crates/observability/ras-observability-otel", version = "0.2.0" }

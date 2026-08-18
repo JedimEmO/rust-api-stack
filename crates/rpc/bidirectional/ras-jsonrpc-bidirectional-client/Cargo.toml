@@ -1,6 +1,6 @@
 [package]
 name = "ras-jsonrpc-bidirectional-client"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Cross-platform WebSocket client for bidirectional JSON-RPC communication"
@@ -11,9 +11,9 @@ readme = "README.md"
 
 [dependencies]
 # Core dependencies
-ras-jsonrpc-types = { path = "../../ras-jsonrpc-types", version = "0.1.1" }
-ras-jsonrpc-bidirectional-types = { path = "../ras-jsonrpc-bidirectional-types", version = "0.1.0" }
-ras-auth-core = { path = "../../../core/ras-auth-core", version = "0.1.0" }
+ras-jsonrpc-types = { path = "../../ras-jsonrpc-types", version = "0.2.0" }
+ras-jsonrpc-bidirectional-types = { path = "../ras-jsonrpc-bidirectional-types", version = "0.2.0" }
+ras-auth-core = { path = "../../../core/ras-auth-core", version = "0.2.0" }
 
 # Async and serialization
 serde = { workspace = true }

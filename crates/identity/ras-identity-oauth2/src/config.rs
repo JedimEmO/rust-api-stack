@@ -2,9 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 
 /// OAuth2 provider configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct OAuth2ProviderConfig {
     pub provider_id: String,
     pub client_id: String,
@@ -25,6 +26,26 @@ pub struct OAuth2ProviderConfig {
     pub use_pkce: bool,
     /// Custom user info mapping
     pub user_info_mapping: Option<UserInfoMapping>,
+}
+
+/// Manual `Debug` that redacts `client_secret` so it never lands in logs (L1).
+impl fmt::Debug for OAuth2ProviderConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OAuth2ProviderConfig")
+            .field("provider_id", &self.provider_id)
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"[REDACTED]")
+            .field("authorization_endpoint", &self.authorization_endpoint)
+            .field("token_endpoint", &self.token_endpoint)
+            .field("userinfo_endpoint", &self.userinfo_endpoint)
+            .field("issuer", &self.issuer)
+            .field("redirect_uri", &self.redirect_uri)
+            .field("scopes", &self.scopes)
+            .field("auth_params", &self.auth_params)
+            .field("use_pkce", &self.use_pkce)
+            .field("user_info_mapping", &self.user_info_mapping)
+            .finish()
+    }
 }
 
 /// Mapping configuration for user info fields
@@ -145,6 +166,17 @@ mod tests {
         let json = serde_json::to_string(&m).unwrap();
         let parsed: UserInfoMapping = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.subject_field, m.subject_field);
+    }
+
+    #[test]
+    fn debug_redacts_client_secret() {
+        let mut p = provider();
+        p.client_secret = "super-secret-value".into();
+        let debug = format!("{p:?}");
+        assert!(!debug.contains("super-secret-value"));
+        assert!(debug.contains("[REDACTED]"));
+        // Non-secret fields are still visible.
+        assert!(debug.contains("google"));
     }
 
     #[test]

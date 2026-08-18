@@ -251,6 +251,18 @@ impl Parse for MethodDefinition {
                         permission_groups.push(group);
                     }
 
+                    if permission_groups.len() > 1
+                        && permission_groups.iter().any(|group| group.is_empty())
+                    {
+                        return Err(syn::Error::new(
+                            auth_ident.span(),
+                            "an empty permission group is only valid as the entire requirement \
+                             (WITH_PERMISSIONS([]), meaning any authenticated user); mixing an \
+                             empty group with non-empty groups would silently grant access to any \
+                             authenticated user",
+                        ));
+                    }
+
                     AuthRequirement::WithPermissions(permission_groups)
                 }
                 _ => {

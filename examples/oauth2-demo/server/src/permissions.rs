@@ -29,9 +29,24 @@ impl GoogleOAuth2Permissions {
         permissions.push("user:read".to_string());
         permissions.push("profile:read".to_string());
 
+        // Only an IdP-verified email may drive privilege decisions. An
+        // unverified email address is attacker-controllable (the IdP never
+        // confirmed the user owns it), so it must never grant admin (H4/M6).
+        let email_verified = identity
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("email_verified"))
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+
         // Check email domain for additional permissions
         if let Some(email) = &identity.email {
-            if email.ends_with("@example.com") {
+            if !email_verified {
+                info!(
+                    "Skipping domain-based permissions: email not verified: {}",
+                    email
+                );
+            } else if email.ends_with("@example.com") {
                 // Users from example.com get admin permissions
                 permissions.push("admin:read".to_string());
                 permissions.push("admin:write".to_string());
@@ -219,5 +234,31 @@ mod tests {
 
         assert!(permissions.contains(&"user:read".to_string()));
         assert!(!permissions.contains(&"email:verified".to_string()));
+    }
+
+    #[tokio::test]
+    async fn unverified_admin_email_is_not_granted_admin() {
+        // The security fix (H4/M6): an UNVERIFIED @example.com address must not
+        // receive admin, since the IdP never confirmed the user owns it.
+        let provider = GoogleOAuth2Permissions::new();
+        let identity = create_test_identity("42", Some("attacker@example.com"), Some(false));
+
+        let permissions = provider.get_permissions(&identity).await.unwrap();
+
+        assert!(permissions.contains(&"user:read".to_string()));
+        assert!(!permissions.contains(&"admin:read".to_string()));
+        assert!(!permissions.contains(&"admin:write".to_string()));
+        assert!(!permissions.contains(&"system:manage".to_string()));
+    }
+
+    #[tokio::test]
+    async fn missing_email_verified_claim_is_not_granted_admin() {
+        // No email_verified claim at all -> treated as unverified.
+        let provider = GoogleOAuth2Permissions::new();
+        let identity = create_test_identity("43", Some("someone@example.com"), None);
+
+        let permissions = provider.get_permissions(&identity).await.unwrap();
+
+        assert!(!permissions.contains(&"admin:read".to_string()));
     }
 }

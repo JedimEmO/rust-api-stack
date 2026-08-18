@@ -13,6 +13,10 @@ pub use ras_jsonrpc_types::*;
 // Re-export version migration traits for generated compatibility dispatch.
 pub use ras_version_core::*;
 
+// Re-export `tracing` so generated server code can log without requiring every
+// JSON-RPC consumer crate to declare a direct `tracing` dependency.
+pub use tracing;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,19 +123,16 @@ mod tests {
     }
 
     #[test]
-    fn reexported_jsonrpc_error_encodes_permission_details() {
-        let error = JsonRpcError::insufficient_permissions(
-            vec!["widgets:write".to_string()],
-            vec!["widgets:read".to_string()],
-        );
+    fn reexported_jsonrpc_error_encodes_required_but_not_caller_grants() {
+        let error = JsonRpcError::insufficient_permissions(vec!["widgets:write".to_string()]);
 
         assert_eq!(error.code, error_codes::INSUFFICIENT_PERMISSIONS);
         assert_eq!(error.message, "Insufficient permissions");
+        // `required` is advertised; the caller's grant set is never echoed (M1).
         assert_eq!(
             error.data,
             Some(json!({
                 "required": ["widgets:write"],
-                "has": ["widgets:read"]
             }))
         );
     }

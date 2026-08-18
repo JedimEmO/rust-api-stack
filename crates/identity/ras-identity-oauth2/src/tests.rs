@@ -223,12 +223,18 @@ mod integration_tests {
 
         // Start OAuth2 flow via the typed API
         let start_result = provider.start_flow("mock_provider", None).await.unwrap();
-        let auth_url = match start_result {
-            OAuth2Response::AuthorizationUrl { url, state } => {
+        let (auth_url, binding) = match start_result {
+            OAuth2Response::AuthorizationUrl {
+                url,
+                state,
+                binding,
+            } => {
                 assert!(url.contains("/authorize"));
                 assert!(url.contains("response_type=code"));
                 assert!(url.contains("code_challenge"));
-                state
+                // start_flow binds by default (M2).
+                assert!(binding.is_some());
+                (state, binding)
             }
             _ => panic!("Expected authorization URL"),
         };
@@ -243,12 +249,13 @@ mod integration_tests {
             Err(ras_identity_core::IdentityError::UnsupportedMethod)
         ));
 
-        // Simulate callback
+        // Simulate callback — echo the binding captured at start (M2).
         let callback_payload = serde_json::json!({
             "type": "Callback",
             "provider_id": "mock_provider",
             "code": "mock_auth_code",
-            "state": auth_url
+            "state": auth_url,
+            "binding": binding
         });
 
         let callback_result = provider.verify(callback_payload).await;

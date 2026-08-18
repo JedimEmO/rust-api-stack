@@ -39,8 +39,17 @@ pub enum OAuth2AuthPayload {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum OAuth2Response {
-    /// Authorization URL to redirect the user to
-    AuthorizationUrl { url: String, state: String },
+    /// Authorization URL to redirect the user to.
+    ///
+    /// `binding` is the login-CSRF binding for this flow: the integrator must
+    /// store it (e.g. in a cookie) and echo it back on the callback payload.
+    /// `start_flow` always populates it; it is `None` only for the explicit
+    /// unbound escape hatch (`start_flow_bound(.., None)`).
+    AuthorizationUrl {
+        url: String,
+        state: String,
+        binding: Option<String>,
+    },
     /// Error response
     Error { message: String },
 }
@@ -110,24 +119,35 @@ impl OAuth2Provider {
 
     /// Start an OAuth2 authorization flow.
     ///
-    /// Returns the authorization URL to redirect the user to, plus the
-    /// `state` parameter bound to this flow. This is the supported way to
-    /// initiate a flow; `verify()` only completes one (the `Callback`
-    /// payload).
+    /// Returns the authorization URL to redirect the user to, the `state`
+    /// parameter, and a login-CSRF `binding` that this method generates for
+    /// you. The integrator must store the binding (e.g. in a cookie) and echo
+    /// it on the callback payload; a callback without it is rejected. This is
+    /// the supported way to initiate a flow; `verify()` only completes one.
+    ///
+    /// Use [`Self::start_flow_bound`] only if you want to supply your own
+    /// binding value or explicitly opt out of binding.
     pub async fn start_flow(
         &self,
         provider_id: &str,
         additional_params: Option<HashMap<String, String>>,
     ) -> OAuth2Result<OAuth2Response> {
-        self.start_flow_bound(provider_id, additional_params, None)
+        // Always bind by default: an unbound flow lets an attacker start a flow
+        // and trick a victim into completing it, joining the attacker's app
+        // session to the victim's IdP identity (M2).
+        let binding = uuid::Uuid::new_v4().to_string();
+        self.start_flow_bound(provider_id, additional_params, Some(binding))
             .await
     }
 
-    /// Start a flow bound to the initiating browser session.
+    /// Start a flow with an explicit (or absent) session binding.
     ///
     /// `binding` should be an unguessable value the integrator can recover on
     /// callback (e.g. a random cookie value); the callback payload must then
     /// carry the identical value or it is rejected, preventing login CSRF.
+    /// Passing `None` opts out of binding — only do this for non-browser flows
+    /// where login CSRF does not apply. Prefer [`Self::start_flow`], which
+    /// generates a binding for you.
     pub async fn start_flow_bound(
         &self,
         provider_id: &str,
@@ -139,14 +159,16 @@ impl OAuth2Provider {
 
         let (auth_url, state) = self
             .client
-            .generate_authorization_url_bound(provider_config, params, binding)
+            .generate_authorization_url_bound(provider_config, params, binding.clone())
             .await?;
 
         info!("Started OAuth2 flow for provider: {}", provider_id);
 
+        // Echo the binding back so the integrator can set the matching cookie.
         Ok(OAuth2Response::AuthorizationUrl {
             url: auth_url,
             state,
+            binding,
         })
     }
 
@@ -181,6 +203,26 @@ impl OAuth2Provider {
             .client
             .get_user_info(provider_config, &token_response.access_token)
             .await?;
+
+        // Bind the userinfo response to the id_token: identity is derived from
+        // userinfo, so a wrong/confused userinfo endpoint must not be able to
+        // change the account when an id_token established the subject (M6).
+        // Fail closed if the id_token carries no `sub` (validate_id_token_claims
+        // already requires it, but this must never silently pass). When a custom
+        // `subject_field` is configured the resolved identity subject is a
+        // userinfo claim trusted transitively via this `sub` binding.
+        if let Some(id_token) = &token_response.id_token {
+            let id_sub = crate::client::id_token_subject(id_token)?.ok_or_else(|| {
+                OAuth2Error::InvalidIdToken(
+                    "id_token is missing the required `sub` claim".to_string(),
+                )
+            })?;
+            if id_sub != user_info.sub {
+                return Err(OAuth2Error::InvalidIdToken(
+                    "userinfo subject does not match id_token subject".to_string(),
+                ));
+            }
+        }
 
         // Map user info to VerifiedIdentity
         let verified_identity =
@@ -354,11 +396,17 @@ mod tests {
 
         let result = provider.start_flow("google", None).await.unwrap();
         match result {
-            OAuth2Response::AuthorizationUrl { url, state } => {
+            OAuth2Response::AuthorizationUrl {
+                url,
+                state,
+                binding,
+            } => {
                 assert!(url.contains("https://accounts.google.com/o/oauth2/v2/auth"));
                 assert!(url.contains("response_type=code"));
                 assert!(url.contains("client_id=test_client_id"));
                 assert!(!state.is_empty());
+                // Default start_flow always binds (M2).
+                assert!(binding.is_some_and(|b| !b.is_empty()));
             }
             _ => panic!("Expected AuthorizationUrl response"),
         }
@@ -418,11 +466,121 @@ mod tests {
             .await
             .expect("start_flow succeeds");
 
-        let OAuth2Response::AuthorizationUrl { url, state } = response else {
+        let OAuth2Response::AuthorizationUrl {
+            url,
+            state,
+            binding,
+        } = response
+        else {
             panic!("expected authorization URL response");
         };
         assert!(url.contains("prompt=consent"));
         assert!(!state.is_empty());
+        assert!(binding.is_some());
+    }
+
+    fn fake_id_token(payload: serde_json::Value) -> String {
+        use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"RS256","typ":"JWT"}"#);
+        let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
+        format!("{header}.{payload}.signature")
+    }
+
+    struct FixedTransport {
+        id_token: Option<String>,
+        userinfo_sub: String,
+    }
+
+    #[async_trait]
+    impl crate::client::OAuth2HttpTransport for FixedTransport {
+        async fn exchange_code(
+            &self,
+            _token_endpoint: &str,
+            _params: &HashMap<String, String>,
+        ) -> OAuth2Result<crate::types::TokenResponse> {
+            Ok(crate::types::TokenResponse {
+                access_token: "access-token".to_string(),
+                token_type: "Bearer".to_string(),
+                expires_in: Some(3600),
+                refresh_token: None,
+                scope: None,
+                id_token: self.id_token.clone(),
+            })
+        }
+
+        async fn get_user_info(
+            &self,
+            _userinfo_endpoint: &str,
+            _access_token: &str,
+        ) -> OAuth2Result<crate::types::UserInfoResponse> {
+            Ok(crate::types::UserInfoResponse {
+                sub: self.userinfo_sub.clone(),
+                email: None,
+                email_verified: None,
+                name: None,
+                given_name: None,
+                family_name: None,
+                picture: None,
+                locale: None,
+                additional_claims: HashMap::new(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn callback_rejects_userinfo_subject_mismatch_with_id_token() {
+        use crate::state::{OAuth2State, OAuth2StateStore};
+
+        let mut config = google_config();
+        config.issuer = Some("https://issuer.test".to_string());
+        let exp = chrono::Utc::now().timestamp() + 600;
+        // Build an id_token that passes iss/aud/exp/nonce so validation reaches
+        // the subject cross-check. It carries sub = "id-token-subject".
+        let id_token = fake_id_token(serde_json::json!({
+            "iss": "https://issuer.test",
+            "aud": config.client_id,
+            "sub": "id-token-subject",
+            "exp": exp,
+            "nonce": "nonce-abc",
+        }));
+
+        // userinfo returns a DIFFERENT subject than the id_token (confused deputy).
+        let transport = Arc::new(FixedTransport {
+            id_token: Some(id_token),
+            userinfo_sub: "userinfo-subject".to_string(),
+        });
+        let state_store = Arc::new(InMemoryStateStore::new());
+        let client = crate::client::OAuth2Client::with_http_transport(
+            state_store.clone(),
+            600,
+            transport,
+        );
+        let mut providers = HashMap::new();
+        providers.insert("google".to_string(), config.clone());
+        let provider = OAuth2Provider::with_client(providers, client);
+
+        // Store a flow state with a known nonce + binding so the id_token matches.
+        let state = OAuth2State::new("google".to_string(), config.redirect_uri.clone(), None, 600)
+            .with_nonce("nonce-abc".to_string())
+            .with_binding(Some("binding-xyz".to_string()));
+        let state_param = state.state.clone();
+        state_store.store(state).await.unwrap();
+
+        let result = provider
+            .handle_callback(
+                "google",
+                "code".to_string(),
+                state_param,
+                None,
+                None,
+                Some("binding-xyz".to_string()),
+            )
+            .await;
+
+        assert!(
+            matches!(result, Err(OAuth2Error::InvalidIdToken(_))),
+            "subject mismatch must be rejected, got {result:?}"
+        );
     }
 
     #[test]

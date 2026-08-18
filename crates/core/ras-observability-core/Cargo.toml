@@ -1,6 +1,6 @@
 [package]
 name = "ras-observability-core"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Core traits and types for observability in Rust Agent Stack"
@@ -10,7 +10,7 @@ homepage = "https://github.com/JedimEmO/rust-api-stack"
 readme = "README.md"
 
 [dependencies]
-ras-auth-core = { path = "../ras-auth-core", version = "0.1.0" }
+ras-auth-core = { path = "../ras-auth-core", version = "0.2.0" }
 async-trait = { workspace = true }
 serde = { workspace = true }
 axum = { workspace = true }

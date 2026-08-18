@@ -59,6 +59,9 @@ pub fn generate_server(definition: &FileServiceDefinition) -> TokenStream {
 
             pub fn auth_cookie(mut self, cookie: ::ras_auth_core::AuthCookieConfig) -> Self {
                 self.auth_transport.cookie = Some(cookie);
+                if self.auth_transport.csrf.is_none() {
+                    self.auth_transport.csrf = Some(::ras_auth_core::CsrfConfig::default());
+                }
                 self
             }
 

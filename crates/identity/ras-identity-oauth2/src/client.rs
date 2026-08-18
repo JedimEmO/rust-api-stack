@@ -44,9 +44,13 @@ impl OAuth2HttpTransport for ReqwestOAuth2HttpTransport {
         let response = self.client.post(token_endpoint).form(params).send().await?;
 
         if !response.status().is_success() {
-            let error_text = response.text().await.unwrap_or_default();
-            error!("Token exchange failed: {}", error_text);
-            return Err(OAuth2Error::TokenExchangeFailed(error_text));
+            // Never log or propagate the raw provider response body — it can
+            // contain tokens or other sensitive material (L1). Status only.
+            let status = response.status();
+            error!("Token exchange failed with status {}", status);
+            return Err(OAuth2Error::TokenExchangeFailed(format!(
+                "token endpoint returned status {status}"
+            )));
         }
 
         let token_response: TokenResponse = response
@@ -71,9 +75,12 @@ impl OAuth2HttpTransport for ReqwestOAuth2HttpTransport {
             .await?;
 
         if !response.status().is_success() {
-            let error_text = response.text().await.unwrap_or_default();
-            error!("User info request failed: {}", error_text);
-            return Err(OAuth2Error::UserInfoFailed(error_text));
+            // Status only; the raw body may echo the bearer token (L1).
+            let status = response.status();
+            error!("User info request failed with status {}", status);
+            return Err(OAuth2Error::UserInfoFailed(format!(
+                "userinfo endpoint returned status {status}"
+            )));
         }
 
         let user_info: UserInfoResponse = response
@@ -130,6 +137,55 @@ impl PkceChallenge {
     }
 }
 
+/// Reserved OAuth/OIDC query parameters that the library sets itself. Neither
+/// `provider_config.auth_params` nor caller-supplied `additional_params` may
+/// override them — many providers honour the last occurrence of a duplicated
+/// query parameter, so an injected second `redirect_uri` / `state` / PKCE value
+/// would be an authorization-code-theft or CSRF vector (H1).
+const RESERVED_AUTH_PARAMS: &[&str] = &[
+    "response_type",
+    "client_id",
+    "client_secret",
+    "redirect_uri",
+    "state",
+    "nonce",
+    "scope",
+    "code_challenge",
+    "code_challenge_method",
+    "grant_type",
+    "code",
+    "code_verifier",
+    // OIDC request objects (Core §6): parameters inside a `request` /
+    // `request_uri` JWT take precedence over the query parameters we set, so
+    // permitting them would re-establish the exact override primitive this
+    // denylist removes (e.g. silently dropping PKCE or overriding state/nonce).
+    "request",
+    "request_uri",
+    // Response delivery / audience controls a caller must not influence.
+    "response_mode",
+    "resource",
+    "audience",
+    "id_token_hint",
+];
+
+/// Reject any key that collides (case-insensitively) with a reserved parameter.
+fn reject_reserved_params<'a, I>(keys: I, source: &str) -> OAuth2Result<()>
+where
+    I: IntoIterator<Item = &'a String>,
+{
+    for key in keys {
+        if RESERVED_AUTH_PARAMS
+            .iter()
+            .any(|reserved| reserved.eq_ignore_ascii_case(key))
+        {
+            return Err(OAuth2Error::InvalidAuthorizationParam(format!(
+                "{source} may not set the reserved parameter `{key}`"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// OAuth2 client for handling authorization flows
 #[derive(Clone)]
 pub struct OAuth2Client {
@@ -139,31 +195,19 @@ pub struct OAuth2Client {
 }
 
 impl OAuth2Client {
+    /// Infallible constructor.
+    ///
+    /// Panics if the HTTP client cannot be built. It never silently falls back
+    /// to an unbounded (timeout-less) client — a hung token/userinfo endpoint
+    /// would otherwise stall the flow indefinitely (M6). Use [`Self::try_new`]
+    /// to handle the (near-impossible) build error yourself.
     pub fn new(
         state_store: Arc<dyn OAuth2StateStore>,
         state_ttl_seconds: u64,
         http_timeout_seconds: u64,
     ) -> Self {
-        match Self::try_new(
-            Arc::clone(&state_store),
-            state_ttl_seconds,
-            http_timeout_seconds,
-        ) {
-            Ok(client) => client,
-            Err(error) => {
-                error!(
-                    "Failed to create configured OAuth2 HTTP client; using default client: {}",
-                    error
-                );
-                Self {
-                    http_transport: Arc::new(ReqwestOAuth2HttpTransport {
-                        client: Client::new(),
-                    }),
-                    state_store,
-                    state_ttl_seconds,
-                }
-            }
-        }
+        Self::try_new(state_store, state_ttl_seconds, http_timeout_seconds)
+            .expect("failed to build OAuth2 HTTP client")
     }
 
     pub fn try_new(
@@ -224,6 +268,10 @@ impl OAuth2Client {
         additional_params: HashMap<String, String>,
         binding: Option<String>,
     ) -> OAuth2Result<(String, String)> {
+        // Reject reserved-parameter overrides before doing any work (H1).
+        reject_reserved_params(provider_config.auth_params.keys(), "provider auth_params")?;
+        reject_reserved_params(additional_params.keys(), "additional_params")?;
+
         let mut url = Url::parse(&provider_config.authorization_endpoint)?;
 
         // Generate PKCE if enabled
@@ -391,9 +439,19 @@ impl OAuth2Client {
 #[derive(serde::Deserialize)]
 struct IdTokenClaims {
     iss: Option<String>,
+    sub: Option<String>,
     aud: Option<serde_json::Value>,
+    /// Authorized party — required to equal `client_id` when `aud` has multiple
+    /// entries (OIDC Core §3.1.3.7 / §2).
+    azp: Option<String>,
     exp: Option<i64>,
     nonce: Option<String>,
+}
+
+/// Subject (`sub`) claim of an id_token, used to bind it to the userinfo
+/// response so a confused-deputy userinfo cannot change the account (M6).
+pub(crate) fn id_token_subject(id_token: &str) -> OAuth2Result<Option<String>> {
+    Ok(decode_id_token_claims(id_token)?.sub)
 }
 
 fn decode_id_token_claims(id_token: &str) -> OAuth2Result<IdTokenClaims> {
@@ -421,24 +479,40 @@ pub(crate) fn validate_id_token_claims(
 ) -> OAuth2Result<()> {
     let claims = decode_id_token_claims(id_token)?;
 
-    if let Some(expected_issuer) = &provider_config.issuer
-        && claims.iss.as_deref() != Some(expected_issuer.as_str())
-    {
+    // Issuer is fail-closed: an id_token whose issuer is unverified cannot be
+    // trusted to identify the account, so accepting one without a configured
+    // `issuer` is refused rather than silently skipped (M6).
+    let Some(expected_issuer) = &provider_config.issuer else {
+        return Err(OAuth2Error::InvalidIdToken(
+            "provider `issuer` must be configured to accept id_tokens".to_string(),
+        ));
+    };
+    if claims.iss.as_deref() != Some(expected_issuer.as_str()) {
         return Err(OAuth2Error::InvalidIdToken(format!(
             "issuer mismatch: expected {expected_issuer}"
         )));
     }
 
+    let client_id = provider_config.client_id.as_str();
     let audience_matches = match &claims.aud {
-        Some(serde_json::Value::String(aud)) => aud == &provider_config.client_id,
-        Some(serde_json::Value::Array(auds)) => auds
-            .iter()
-            .any(|aud| aud.as_str() == Some(provider_config.client_id.as_str())),
+        Some(serde_json::Value::String(aud)) => aud == client_id,
+        Some(serde_json::Value::Array(auds)) => {
+            let contains = auds.iter().any(|aud| aud.as_str() == Some(client_id));
+            if !contains {
+                false
+            } else if auds.len() > 1 {
+                // Multiple audiences: `azp` must be present and equal client_id.
+                claims.azp.as_deref() == Some(client_id)
+            } else {
+                true
+            }
+        }
         _ => false,
     };
     if !audience_matches {
         return Err(OAuth2Error::InvalidIdToken(
-            "audience does not include this client".to_string(),
+            "audience does not include this client (or azp mismatch for multi-audience token)"
+                .to_string(),
         ));
     }
 
@@ -455,6 +529,18 @@ pub(crate) fn validate_id_token_claims(
         && claims.nonce.as_deref() != Some(expected)
     {
         return Err(OAuth2Error::InvalidIdToken("nonce mismatch".to_string()));
+    }
+
+    // `sub` is REQUIRED by OIDC Core §2. Refuse an id_token without it so the
+    // userinfo <-> id_token subject binding (M6) cannot silently no-op on a
+    // token that carries no subject.
+    match claims.sub.as_deref() {
+        Some(sub) if !sub.trim().is_empty() => {}
+        _ => {
+            return Err(OAuth2Error::InvalidIdToken(
+                "id_token is missing the required `sub` claim".to_string(),
+            ));
+        }
     }
 
     Ok(())
@@ -826,19 +912,49 @@ mod tests {
 
         let good = fake_id_token(serde_json::json!({
             "iss": "https://issuer.test",
+            "sub": "subject-1",
             "aud": "test_client_id",
             "exp": exp,
             "nonce": "nonce-1",
         }));
         assert!(validate_id_token_claims(&config, &good, Some("nonce-1")).is_ok());
 
-        // aud may be an array containing this client
-        let aud_array = fake_id_token(serde_json::json!({
+        // An otherwise-valid id_token with no `sub` is rejected (M6): the
+        // userinfo binding must never run against an absent subject.
+        let no_sub = fake_id_token(serde_json::json!({
+            "iss": "https://issuer.test",
+            "aud": "test_client_id",
+            "exp": exp,
+            "nonce": "nonce-1",
+        }));
+        assert!(validate_id_token_claims(&config, &no_sub, Some("nonce-1")).is_err());
+
+        // A single-element aud array containing this client is fine.
+        let aud_single_array = fake_id_token(serde_json::json!({
+            "iss": "https://issuer.test",
+            "sub": "subject-1",
+            "aud": ["test_client_id"],
+            "exp": exp,
+        }));
+        assert!(validate_id_token_claims(&config, &aud_single_array, None).is_ok());
+
+        // Multi-audience token requires azp == client_id (M6).
+        let aud_array_with_azp = fake_id_token(serde_json::json!({
+            "iss": "https://issuer.test",
+            "sub": "subject-1",
+            "aud": ["other", "test_client_id"],
+            "azp": "test_client_id",
+            "exp": exp,
+        }));
+        assert!(validate_id_token_claims(&config, &aud_array_with_azp, None).is_ok());
+
+        // Multi-audience token WITHOUT a matching azp is rejected.
+        let aud_array_no_azp = fake_id_token(serde_json::json!({
             "iss": "https://issuer.test",
             "aud": ["other", "test_client_id"],
             "exp": exp,
         }));
-        assert!(validate_id_token_claims(&config, &aud_array, None).is_ok());
+        assert!(validate_id_token_claims(&config, &aud_array_no_azp, None).is_err());
 
         let bad_iss = fake_id_token(serde_json::json!({
             "iss": "https://evil.test", "aud": "test_client_id", "exp": exp,
@@ -869,6 +985,95 @@ mod tests {
         assert!(validate_id_token_claims(&config, &wrong_nonce, Some("nonce-1")).is_err());
 
         assert!(validate_id_token_claims(&config, "garbage", None).is_err());
+    }
+
+    #[test]
+    fn id_token_without_configured_issuer_is_rejected() {
+        // issuer is None on provider_config() -> fail closed (M6).
+        let config = provider_config();
+        assert!(config.issuer.is_none());
+        let exp = chrono::Utc::now().timestamp() + 600;
+        let token = fake_id_token(serde_json::json!({
+            "iss": "https://issuer.test",
+            "aud": "test_client_id",
+            "exp": exp,
+        }));
+        assert!(matches!(
+            validate_id_token_claims(&config, &token, None),
+            Err(OAuth2Error::InvalidIdToken(_))
+        ));
+    }
+
+    #[test]
+    fn id_token_subject_extracts_sub() {
+        let token = fake_id_token(serde_json::json!({ "sub": "subject-123" }));
+        assert_eq!(id_token_subject(&token).unwrap().as_deref(), Some("subject-123"));
+    }
+
+    #[tokio::test]
+    async fn reserved_params_cannot_override_security_parameters() {
+        let state_store = Arc::new(InMemoryStateStore::new());
+        let client = OAuth2Client::new(state_store, 600, 30);
+        let config = provider_config();
+
+        for reserved in [
+            "redirect_uri",
+            "response_type",
+            "state",
+            "client_id",
+            "code_challenge",
+            "nonce",
+        ] {
+            let mut params = HashMap::new();
+            params.insert(reserved.to_string(), "attacker".to_string());
+            let result = client.generate_authorization_url(&config, params).await;
+            assert!(
+                matches!(result, Err(OAuth2Error::InvalidAuthorizationParam(_))),
+                "expected `{reserved}` to be rejected, got {result:?}"
+            );
+        }
+
+        // Case-insensitive match is enforced too.
+        let mut params = HashMap::new();
+        params.insert("Redirect_URI".to_string(), "https://evil.test/cb".to_string());
+        assert!(matches!(
+            client.generate_authorization_url(&config, params).await,
+            Err(OAuth2Error::InvalidAuthorizationParam(_))
+        ));
+
+        // A safe extra parameter is still accepted and appears exactly once.
+        let mut params = HashMap::new();
+        params.insert("login_hint".to_string(), "user@example.com".to_string());
+        let (url, _) = client
+            .generate_authorization_url(&config, params)
+            .await
+            .unwrap();
+        let parsed = Url::parse(&url).unwrap();
+        assert_eq!(
+            parsed
+                .query_pairs()
+                .filter(|(k, _)| k == "redirect_uri")
+                .count(),
+            1
+        );
+        assert!(url.contains("login_hint=user%40example.com"));
+    }
+
+    #[tokio::test]
+    async fn reserved_params_in_provider_auth_params_are_rejected() {
+        let state_store = Arc::new(InMemoryStateStore::new());
+        let client = OAuth2Client::new(state_store, 600, 30);
+        let mut config = provider_config();
+        config
+            .auth_params
+            .insert("redirect_uri".to_string(), "https://evil.test/cb".to_string());
+
+        assert!(matches!(
+            client
+                .generate_authorization_url(&config, HashMap::new())
+                .await,
+            Err(OAuth2Error::InvalidAuthorizationParam(_))
+        ));
     }
 
     #[tokio::test]

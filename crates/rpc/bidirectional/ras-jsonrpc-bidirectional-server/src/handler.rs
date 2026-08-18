@@ -544,7 +544,9 @@ fn jsonrpc_error_from_server_error(error: &ServerError) -> JsonRpcError {
         | ServerError::Internal(_) => error_codes::INTERNAL_ERROR,
     };
 
-    JsonRpcError::new(code, error.to_string(), None)
+    // Send only a generic per-class message; the full error was already logged
+    // server-side by the caller. Never interpolate handler/AuthError Display (H3).
+    JsonRpcError::new(code, error.client_message().to_string(), None)
 }
 
 #[cfg(test)]
@@ -554,6 +556,38 @@ mod tests {
     use ras_jsonrpc_bidirectional_types::ConnectionId;
     use std::collections::VecDeque;
     use std::sync::Mutex;
+
+    #[test]
+    fn jsonrpc_error_from_server_error_sends_generic_message_not_handler_detail() {
+        // Handler error carrying a secret -> client sees only a generic message,
+        // stable code preserved, no data field (H3).
+        let err = ServerError::Internal("database password is hunter2".into());
+        let jsonrpc = jsonrpc_error_from_server_error(&err);
+        assert_eq!(jsonrpc.code, error_codes::INTERNAL_ERROR);
+        assert_eq!(jsonrpc.message, "Internal error");
+        assert!(!jsonrpc.message.contains("hunter2"));
+        assert!(jsonrpc.data.is_none());
+
+        // AuthError detail must not reach the client either.
+        let auth = ServerError::AuthenticationFailed(ras_auth_core::AuthError::Internal(
+            "dsn=postgres://user:pw@host/db".into(),
+        ));
+        let jsonrpc = jsonrpc_error_from_server_error(&auth);
+        assert_eq!(jsonrpc.code, error_codes::AUTHENTICATION_REQUIRED);
+        assert_eq!(jsonrpc.message, "Authentication failed");
+        assert!(!jsonrpc.message.contains("dsn"));
+
+        // Stable codes for the invalid-request / method-not-found classes.
+        assert_eq!(
+            jsonrpc_error_from_server_error(&ServerError::InvalidRequest("Invalid params: x".into()))
+                .code,
+            error_codes::INVALID_REQUEST
+        );
+        assert_eq!(
+            jsonrpc_error_from_server_error(&ServerError::HandlerNotFound("m".into())).code,
+            error_codes::METHOD_NOT_FOUND
+        );
+    }
 
     /// A minimal MessageHandler that only implements the required method —
     /// every other method falls through to the default impl, which is what
@@ -858,7 +892,9 @@ mod tests {
         assert_eq!(error_response.id, Some(serde_json::json!(1)));
         let error = error_response.error.as_ref().expect("JSON-RPC error");
         assert_eq!(error.code, ras_jsonrpc_types::error_codes::INVALID_REQUEST);
-        assert_eq!(error.message, "Invalid request: bad request");
+        // Message is the generic per-class string; the handler's detail
+        // ("bad request") stays server-side (H3).
+        assert_eq!(error.message, "Invalid request");
 
         let success_response = match &messages[2] {
             BidirectionalMessage::Response(response) => response,

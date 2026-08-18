@@ -15,6 +15,9 @@ pub enum OAuth2Error {
     #[error("Invalid state parameter")]
     InvalidState,
 
+    #[error("Reserved OAuth parameter cannot be overridden: {0}")]
+    InvalidAuthorizationParam(String),
+
     #[error("State not found or expired")]
     StateNotFound,
 

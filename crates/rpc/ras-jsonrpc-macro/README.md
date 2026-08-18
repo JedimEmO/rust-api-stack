@@ -28,9 +28,9 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-ras-jsonrpc-macro = { version = "0.2.0", default-features = false }
-ras-jsonrpc-core = { version = "0.1.2", optional = true }
-ras-jsonrpc-types = "0.1.1"
+ras-jsonrpc-macro = { version = "0.3.0", default-features = false }
+ras-jsonrpc-core = { version = "0.2.0", optional = true }
+ras-jsonrpc-types = "0.2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 schemars = "1.0.0-alpha.20"

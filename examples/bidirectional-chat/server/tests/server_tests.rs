@@ -135,9 +135,10 @@ fn config_example_loads_with_session_compatible_secret() -> Result<()> {
     let session_config = SessionConfig {
         jwt_secret: config.auth.jwt_secret,
         jwt_ttl: chrono::Duration::seconds(config.auth.jwt_ttl_seconds),
-        refresh_enabled: config.auth.refresh_enabled,
         enforce_active_sessions: true,
         algorithm: JwtAlgorithm::HS256,
+        iss: None,
+        aud: None,
     };
 
     session_config.validate()?;

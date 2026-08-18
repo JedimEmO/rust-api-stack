@@ -69,16 +69,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n1. Starting OAuth2 flow...");
 
     match oauth2_provider.start_flow("google", None).await {
-        Ok(OAuth2Response::AuthorizationUrl { url, state }) => {
+        Ok(OAuth2Response::AuthorizationUrl {
+            url,
+            state,
+            binding,
+        }) => {
             println!("Authorization URL: {}", url);
             println!("State: {}", state);
             println!("\nIn a real application, you would:");
-            println!("1. Redirect the user to the authorization URL");
-            println!("2. Handle the callback with the authorization code");
+            println!("1. Store `binding` in a cookie and redirect the user to the URL");
+            println!("2. Handle the callback, reading `binding` back from the cookie");
             println!("3. Exchange the code for a JWT token");
 
-            // Simulate callback (in real app, this comes from OAuth2 provider)
-            simulate_callback(&session_service, state).await?;
+            // Simulate callback (in real app, this comes from OAuth2 provider).
+            // The binding cookie is echoed back on the callback payload.
+            simulate_callback(&session_service, state, binding).await?;
         }
         Ok(OAuth2Response::Error { message }) => {
             println!("OAuth2 error: {}", message);
@@ -94,15 +99,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn simulate_callback(
     session_service: &SessionService,
     state: String,
+    binding: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("\n2. Simulating OAuth2 callback...");
 
-    // In a real application, these values would come from the OAuth2 provider callback
+    // In a real application, these values would come from the OAuth2 provider
+    // callback; `binding` would be read back from the cookie set at start.
     let callback_payload = serde_json::json!({
         "type": "Callback",
         "provider_id": "google",
         "code": "simulated_authorization_code",
-        "state": state
+        "state": state,
+        "binding": binding
     });
 
     match session_service

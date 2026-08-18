@@ -13,15 +13,15 @@ refer to.
 
 ```toml
 [dependencies]
-ras-jsonrpc-macro = { version = "0.2.0", default-features = false }
-ras-jsonrpc-types = "0.1.1"
+ras-jsonrpc-macro = { version = "0.3.0", default-features = false }
+ras-jsonrpc-types = "0.2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 schemars = "1.0.0-alpha.20"
 ras-transport-core = { version = "0.1.0", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ras-jsonrpc-core = { version = "0.1.2", optional = true }
+ras-jsonrpc-core = { version = "0.2.0", optional = true }
 axum = { version = "0.8", optional = true }
 tokio = { version = "1.0", features = ["full"], optional = true }
 
@@ -81,6 +81,38 @@ The Rust method name is the JSON-RPC wire method unless a versioned method block
 sets an explicit `wire` name. The auth requirement is one of `UNAUTHORIZED`,
 `OPTIONAL_AUTH`, or `WITH_PERMISSIONS([...])`; see
 [Auth In The API Contract](../auth-in-api-contract.md).
+
+## Service Options
+
+Optional service-level fields (alongside `service_name` / `methods`):
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `require_json_content_type: <bool>` | `true` | Reject a non-`application/json` request with `415` before parsing. |
+| `body_limit: <bytes>` | `2 * 1024 * 1024` | Maximum request body size. |
+| `openrpc: true` / `explorer: true` | off | Emit the OpenRPC document and host the API explorer. |
+| `docs_require_auth: <bool>` | `false` | Gate the explorer page and `openrpc.json` behind authentication (any authenticated user). |
+| `feature_gated: <bool>` | `false` | Wrap the server/client in the consumer crate's own `server`/`client` features. |
+
+The JSON-RPC endpoint always uses `application/json`; the default
+`require_json_content_type` check rejects a cross-origin `text/plain` POST (a
+CORS-safelisted content type that skips preflight) before the body is parsed. Set
+it to `false` only for clients that cannot send the header.
+
+> **Note:** the explorer and `openrpc.json` are served **without** authentication
+> by default when enabled, exposing your method names and schemas. Set
+> `docs_require_auth: true` to gate them (the RPC endpoint itself is never gated
+> by this option), or leave the explorer disabled in production.
+>
+> Because a browser top-level navigation cannot send an `Authorization` header,
+> the gated explorer is only reachable in a browser under **cookie** auth
+> (`.auth_cookie(...)`); on a bearer-only transport it is reachable only by a
+> programmatic client that sets the header.
+
+A malformed JSON body and authentication/authorization rejections are logged
+server-side via `tracing`. A service that declares any `WITH_PERMISSIONS` method
+(or a gated explorer) but is built without `.auth_provider(...)` fails `build()`
+with a clear error instead of rejecting every such call at runtime.
 
 ## Implement The Generated Trait
 

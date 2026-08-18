@@ -83,6 +83,16 @@ impl AuthProvider for MockAuthProvider {
                         metadata: None,
                     })
                 }
+                "user-hidden-token" => {
+                    let mut permissions = HashSet::new();
+                    permissions.insert("user".to_string());
+                    permissions.insert("hidden:internal".to_string());
+                    Ok(AuthenticatedUser {
+                        user_id: "user2".to_string(),
+                        permissions,
+                        metadata: None,
+                    })
+                }
                 "expired-token" => Err(AuthError::TokenExpired),
                 _ => Err(AuthError::InvalidToken),
             }
@@ -173,6 +183,38 @@ async fn test_insufficient_permissions_returns_403() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["error"]["code"], -32002); // INSUFFICIENT_PERMISSIONS
+}
+
+#[tokio::test]
+async fn test_403_does_not_leak_callers_permission_set() {
+    let app = test_app();
+
+    // A user holding an internal permission probes an admin method. The 403 must
+    // not echo back the caller's grant set (M1) — `hidden:internal` must not
+    // appear anywhere in the response body.
+    let response = make_jsonrpc_request(
+        app.clone(),
+        "admin_method",
+        serde_json::json!({"value": "test"}),
+        Some("Bearer user-hidden-token"),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body_str = String::from_utf8_lossy(&body);
+    assert!(
+        !body_str.contains("hidden:internal"),
+        "403 body leaked the caller's permission set: {body_str}"
+    );
+
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"]["code"], -32002);
+    // `required` may be advertised; `has` must be absent.
+    assert!(json["error"]["data"].get("has").is_none());
 }
 
 #[tokio::test]

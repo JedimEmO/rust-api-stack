@@ -54,6 +54,28 @@ pub enum ServerError {
 }
 
 impl ServerError {
+    /// Generic, non-sensitive message safe to send to a client.
+    ///
+    /// The [`Display`](std::fmt::Display) impl keeps full detail for server logs;
+    /// this is what goes on the wire (JSON-RPC error message / upgrade HTTP body)
+    /// so handler internals, DSNs, auth specifics, or `AuthError` fields never
+    /// leak to clients (H3). Mirrors `FileError::client_message`.
+    pub fn client_message(&self) -> &'static str {
+        match self {
+            ServerError::AuthenticationFailed(_) => "Authentication failed",
+            ServerError::PermissionDenied(_) => "Insufficient permissions",
+            ServerError::ConnectionNotFound(_) => "Connection not found",
+            ServerError::InvalidRequest(_) => "Invalid request",
+            ServerError::HandlerNotFound(_) => "Method not found",
+            ServerError::SerializationError(_) => "Invalid parameters",
+            ServerError::UpgradeFailed(_)
+            | ServerError::RoutingFailed(_)
+            | ServerError::WebSocketError(_)
+            | ServerError::ConnectionError(_)
+            | ServerError::Internal(_) => "Internal error",
+        }
+    }
+
     /// Convert to HTTP status code for upgrade errors
     pub fn to_status_code(&self) -> StatusCode {
         match self {
@@ -135,5 +157,24 @@ mod tests {
                 .to_string()
                 .starts_with("WebSocket upgrade failed:")
         );
+    }
+
+    #[test]
+    fn client_message_never_leaks_internal_detail() {
+        // Handler internals must not reach the client (H3).
+        let internal = ServerError::Internal("database password is hunter2".into());
+        assert_eq!(internal.client_message(), "Internal error");
+        assert!(!internal.client_message().contains("hunter2"));
+
+        // AuthError detail (DSNs, Internal(...) strings) must not reach the client.
+        let auth = ServerError::AuthenticationFailed(AuthError::Internal(
+            "dsn=postgres://user:pw@host/db".into(),
+        ));
+        assert_eq!(auth.client_message(), "Authentication failed");
+        assert!(!auth.client_message().contains("dsn"));
+
+        // But the full detail is still available in Display for server logs.
+        assert!(internal.to_string().contains("hunter2"));
+        assert!(auth.to_string().contains("dsn=postgres"));
     }
 }

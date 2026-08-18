@@ -38,3 +38,6 @@ sketchpad/
 
 # Chat data
 **/chat_data/
+
+# External security review input (not part of the published repo)
+SECURITY_FINDINGS.md
