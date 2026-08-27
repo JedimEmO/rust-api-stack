@@ -1009,8 +1009,15 @@ mod tests {
     fn csrf_config_rejects_cors_safelisted_header_names() {
         // A safelisted / browser-controlled header name provides no CSRF
         // protection and must fail validation even though it is "present".
-        for name in ["accept", "content-type", "Accept-Language", "cookie", "origin"] {
-            let csrf = CsrfConfig::header_presence_only(HeaderName::from_bytes(name.as_bytes()).unwrap());
+        for name in [
+            "accept",
+            "content-type",
+            "Accept-Language",
+            "cookie",
+            "origin",
+        ] {
+            let csrf =
+                CsrfConfig::header_presence_only(HeaderName::from_bytes(name.as_bytes()).unwrap());
             let error = csrf.validate().expect_err(name);
             assert!(
                 matches!(error, AuthTransportError::InvalidCsrfConfig(_)),
@@ -1052,14 +1059,10 @@ mod tests {
 
         // Bearer credentials stay exempt even on unsafe methods.
         let bearer = AuthCredential::new("bearer-token", AuthTokenSource::Bearer);
-        assert!(
-            validate_csrf_for_credential("POST", &HeaderMap::new(), &bearer, &config).is_ok()
-        );
+        assert!(validate_csrf_for_credential("POST", &HeaderMap::new(), &bearer, &config).is_ok());
 
         // GET cookie requests stay exempt.
-        assert!(
-            validate_csrf_for_credential("GET", &HeaderMap::new(), &cookie, &config).is_ok()
-        );
+        assert!(validate_csrf_for_credential("GET", &HeaderMap::new(), &cookie, &config).is_ok());
 
         // Valid double-submit header + cookie passes.
         let headers = headers(&[

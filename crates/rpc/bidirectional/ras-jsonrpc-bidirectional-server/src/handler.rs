@@ -579,8 +579,10 @@ mod tests {
 
         // Stable codes for the invalid-request / method-not-found classes.
         assert_eq!(
-            jsonrpc_error_from_server_error(&ServerError::InvalidRequest("Invalid params: x".into()))
-                .code,
+            jsonrpc_error_from_server_error(&ServerError::InvalidRequest(
+                "Invalid params: x".into()
+            ))
+            .code,
             error_codes::INVALID_REQUEST
         );
         assert_eq!(

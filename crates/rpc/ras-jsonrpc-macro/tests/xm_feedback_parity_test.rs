@@ -84,7 +84,9 @@ impl StrictRpcTrait for StrictRpcImpl {
         &self,
         request: PingRequest,
     ) -> Result<PingResponse, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(PingResponse { echo: request.value })
+        Ok(PingResponse {
+            echo: request.value,
+        })
     }
 }
 
@@ -103,7 +105,9 @@ impl LenientRpcTrait for LenientRpcImpl {
         &self,
         request: PingRequest,
     ) -> Result<PingResponse, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(PingResponse { echo: request.value })
+        Ok(PingResponse {
+            echo: request.value,
+        })
     }
 }
 
@@ -119,7 +123,10 @@ fn rpc_envelope() -> Value {
 #[tokio::test]
 async fn strict_rpc_requires_json_content_type() {
     let router = StrictRpcBuilder::new(StrictRpcImpl).build().unwrap();
-    let server = TestServer::builder().mock_transport().build(router).unwrap();
+    let server = TestServer::builder()
+        .mock_transport()
+        .build(router)
+        .unwrap();
 
     // application/json → accepted.
     let ok = server.post("/rpc").json(&rpc_envelope()).await;
@@ -137,7 +144,10 @@ async fn strict_rpc_requires_json_content_type() {
 #[tokio::test]
 async fn lenient_rpc_accepts_any_content_type() {
     let router = LenientRpcBuilder::new(LenientRpcImpl).build().unwrap();
-    let server = TestServer::builder().mock_transport().build(router).unwrap();
+    let server = TestServer::builder()
+        .mock_transport()
+        .build(router)
+        .unwrap();
 
     let ok = server
         .post("/rpc")
@@ -166,14 +176,19 @@ impl TinyRpcTrait for TinyRpcImpl {
         &self,
         request: PingRequest,
     ) -> Result<PingResponse, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(PingResponse { echo: request.value })
+        Ok(PingResponse {
+            echo: request.value,
+        })
     }
 }
 
 #[tokio::test]
 async fn rpc_body_limit_rejects_oversized_body() {
     let router = TinyRpcBuilder::new(TinyRpcImpl).build().unwrap();
-    let server = TestServer::builder().mock_transport().build(router).unwrap();
+    let server = TestServer::builder()
+        .mock_transport()
+        .build(router)
+        .unwrap();
 
     let big = json!({
         "jsonrpc": "2.0",
@@ -204,7 +219,9 @@ impl NeedsProviderRpcTrait for NeedsProviderRpcImpl {
         _user: &AuthenticatedUser,
         request: PingRequest,
     ) -> Result<PingResponse, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(PingResponse { echo: request.value })
+        Ok(PingResponse {
+            echo: request.value,
+        })
     }
 }
 
@@ -240,7 +257,9 @@ impl GatedDocsRpcTrait for GatedDocsRpcImpl {
         &self,
         request: PingRequest,
     ) -> Result<PingResponse, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(PingResponse { echo: request.value })
+        Ok(PingResponse {
+            echo: request.value,
+        })
     }
 
     async fn secret(
@@ -248,7 +267,9 @@ impl GatedDocsRpcTrait for GatedDocsRpcImpl {
         _user: &AuthenticatedUser,
         request: PingRequest,
     ) -> Result<PingResponse, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(PingResponse { echo: request.value })
+        Ok(PingResponse {
+            echo: request.value,
+        })
     }
 }
 
@@ -258,11 +279,17 @@ async fn gated_explorer_requires_authentication() {
         .auth_provider(MockAuth)
         .build()
         .unwrap();
-    let server = TestServer::builder().mock_transport().build(router).unwrap();
+    let server = TestServer::builder()
+        .mock_transport()
+        .build(router)
+        .unwrap();
 
     // The explorer is served relative to the RPC base path ("/rpc").
     // Unauthenticated explorer + openrpc → rejected.
-    assert_eq!(server.get("/rpc/explorer").await.status_code().as_u16(), 401);
+    assert_eq!(
+        server.get("/rpc/explorer").await.status_code().as_u16(),
+        401
+    );
     assert_eq!(
         server
             .get("/rpc/explorer/openrpc.json")

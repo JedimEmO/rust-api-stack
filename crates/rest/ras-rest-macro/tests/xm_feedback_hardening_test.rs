@@ -412,7 +412,11 @@ async fn gated_docs_require_authentication() {
     // Unauthenticated docs + openapi → rejected.
     assert_eq!(server.get("/gd/docs").await.status_code().as_u16(), 401);
     assert_eq!(
-        server.get("/gd/docs/openapi.json").await.status_code().as_u16(),
+        server
+            .get("/gd/docs/openapi.json")
+            .await
+            .status_code()
+            .as_u16(),
         401
     );
 

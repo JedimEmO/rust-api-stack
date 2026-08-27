@@ -1442,7 +1442,8 @@ fn generate_canonical_route_registration(
         endpoint.request_type.as_ref(),
         query_struct_name,
     );
-    let handler_body = generate_handler_body(endpoint, handler_name, method_str, path, require_json);
+    let handler_body =
+        generate_handler_body(endpoint, handler_name, method_str, path, require_json);
     let permission_groups_code = rest_permission_groups_code(&endpoint.auth);
 
     quote! {

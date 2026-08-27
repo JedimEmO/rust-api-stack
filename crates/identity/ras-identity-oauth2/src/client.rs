@@ -1007,7 +1007,10 @@ mod tests {
     #[test]
     fn id_token_subject_extracts_sub() {
         let token = fake_id_token(serde_json::json!({ "sub": "subject-123" }));
-        assert_eq!(id_token_subject(&token).unwrap().as_deref(), Some("subject-123"));
+        assert_eq!(
+            id_token_subject(&token).unwrap().as_deref(),
+            Some("subject-123")
+        );
     }
 
     #[tokio::test]
@@ -1035,7 +1038,10 @@ mod tests {
 
         // Case-insensitive match is enforced too.
         let mut params = HashMap::new();
-        params.insert("Redirect_URI".to_string(), "https://evil.test/cb".to_string());
+        params.insert(
+            "Redirect_URI".to_string(),
+            "https://evil.test/cb".to_string(),
+        );
         assert!(matches!(
             client.generate_authorization_url(&config, params).await,
             Err(OAuth2Error::InvalidAuthorizationParam(_))
@@ -1064,9 +1070,10 @@ mod tests {
         let state_store = Arc::new(InMemoryStateStore::new());
         let client = OAuth2Client::new(state_store, 600, 30);
         let mut config = provider_config();
-        config
-            .auth_params
-            .insert("redirect_uri".to_string(), "https://evil.test/cb".to_string());
+        config.auth_params.insert(
+            "redirect_uri".to_string(),
+            "https://evil.test/cb".to_string(),
+        );
 
         assert!(matches!(
             client

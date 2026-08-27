@@ -261,7 +261,8 @@ async fn oauth2_callback_handler(
     let mut response_headers = HeaderMap::new();
     response_headers.insert(
         SET_COOKIE,
-        HeaderValue::from_str(&clear_binding_cookie()).map_err(|e| format!("invalid cookie: {e}"))?,
+        HeaderValue::from_str(&clear_binding_cookie())
+            .map_err(|e| format!("invalid cookie: {e}"))?,
     );
 
     // Check for error in callback

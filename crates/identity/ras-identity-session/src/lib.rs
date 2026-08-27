@@ -643,7 +643,9 @@ mod tests {
     async fn token_for_one_audience_is_rejected_by_another_service() {
         // Two services share a secret but configure different audiences (M3).
         let service_a = SessionService::new(
-            SessionConfig::new(TEST_SECRET).unwrap().with_audience("svc-a"),
+            SessionConfig::new(TEST_SECRET)
+                .unwrap()
+                .with_audience("svc-a"),
         )
         .unwrap();
         let local = LocalUserProvider::new();
@@ -664,7 +666,9 @@ mod tests {
         // A service configured for a different audience rejects the token
         // (the aud check runs before the active-session check).
         let service_b = SessionService::new(
-            SessionConfig::new(TEST_SECRET).unwrap().with_audience("svc-b"),
+            SessionConfig::new(TEST_SECRET)
+                .unwrap()
+                .with_audience("svc-b"),
         )
         .unwrap();
         assert!(matches!(
@@ -681,8 +685,7 @@ mod tests {
         // Names the documented freeze behavior (M3): the permission set is
         // copied into the JWT at begin_session and returned verbatim on verify;
         // it is not reloaded. If a reload is ever added, this test must change.
-        let permissions_provider =
-            Arc::new(StaticPermissions::new(vec!["read".to_string()]));
+        let permissions_provider = Arc::new(StaticPermissions::new(vec!["read".to_string()]));
         let service = SessionService::new(SessionConfig::new(TEST_SECRET).unwrap())
             .unwrap()
             .with_permissions(permissions_provider);

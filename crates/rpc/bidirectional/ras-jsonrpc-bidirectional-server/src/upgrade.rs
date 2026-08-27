@@ -428,7 +428,9 @@ mod tests {
         let metadata = create_metadata_from_headers(&headers);
 
         assert_eq!(
-            metadata.get("claimed_client_ip").expect("claimed client ip"),
+            metadata
+                .get("claimed_client_ip")
+                .expect("claimed client ip"),
             "127.0.0.1"
         );
         assert_eq!(

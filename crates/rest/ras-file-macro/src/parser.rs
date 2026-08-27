@@ -487,8 +487,7 @@ fn parse_auth(input: ParseStream) -> Result<AuthRequirement> {
                 ));
             }
 
-            if permission_groups.len() > 1
-                && permission_groups.iter().any(|group| group.is_empty())
+            if permission_groups.len() > 1 && permission_groups.iter().any(|group| group.is_empty())
             {
                 return Err(Error::new(
                     auth_ident.span(),

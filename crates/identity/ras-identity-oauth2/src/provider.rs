@@ -550,11 +550,8 @@ mod tests {
             userinfo_sub: "userinfo-subject".to_string(),
         });
         let state_store = Arc::new(InMemoryStateStore::new());
-        let client = crate::client::OAuth2Client::with_http_transport(
-            state_store.clone(),
-            600,
-            transport,
-        );
+        let client =
+            crate::client::OAuth2Client::with_http_transport(state_store.clone(), 600, transport);
         let mut providers = HashMap::new();
         providers.insert("google".to_string(), config.clone());
         let provider = OAuth2Provider::with_client(providers, client);
