@@ -487,6 +487,17 @@ fn parse_auth(input: ParseStream) -> Result<AuthRequirement> {
                 ));
             }
 
+            if permission_groups.len() > 1 && permission_groups.iter().any(|group| group.is_empty())
+            {
+                return Err(Error::new(
+                    auth_ident.span(),
+                    "an empty permission group is only valid as the entire requirement \
+                     (WITH_PERMISSIONS([]), meaning any authenticated user); mixing an empty \
+                     group with non-empty groups would silently grant access to any authenticated \
+                     user",
+                ));
+            }
+
             Ok(AuthRequirement::WithPermissions(permission_groups))
         }
         _ => Err(Error::new(

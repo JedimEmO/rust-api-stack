@@ -13,9 +13,9 @@ macro crate features:
 
 ```toml
 [dependencies]
-ras-file-macro = { version = "0.1.0", default-features = false }
-ras-file-core = { version = "0.1.0", optional = true }
-ras-auth-core = { version = "0.1.0", optional = true }
+ras-file-macro = { version = "0.2.0", default-features = false }
+ras-file-core = { version = "0.2.0", optional = true }
+ras-auth-core = { version = "0.2.0", optional = true }
 serde = { version = "1.0", features = ["derive"] }
 async-trait = { version = "0.1", optional = true }
 ras-transport-core = { version = "0.1.0", optional = true }

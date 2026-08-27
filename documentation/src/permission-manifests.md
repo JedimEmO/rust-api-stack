@@ -12,15 +12,15 @@ Enable manifest generation on the macro crate. The generated API refers to
 
 ```toml
 [dependencies]
-ras-rest-macro = { version = "0.2.1", default-features = false, features = ["permissions"] }
+ras-rest-macro = { version = "0.3.0", default-features = false, features = ["permissions"] }
 ras-permission-manifest = "0.1.0"
 ```
 
 For file services and JSON-RPC services, use the equivalent macro crate:
 
 ```toml
-ras-file-macro = { version = "0.1.0", default-features = false, features = ["permissions"] }
-ras-jsonrpc-macro = { version = "0.2.0", default-features = false, features = ["permissions"] }
+ras-file-macro = { version = "0.2.0", default-features = false, features = ["permissions"] }
+ras-jsonrpc-macro = { version = "0.3.0", default-features = false, features = ["permissions"] }
 ```
 
 The `permissions` switch belongs to the macro crate. The macro emits the

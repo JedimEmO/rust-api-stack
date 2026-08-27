@@ -115,6 +115,15 @@ Bearer tokens remain enabled by default. If both `Authorization: Bearer ...` and
 the configured cookie are present, bearer wins. If the bearer header is present
 but malformed, the request fails instead of falling back to the cookie.
 
+**Cookie auth always carries CSRF.** `with_cookie(...)` installs a default
+`CsrfConfig` when none is set, and `AuthTransportConfig::validate()` fails closed
+if a cookie transport has no CSRF config — so there is no way to enable cookie
+auth without a CSRF guard (the `.with_csrf(...)` call above is therefore
+optional). `CsrfConfig::validate()` also rejects a CORS-safelisted or
+browser-controlled header name (`accept`, `content-type`, `cookie`, …), since
+only a custom header forces the CORS preflight that makes the double-submit
+check meaningful.
+
 Cookie helpers emit secure defaults:
 
 ```rust

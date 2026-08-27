@@ -439,16 +439,27 @@
         let jwtToken = '';
         let userInfo = null;
 
-        // Get token from URL parameter
+        // The token is delivered in the URL *fragment* (`#token=...`), which the
+        // browser never sends to the server and never puts in the Referer header.
+        // Move it into sessionStorage and strip it from the address bar / history
+        // immediately so it does not linger in the URL.
         document.addEventListener('DOMContentLoaded', function() {
-            const urlParams = new URLSearchParams(window.location.search);
-            jwtToken = urlParams.get('token') || '';
-            
+            const hash = window.location.hash.startsWith('#')
+                ? window.location.hash.slice(1)
+                : '';
+            const hashParams = new URLSearchParams(hash);
+            jwtToken = hashParams.get('token')
+                || sessionStorage.getItem('jwt_token')
+                || '';
+
             if (jwtToken) {
+                sessionStorage.setItem('jwt_token', jwtToken);
+                // Remove the token from the URL bar and browser history.
+                history.replaceState(null, '', window.location.pathname);
                 displayToken();
                 parseTokenInfo();
             } else {
-                document.getElementById('tokenContent').textContent = 'No token found in URL';
+                document.getElementById('tokenContent').textContent = 'No token found';
             }
         });
 

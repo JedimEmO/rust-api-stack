@@ -6,9 +6,9 @@ implements the generated traits.
 ```toml
 [dependencies]
 workspace-api = { path = "../workspace-api", default-features = false, features = ["server"] }
-ras-auth-core = "0.1.0"
-ras-rest-core = "0.1.1"
-ras-file-core = "0.1.0"
+ras-auth-core = "0.2.0"
+ras-rest-core = "0.2.0"
+ras-file-core = "0.2.0"
 axum = "0.8"
 tokio = { version = "1.0", features = ["full"] }
 async-trait = "0.1"

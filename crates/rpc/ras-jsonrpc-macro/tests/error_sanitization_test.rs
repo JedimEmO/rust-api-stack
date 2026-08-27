@@ -45,9 +45,41 @@ mod tests {
         }
     }
 
+    // Minimal auth provider so the WITH_PERMISSIONS method can be built. It
+    // rejects every credential, which is sufficient for the sanitization tests.
+    #[derive(Clone)]
+    struct RejectingAuth;
+
+    impl ras_jsonrpc_core::AuthProvider for RejectingAuth {
+        fn authenticate(
+            &self,
+            _authorization: String,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            ras_jsonrpc_core::AuthenticatedUser,
+                            ras_jsonrpc_core::AuthError,
+                        >,
+                    > + Send,
+            >,
+        > {
+            Box::pin(async move { Err(ras_jsonrpc_core::AuthError::InvalidToken) })
+        }
+
+        fn check_permissions(
+            &self,
+            _user: &ras_jsonrpc_core::AuthenticatedUser,
+            _required_permissions: &[String],
+        ) -> Result<(), ras_jsonrpc_core::AuthError> {
+            Ok(())
+        }
+    }
+
     fn setup_test_server() -> axum_test::TestServer {
         let router = TestServiceBuilder::new(TestServiceImpl)
             .base_url("/api/rpc")
+            .auth_provider(RejectingAuth)
             .build()
             .expect("Failed to build router");
 

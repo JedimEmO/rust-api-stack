@@ -47,6 +47,10 @@ pub struct JwtClaims {
     pub display_name: Option<String>,
     pub permissions: HashSet<String>,
     pub metadata: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iss: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aud: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,13 +74,41 @@ impl JwtAlgorithm {
     }
 }
 
-#[derive(Debug, Clone)]
+/// Session/JWT configuration.
+///
+/// Permission semantics: the permissions granted at [`SessionService::begin_session`]
+/// are frozen into the JWT and are **not** reloaded on verify. With the default
+/// `enforce_active_sessions: true`, revoking a session (`end_session`) takes
+/// effect immediately per-`jti`; otherwise grants are fixed for `jwt_ttl`
+/// (default 24h). Set `iss`/`aud` in production so tokens minted for one service
+/// are not accepted by another sharing the same secret.
+#[derive(Clone)]
 pub struct SessionConfig {
     pub jwt_secret: String,
     pub jwt_ttl: Duration,
-    pub refresh_enabled: bool,
     pub enforce_active_sessions: bool,
     pub algorithm: JwtAlgorithm,
+    /// Expected token issuer. When `Some`, it is encoded into new tokens and
+    /// verified on `verify_session`; a mismatch is rejected.
+    pub iss: Option<String>,
+    /// Expected token audience. When `Some`, it is encoded into new tokens and
+    /// verified on `verify_session`; a token for a different `aud` is rejected.
+    /// This is the cross-service confused-deputy guard (M3).
+    pub aud: Option<String>,
+}
+
+/// Redacting `Debug` so `jwt_secret` never lands in logs (L1).
+impl std::fmt::Debug for SessionConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionConfig")
+            .field("jwt_secret", &"[REDACTED]")
+            .field("jwt_ttl", &self.jwt_ttl)
+            .field("enforce_active_sessions", &self.enforce_active_sessions)
+            .field("algorithm", &self.algorithm)
+            .field("iss", &self.iss)
+            .field("aud", &self.aud)
+            .finish()
+    }
 }
 
 impl SessionConfig {
@@ -84,12 +116,26 @@ impl SessionConfig {
         let config = Self {
             jwt_secret: jwt_secret.into(),
             jwt_ttl: Duration::hours(24),
-            refresh_enabled: true,
             enforce_active_sessions: true,
             algorithm: JwtAlgorithm::HS256,
+            iss: None,
+            aud: None,
         };
         config.validate()?;
         Ok(config)
+    }
+
+    /// Set the expected issuer (`iss`). Production services should set this.
+    pub fn with_issuer(mut self, issuer: impl Into<String>) -> Self {
+        self.iss = Some(issuer.into());
+        self
+    }
+
+    /// Set the expected audience (`aud`). Production services should set this so
+    /// a token minted for another service is rejected here.
+    pub fn with_audience(mut self, audience: impl Into<String>) -> Self {
+        self.aud = Some(audience.into());
+        self
     }
 
     pub fn validate(&self) -> Result<(), SessionError> {
@@ -348,6 +394,8 @@ impl SessionService {
             display_name: identity.display_name.clone(),
             permissions: permissions.into_iter().collect(),
             metadata: identity.metadata,
+            iss: self.config.iss.clone(),
+            aud: self.config.aud.clone(),
         };
 
         if self.config.enforce_active_sessions {
@@ -370,6 +418,19 @@ impl SessionService {
 
         if claims.exp <= Utc::now().timestamp() {
             return Err(SessionError::TokenExpired);
+        }
+
+        // Cross-service confused-deputy guard: reject tokens minted for a
+        // different issuer/audience when this service configures them (M3).
+        if let Some(expected_iss) = &self.config.iss
+            && claims.iss.as_deref() != Some(expected_iss.as_str())
+        {
+            return Err(SessionError::InvalidSession);
+        }
+        if let Some(expected_aud) = &self.config.aud
+            && claims.aud.as_deref() != Some(expected_aud.as_str())
+        {
+            return Err(SessionError::InvalidSession);
         }
 
         if self.config.enforce_active_sessions {
@@ -570,6 +631,83 @@ mod tests {
         assert!(matches!(result, Err(SessionError::InvalidConfig(_))));
     }
 
+    #[test]
+    fn debug_redacts_jwt_secret() {
+        let config = SessionConfig::new(TEST_SECRET).unwrap();
+        let debug = format!("{config:?}");
+        assert!(!debug.contains(TEST_SECRET));
+        assert!(debug.contains("[REDACTED]"));
+    }
+
+    #[tokio::test]
+    async fn token_for_one_audience_is_rejected_by_another_service() {
+        // Two services share a secret but configure different audiences (M3).
+        let service_a = SessionService::new(
+            SessionConfig::new(TEST_SECRET)
+                .unwrap()
+                .with_audience("svc-a"),
+        )
+        .unwrap();
+        let local = LocalUserProvider::new();
+        local
+            .add_user("u".to_string(), "password123".to_string(), None, None)
+            .await
+            .unwrap();
+        service_a.register_provider(Box::new(local)).await;
+
+        let token = service_a
+            .begin_session(
+                "local",
+                serde_json::json!({"username": "u", "password": "password123"}),
+            )
+            .await
+            .unwrap();
+
+        // A service configured for a different audience rejects the token
+        // (the aud check runs before the active-session check).
+        let service_b = SessionService::new(
+            SessionConfig::new(TEST_SECRET)
+                .unwrap()
+                .with_audience("svc-b"),
+        )
+        .unwrap();
+        assert!(matches!(
+            service_b.verify_session(&token).await,
+            Err(SessionError::InvalidSession)
+        ));
+
+        // The issuing service (correct audience) still accepts it.
+        assert!(service_a.verify_session(&token).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn permissions_are_frozen_into_the_token_snapshot() {
+        // Names the documented freeze behavior (M3): the permission set is
+        // copied into the JWT at begin_session and returned verbatim on verify;
+        // it is not reloaded. If a reload is ever added, this test must change.
+        let permissions_provider = Arc::new(StaticPermissions::new(vec!["read".to_string()]));
+        let service = SessionService::new(SessionConfig::new(TEST_SECRET).unwrap())
+            .unwrap()
+            .with_permissions(permissions_provider);
+        let local = LocalUserProvider::new();
+        local
+            .add_user("u".to_string(), "password123".to_string(), None, None)
+            .await
+            .unwrap();
+        service.register_provider(Box::new(local)).await;
+
+        let token = service
+            .begin_session(
+                "local",
+                serde_json::json!({"username": "u", "password": "password123"}),
+            )
+            .await
+            .unwrap();
+        let claims = service.verify_session(&token).await.unwrap();
+        assert_eq!(claims.permissions.len(), 1);
+        assert!(claims.permissions.contains("read"));
+    }
+
     #[tokio::test]
     async fn test_cleanup_expired_sessions() {
         let config = SessionConfig::new(TEST_SECRET).unwrap();
@@ -589,6 +727,8 @@ mod tests {
                     display_name: None,
                     permissions: HashSet::new(),
                     metadata: None,
+                    iss: None,
+                    aud: None,
                 },
             );
         }
@@ -732,6 +872,8 @@ mod tests {
                 display_name: None,
                 permissions: HashSet::new(),
                 metadata: None,
+                iss: None,
+                aud: None,
             },
         );
         assert_eq!(service.active_session_count().await, 1);

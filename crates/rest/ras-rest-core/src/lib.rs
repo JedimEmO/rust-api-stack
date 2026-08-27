@@ -10,6 +10,10 @@ use thiserror::Error;
 pub use ras_auth_core::{AuthError, AuthProvider, AuthResult, AuthenticatedUser};
 pub use ras_version_core::*;
 
+// Re-export `tracing` so generated REST server code can log without requiring
+// every consumer crate to declare a direct `tracing` dependency.
+pub use tracing;
+
 /// Result type for REST handlers that allows explicit HTTP status codes.
 pub type RestResult<T> = Result<RestResponse<T>, RestError>;
 
@@ -38,7 +42,11 @@ impl<T> RestResponse<T> {
         Self { status: 202, body }
     }
 
-    /// Create a 204 No Content response (requires T to be ()).
+    /// Create a 204 No Content response. The body is `T::default()`, but the
+    /// generated server omits it on the wire (204 carries no body per RFC 9110);
+    /// prefer `T = ()`. A generated client for such an endpoint deserializes the
+    /// empty body as `null`, so a non-unit response type should be `Option<_>` or
+    /// `serde_json::Value` rather than a plain struct.
     pub fn no_content() -> Self
     where
         T: Default,

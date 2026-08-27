@@ -81,8 +81,11 @@ impl WebSocketUpgrade {
                 Ok(response)
             }
             Err(e) => {
+                // Log the real error server-side; the HTTP body gets only a
+                // generic per-class message so AuthError internals (required/has
+                // permission lists, Internal(...) strings) never leak (H3).
                 error!("Authentication failed during WebSocket upgrade: {}", e);
-                Err((e.to_status_code(), e.to_string()))
+                Err((e.to_status_code(), e.client_message().to_string()))
             }
         }
     }
@@ -119,26 +122,40 @@ impl WebSocketUpgrade {
 }
 
 fn extract_auth_token_from_headers(headers: &HeaderMap) -> Option<String> {
-    if let Some(auth_header) = headers.get("authorization")
-        && let Ok(auth_str) = auth_header.to_str()
-    {
-        if let Some(token) = auth_str.strip_prefix("Bearer ") {
-            return Some(token.to_string());
-        }
-        return Some(auth_str.to_string());
+    // Only `Authorization: Bearer <token>` is a bearer token, matching the HTTP
+    // transport (`ras_auth_core::extract_auth_credential`). A raw value or any
+    // other scheme (`Basic ...`) is NOT a token, and a present-but-malformed
+    // Authorization header does not fall through to a weaker transport (M5).
+    if let Some(auth_header) = headers.get("authorization") {
+        let Ok(auth_str) = auth_header.to_str() else {
+            return None;
+        };
+        return match auth_str.split_once(' ') {
+            Some((scheme, token))
+                if scheme.eq_ignore_ascii_case("Bearer") && !token.trim().is_empty() =>
+            {
+                Some(token.trim().to_string())
+            }
+            _ => None,
+        };
     }
 
+    // Browser fallback: `Sec-WebSocket-Protocol: token.<jwt>`. Documented as a
+    // last-resort transport; the raw protocol value must never be logged (it is
+    // in `redact_sensitive_headers`'s list).
     if let Some(token_header) = headers.get("sec-websocket-protocol")
         && let Ok(token_str) = token_header.to_str()
         && let Some(token) = token_str.strip_prefix("token.")
+        && !token.trim().is_empty()
     {
-        return Some(token.to_string());
+        return Some(token.trim().to_string());
     }
 
     if let Some(token_header) = headers.get("x-auth-token")
         && let Ok(token_str) = token_header.to_str()
+        && !token_str.trim().is_empty()
     {
-        return Some(token_str.to_string());
+        return Some(token_str.trim().to_string());
     }
 
     None
@@ -176,6 +193,12 @@ fn get_header_value(headers: &HeaderMap, name: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// Extract a client-claimed IP from forwarding headers.
+///
+/// These headers are entirely client-controllable and there is no trusted-proxy
+/// allowlist here, so the result is a *claim*, not a verified address. It is
+/// exposed as connection metadata only and must never drive an authorization,
+/// rate-limit, or audit decision as-is (M5).
 fn extract_client_ip_from_headers(headers: &HeaderMap) -> Option<String> {
     let ip_headers = [
         "x-forwarded-for",
@@ -203,7 +226,11 @@ fn create_metadata_from_headers(headers: &HeaderMap) -> serde_json::Value {
     let mut metadata = serde_json::Map::new();
 
     if let Some(ip) = extract_client_ip_from_headers(headers) {
-        metadata.insert("client_ip".to_string(), serde_json::Value::String(ip));
+        // Named `claimed_` because the value is unauthenticated client input.
+        metadata.insert(
+            "claimed_client_ip".to_string(),
+            serde_json::Value::String(ip),
+        );
     }
 
     if let Some(user_agent) = get_header_value(headers, "user-agent") {
@@ -278,14 +305,50 @@ mod tests {
     }
 
     #[test]
-    fn extracts_authorization_raw_token() {
+    fn rejects_raw_authorization_value_as_token() {
+        // A bare value with no `Bearer ` scheme is not a token (M5).
         let mut headers = HeaderMap::new();
         headers.insert("authorization", HeaderValue::from_static("raw-token"));
 
+        assert_eq!(extract_auth_token_from_headers(&headers), None);
+    }
+
+    #[test]
+    fn rejects_non_bearer_authorization_schemes() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", HeaderValue::from_static("Basic abc123"));
+
+        assert_eq!(extract_auth_token_from_headers(&headers), None);
+    }
+
+    #[test]
+    fn accepts_case_insensitive_bearer_scheme() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", HeaderValue::from_static("bearer abc123"));
+
         assert_eq!(
             extract_auth_token_from_headers(&headers),
-            Some("raw-token".to_string())
+            Some("abc123".to_string())
         );
+    }
+
+    #[test]
+    fn rejects_empty_bearer_token() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", HeaderValue::from_static("Bearer    "));
+
+        assert_eq!(extract_auth_token_from_headers(&headers), None);
+    }
+
+    #[test]
+    fn malformed_authorization_does_not_fall_through_to_other_transports() {
+        // A present-but-invalid Authorization header must not silently authenticate
+        // via a weaker transport, matching the HTTP path.
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", HeaderValue::from_static("Basic abc"));
+        headers.insert("x-auth-token", HeaderValue::from_static("fallback"));
+
+        assert_eq!(extract_auth_token_from_headers(&headers), None);
     }
 
     #[test]
@@ -364,7 +427,12 @@ mod tests {
 
         let metadata = create_metadata_from_headers(&headers);
 
-        assert_eq!(metadata.get("client_ip").expect("client ip"), "127.0.0.1");
+        assert_eq!(
+            metadata
+                .get("claimed_client_ip")
+                .expect("claimed client ip"),
+            "127.0.0.1"
+        );
         assert_eq!(
             metadata.get("user_agent").expect("user agent"),
             "test-agent"
@@ -406,7 +474,10 @@ mod tests {
     #[tokio::test]
     async fn authenticate_headers_wraps_provider_errors() {
         let mut headers = HeaderMap::new();
-        headers.insert("authorization", HeaderValue::from_static("expired"));
+        headers.insert(
+            "authorization",
+            HeaderValue::from_static("Bearer expired-token"),
+        );
         let provider = RecordingAuthProvider::returning(Err(AuthError::TokenExpired));
 
         let error = authenticate_headers(&headers, &provider)
@@ -414,7 +485,9 @@ mod tests {
             .expect_err("auth failure is propagated");
 
         assert_eq!(error.to_status_code(), StatusCode::UNAUTHORIZED);
+        // Display keeps detail for logs; client_message stays generic (H3).
         assert_eq!(error.to_string(), "Authentication failed: Token expired");
-        assert_eq!(provider.tokens(), vec!["expired".to_string()]);
+        assert_eq!(error.client_message(), "Authentication failed");
+        assert_eq!(provider.tokens(), vec!["expired-token".to_string()]);
     }
 }

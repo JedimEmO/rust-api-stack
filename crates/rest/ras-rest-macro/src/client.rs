@@ -440,7 +440,15 @@ fn generate_client_method_with_timeout(
             let __response = self.transport.execute(__request).await?;
             let __response = __response.error_for_status().await?;
             let __bytes = __response.bytes().await?;
-            let __result = ::ras_transport_core::deserialize_json(&__bytes)?;
+            // A 204/304 (or otherwise empty) success body deserializes as JSON
+            // `null` so `Option<T>` / `serde_json::Value` responses resolve to
+            // `None` / `Null` instead of failing with an EOF error. (The server
+            // now emits an empty body for 204/304 per RFC 9110.)
+            let __result = if __bytes.is_empty() {
+                ::ras_transport_core::deserialize_json(b"null")?
+            } else {
+                ::ras_transport_core::deserialize_json(&__bytes)?
+            };
             Ok(__result)
         }
     };

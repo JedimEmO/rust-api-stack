@@ -30,6 +30,57 @@ mod static_hosting;
 /// * `WITH_PERMISSIONS([...])` — authenticated and gated; a missing or
 ///   insufficient credential is rejected before the handler runs.
 ///
+/// # Request bodies and `Content-Type`
+///
+/// Endpoints that declare a body type read and JSON-decode it only **after** the
+/// auth/CSRF/permission checks pass, so unauthenticated callers cannot make the
+/// server buffer or parse payloads. By default a request whose `Content-Type` is
+/// not `application/json` (ignoring parameters such as `; charset=utf-8`) is
+/// rejected with `415 Unsupported Media Type` before the body is read. This is
+/// defense-in-depth: requiring `application/json` forces a CORS preflight for
+/// cross-origin requests, closing the simple-request CSRF shape (a cross-origin
+/// `text/plain` POST). Set `require_json_content_type: false` at the service
+/// level to accept any content type (e.g. for clients that cannot set the
+/// header). A malformed body is logged (category + line/column, never the
+/// rejected value) and answered with `400`; a body over the size limit is `413`,
+/// distinct from an unreadable stream (`400`).
+///
+/// # Service options
+///
+/// * `body_limit: <bytes>` — maximum request body size (default 2 MiB).
+/// * `require_json_content_type: <bool>` — enforce `application/json` on bodied
+///   endpoints (default `true`).
+/// * `serve_docs: <bool>` / `docs_path: "..."` — host the API explorer and
+///   `openapi.json`.
+/// * `docs_require_auth: <bool>` — when `serve_docs` is enabled, gate the docs
+///   page and `openapi.json` behind authentication (any authenticated user).
+///   Default `false`: docs are public, matching conventional API explorers.
+/// * `feature_gated: <bool>` — wrap the generated server/client behind the
+///   consumer crate's own `server`/`client` features.
+///
+/// # Per-endpoint options
+///
+/// A trailing `{ ... }` block after the response type accepts:
+///
+/// * `body_limit: <bytes>` — override the service body limit for this endpoint.
+/// * `headers: true` — pass the request [`axum::http::HeaderMap`] to the handler
+///   as an extra parameter, immediately after the caller/user and before the
+///   path parameters. The map is unredacted (it contains the caller's
+///   `Authorization`/`Cookie`/CSRF headers), so must not be logged or forwarded
+///   verbatim; redact with
+///   `ras_auth_core::redact_sensitive_headers_for_auth_transport` first.
+/// * `version: "..."` / `versions: [ ... ]` — see Versioning.
+///
+/// # Versioning
+///
+/// An endpoint may serve older payload shapes at legacy paths and migrate them
+/// to the canonical request/response types. Provide a canonical `version:` label
+/// and one or more `versions: [ "vN" { path: ..., request: T, response: U,
+/// migration: M }, ... ]` entries, where `M` implements
+/// [`ras_rest_core::VersionMigration`] for both the request (legacy → canonical)
+/// and the response (canonical → legacy). Each legacy path is registered as its
+/// own route sharing the endpoint's auth level.
+///
 /// # Example
 ///
 /// ```rust
@@ -95,6 +146,14 @@ struct ServiceDefinition {
     static_hosting: static_hosting::StaticHostingConfig,
     body_limit: Option<usize>,
     feature_gated: bool,
+    /// Require an `application/json` request `Content-Type` on every endpoint
+    /// that declares a body. Defaults to `true`. Set `require_json_content_type:
+    /// false` to opt out (e.g. for clients that cannot set the header).
+    require_json_content_type: bool,
+    /// Gate the generated docs page and `openapi.json` behind authentication
+    /// (any authenticated user). Defaults to `false` — docs are public when
+    /// `serve_docs` is enabled, matching conventional API-explorer behavior.
+    docs_require_auth: bool,
     endpoints: Vec<EndpointDefinition>,
 }
 
@@ -120,6 +179,12 @@ struct EndpointDefinition {
     handler_name: Ident,
     version: Option<String>,
     versions: Vec<EndpointVersionDefinition>,
+    /// Per-endpoint request body size cap (bytes). Overrides the service-level
+    /// `body_limit` for this endpoint when set.
+    body_limit: Option<usize>,
+    /// When `true`, the handler receives the request `HeaderMap` as an extra
+    /// parameter (immediately after the caller/user, before path params).
+    with_headers: bool,
 }
 
 #[derive(Debug)]
@@ -272,6 +337,8 @@ impl Parse for ServiceDefinition {
         let mut static_hosting = static_hosting::StaticHostingConfig::default();
         let mut body_limit = None;
         let mut feature_gated = false;
+        let mut require_json_content_type = true;
+        let mut docs_require_auth = false;
 
         // Parse optional fields
         while content.peek(Ident) {
@@ -329,6 +396,18 @@ impl Parse for ServiceDefinition {
                 let enabled = content.parse::<syn::LitBool>()?;
                 feature_gated = enabled.value();
                 let _ = content.parse::<Token![,]>()?;
+            } else if field_name == "require_json_content_type" {
+                let _ = content.parse::<Ident>()?; // "require_json_content_type"
+                let _ = content.parse::<Token![:]>()?;
+                let enabled = content.parse::<syn::LitBool>()?;
+                require_json_content_type = enabled.value();
+                let _ = content.parse::<Token![,]>()?;
+            } else if field_name == "docs_require_auth" {
+                let _ = content.parse::<Ident>()?; // "docs_require_auth"
+                let _ = content.parse::<Token![:]>()?;
+                let enabled = content.parse::<syn::LitBool>()?;
+                docs_require_auth = enabled.value();
+                let _ = content.parse::<Token![,]>()?;
             } else if field_name == "endpoints" {
                 break; // Start parsing endpoints
             } else {
@@ -364,6 +443,8 @@ impl Parse for ServiceDefinition {
             static_hosting,
             body_limit,
             feature_gated,
+            require_json_content_type,
+            docs_require_auth,
             endpoints,
         })
     }
@@ -516,6 +597,18 @@ impl Parse for EndpointDefinition {
                         permission_groups.push(group);
                     }
 
+                    if permission_groups.len() > 1
+                        && permission_groups.iter().any(|group| group.is_empty())
+                    {
+                        return Err(syn::Error::new(
+                            auth_ident.span(),
+                            "an empty permission group is only valid as the entire requirement \
+                             (WITH_PERMISSIONS([]), meaning any authenticated user); mixing an \
+                             empty group with non-empty groups would silently grant access to any \
+                             authenticated user",
+                        ));
+                    }
+
                     AuthRequirement::WithPermissions(permission_groups)
                 }
                 _ => {
@@ -566,6 +659,8 @@ impl Parse for EndpointDefinition {
 
         let mut version = None;
         let mut versions = Vec::new();
+        let mut body_limit = None;
+        let mut with_headers = false;
 
         if input.peek(syn::token::Brace) {
             let content;
@@ -591,10 +686,17 @@ impl Parse for EndpointDefinition {
                             }
                         }
                     }
+                    "body_limit" => {
+                        let limit = content.parse::<syn::LitInt>()?;
+                        body_limit = Some(limit.base10_parse::<usize>()?);
+                    }
+                    "headers" => {
+                        with_headers = content.parse::<syn::LitBool>()?.value();
+                    }
                     _ => {
                         return Err(syn::Error::new(
                             field_name.span(),
-                            "Expected version or versions",
+                            "Expected version, versions, body_limit, or headers",
                         ));
                     }
                 }
@@ -617,6 +719,8 @@ impl Parse for EndpointDefinition {
             handler_name,
             version,
             versions,
+            body_limit,
+            with_headers,
         })
     }
 }
@@ -744,6 +848,11 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
             }
         }
 
+        // Opt-in request headers (immediately after the caller/user)
+        if endpoint.with_headers {
+            params.push(quote! { headers: axum::http::HeaderMap });
+        }
+
         // Add path parameters
         for path_param in &endpoint.path_params {
             let param_name = &path_param.name;
@@ -783,6 +892,7 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
         route_registrations.push(generate_canonical_route_registration(
             endpoint,
             &query_struct_name,
+            service_def.require_json_content_type,
         ));
         route_idx += 1;
 
@@ -797,6 +907,7 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
                 endpoint,
                 version,
                 &query_struct_name,
+                service_def.require_json_content_type,
             ));
             route_idx += 1;
         }
@@ -810,6 +921,30 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
     };
 
     let body_limit = service_def.body_limit.unwrap_or(DEFAULT_BODY_LIMIT);
+
+    // Startup assertion: a service with any WITH_PERMISSIONS route needs an auth
+    // provider, otherwise every such route returns a runtime 500 (NoAuthProvider)
+    // on first request. Catch the misconfiguration at build() instead.
+    let any_route_requires_auth = service_def
+        .endpoints
+        .iter()
+        .any(|endpoint| matches!(endpoint.auth, AuthRequirement::WithPermissions(_)))
+        || (service_def.static_hosting.serve_docs && service_def.docs_require_auth);
+    let service_name_str = service_name.to_string();
+    let provider_assertion = if any_route_requires_auth {
+        quote! {
+            if self.auth_provider.is_none() {
+                panic!(concat!(
+                    "REST service `",
+                    #service_name_str,
+                    "` has endpoints requiring authorization (WITH_PERMISSIONS) but no ",
+                    "auth_provider was configured; call .auth_provider(...) before build()"
+                ));
+            }
+        }
+    } else {
+        quote! {}
+    };
 
     // `cfg!(feature = ...)` below evaluates the MACRO crate's features, which
     // Cargo unifies across the whole workspace — one crate enabling `client`
@@ -843,7 +978,7 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
         #[allow(dead_code)]
         fn __ras_authorize_error_response(error: ras_auth_core::AuthorizeError) -> axum::response::Response {
             use axum::response::IntoResponse;
-            let (status, message) = match error {
+            let (status, message) = match &error {
                 ras_auth_core::AuthorizeError::MissingCredential => (
                     axum::http::StatusCode::UNAUTHORIZED,
                     "Missing or invalid Authorization header",
@@ -865,7 +1000,39 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
                     "Insufficient permissions",
                 ),
             };
+            // Rejections are otherwise invisible to the usage/duration trackers,
+            // which only run on the post-auth happy path; log them here so a
+            // client hammering an endpoint with a bad credential is observable.
+            // The `error` detail is logged server-side only; the client gets the
+            // generic `message`.
+            ras_rest_core::tracing::warn!(
+                status = status.as_u16(),
+                error = ?error,
+                "request rejected during authorization"
+            );
             (status, axum::Json(serde_json::json!({ "error": message }))).into_response()
+        }
+
+        /// Build a success response, omitting the JSON body for status codes that
+        /// must not carry one (`204 No Content`, `205 Reset Content`,
+        /// `304 Not Modified`). Without this, `RestResponse::no_content()` would
+        /// emit a `204` with a serialized `null` body and
+        /// `Content-Type: application/json`, which violates RFC 9110 and is
+        /// rejected by some proxies and clients.
+        #[allow(dead_code)]
+        fn __ras_success_response<T: serde::Serialize>(
+            status: axum::http::StatusCode,
+            body: T,
+        ) -> axum::response::Response {
+            use axum::response::IntoResponse;
+            if status == axum::http::StatusCode::NO_CONTENT
+                || status == axum::http::StatusCode::RESET_CONTENT
+                || status == axum::http::StatusCode::NOT_MODIFIED
+            {
+                status.into_response()
+            } else {
+                (status, axum::Json(body)).into_response()
+            }
         }
 
         /// Generated service trait
@@ -924,8 +1091,15 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
             }
 
             /// Enable cookie authentication alongside bearer tokens.
+            ///
+            /// Installs a default double-submit CSRF config when none is set,
+            /// because cookie credentials are CSRF-exploitable on unsafe methods.
+            /// Override with `csrf_protection`.
             pub fn auth_cookie(mut self, cookie: ras_auth_core::AuthCookieConfig) -> Self {
                 self.auth_transport.cookie = Some(cookie);
+                if self.auth_transport.csrf.is_none() {
+                    self.auth_transport.csrf = Some(ras_auth_core::CsrfConfig::default());
+                }
                 self
             }
 
@@ -972,6 +1146,8 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
                 self.auth_transport
                     .validate()
                     .expect("invalid auth transport configuration");
+
+                #provider_assertion
 
                 let mut router = axum::Router::new();
 
@@ -1254,6 +1430,7 @@ fn generate_query_struct(
 fn generate_canonical_route_registration(
     endpoint: &EndpointDefinition,
     query_struct_name: &Ident,
+    require_json: bool,
 ) -> proc_macro2::TokenStream {
     let method_routing = endpoint.method.as_axum_method();
     let path = &endpoint.path;
@@ -1265,7 +1442,8 @@ fn generate_canonical_route_registration(
         endpoint.request_type.as_ref(),
         query_struct_name,
     );
-    let handler_body = generate_handler_body(endpoint, handler_name, method_str, path);
+    let handler_body =
+        generate_handler_body(endpoint, handler_name, method_str, path, require_json);
     let permission_groups_code = rest_permission_groups_code(&endpoint.auth);
 
     quote! {
@@ -1300,6 +1478,7 @@ fn generate_legacy_route_registration(
     endpoint: &EndpointDefinition,
     version: &EndpointVersionDefinition,
     query_struct_name: &Ident,
+    require_json: bool,
 ) -> proc_macro2::TokenStream {
     let method_routing = endpoint.method.as_axum_method();
     let path = &version.path;
@@ -1309,7 +1488,7 @@ fn generate_legacy_route_registration(
         version.request_type.as_ref(),
         query_struct_name,
     );
-    let handler_body = generate_legacy_handler_body(service_name, endpoint, version);
+    let handler_body = generate_legacy_handler_body(service_name, endpoint, version, require_json);
     let permission_groups_code = rest_permission_groups_code(&endpoint.auth);
 
     quote! {
@@ -1343,10 +1522,12 @@ fn generate_legacy_handler_body(
     service_name: &Ident,
     endpoint: &EndpointDefinition,
     version: &EndpointVersionDefinition,
+    require_json: bool,
 ) -> proc_macro2::TokenStream {
     let handler_name = &endpoint.handler_name;
     let method = endpoint.method.as_str();
     let path = &version.path;
+    let body_limit_tokens = effective_body_limit_tokens(endpoint);
     let migration_type = &version.migration_type;
     let canonical_response_type = &endpoint.response_type;
     let legacy_response_type = &version.response_type;
@@ -1366,8 +1547,14 @@ fn generate_legacy_handler_body(
     let canonical_parts_ident = quote::format_ident!("canonical_parts");
     let mut canonical_args = rest_canonical_args_from_parts(endpoint, &canonical_parts_ident);
 
+    // Opt-in request headers, inserted before the auth arg is prepended below so
+    // the final order is [caller/user?, headers, path.., query.., body?].
+    if endpoint.with_headers {
+        canonical_args.insert(0, quote! { headers.clone() });
+    }
+
     let json_handling = if version.request_type.is_some() {
-        generate_body_extraction()
+        generate_body_extraction(require_json, &body_limit_tokens, method, path)
     } else {
         quote! {}
     };
@@ -1408,7 +1595,7 @@ fn generate_legacy_handler_body(
                         match <#migration_type as ras_rest_core::VersionMigration<#canonical_response_type, #legacy_response_type>>::migrate(rest_response.body) {
                             Ok(body) => body,
                             Err(e) => {
-                                tracing::error!(error = %e, "Response migration failed");
+                                ras_rest_core::tracing::error!(error = %e, "Response migration failed");
                                 return (
                                     axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                                     axum::Json(serde_json::json!({
@@ -1417,16 +1604,13 @@ fn generate_legacy_handler_body(
                                 ).into_response();
                             },
                         };
-                    (
-                        status_code,
-                        axum::Json(body)
-                    ).into_response()
+                    __ras_success_response(status_code, body)
                 },
                 Err(rest_error) => {
                     use axum::response::IntoResponse;
 
                     if let Some(internal) = &rest_error.internal_error {
-                        tracing::error!(error = ?internal, "Request failed with status {}", rest_error.status);
+                        ras_rest_core::tracing::error!(error = ?internal, "Request failed with status {}", rest_error.status);
                     }
 
                     let status_code = axum::http::StatusCode::from_u16(rest_error.status)
@@ -1498,7 +1682,7 @@ fn generate_legacy_handler_body(
                             match <#migration_type as ras_rest_core::VersionMigration<#canonical_response_type, #legacy_response_type>>::migrate(rest_response.body) {
                                 Ok(body) => body,
                                 Err(e) => {
-                                    tracing::error!(error = %e, "Response migration failed");
+                                    ras_rest_core::tracing::error!(error = %e, "Response migration failed");
                                     return (
                                         axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                                         axum::Json(serde_json::json!({
@@ -1507,16 +1691,13 @@ fn generate_legacy_handler_body(
                                     ).into_response();
                                 },
                             };
-                        (
-                            status_code,
-                            axum::Json(body)
-                        ).into_response()
+                        __ras_success_response(status_code, body)
                     },
                     Err(rest_error) => {
                         use axum::response::IntoResponse;
 
                         if let Some(internal) = &rest_error.internal_error {
-                            tracing::error!(error = ?internal, "Request failed with status {}", rest_error.status);
+                            ras_rest_core::tracing::error!(error = ?internal, "Request failed with status {}", rest_error.status);
                         }
 
                         let status_code = axum::http::StatusCode::from_u16(rest_error.status)
@@ -1591,7 +1772,7 @@ fn generate_legacy_handler_body(
                             match <#migration_type as ras_rest_core::VersionMigration<#canonical_response_type, #legacy_response_type>>::migrate(rest_response.body) {
                                 Ok(body) => body,
                                 Err(e) => {
-                                    tracing::error!(error = %e, "Response migration failed");
+                                    ras_rest_core::tracing::error!(error = %e, "Response migration failed");
                                     return (
                                         axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                                         axum::Json(serde_json::json!({
@@ -1600,16 +1781,13 @@ fn generate_legacy_handler_body(
                                     ).into_response();
                                 },
                             };
-                        (
-                            status_code,
-                            axum::Json(body)
-                        ).into_response()
+                        __ras_success_response(status_code, body)
                     },
                     Err(rest_error) => {
                         use axum::response::IntoResponse;
 
                         if let Some(internal) = &rest_error.internal_error {
-                            tracing::error!(error = ?internal, "Request failed with status {}", rest_error.status);
+                            ras_rest_core::tracing::error!(error = ?internal, "Request failed with status {}", rest_error.status);
                         }
 
                         let status_code = axum::http::StatusCode::from_u16(rest_error.status)
@@ -1676,30 +1854,147 @@ fn generate_axum_handler(
 }
 
 /// Generated code that reads and JSON-deserializes the request body from the
-/// raw `request` extractor, bounded by `__RAS_BODY_LIMIT`.
+/// raw `request` extractor, bounded by `limit`.
 ///
 /// For authenticated endpoints this must be emitted AFTER the
 /// auth/CSRF/permission block so unauthenticated clients cannot make the
 /// server buffer or parse payloads.
-fn generate_body_extraction() -> proc_macro2::TokenStream {
-    quote! {
-        let body = {
-            let body_bytes = match ::axum::body::to_bytes(request.into_body(), __RAS_BODY_LIMIT).await {
-                Ok(bytes) => bytes,
-                Err(_) => {
+///
+/// Behavior:
+/// * When `require_json` is set, a request whose `Content-Type` is not
+///   `application/json` (ignoring parameters like `; charset=utf-8`) is rejected
+///   with `415 Unsupported Media Type` before the body is read. Requiring
+///   `application/json` also forces a CORS preflight for cross-origin requests,
+///   which no CORS layer answers by default — defense-in-depth against
+///   simple-request CSRF on cookie-authenticated endpoints.
+/// * A declared `Content-Length` over `limit` is rejected with `413` up front so
+///   a subsequent `to_bytes` error is unambiguously a read failure (`400`),
+///   rather than the two being conflated as "too large".
+/// * A malformed JSON body is logged (category + line/column, never the rejected
+///   value) at `warn` before returning `400`, matching the handler-error logging
+///   convention.
+fn generate_body_extraction(
+    require_json: bool,
+    limit: &proc_macro2::TokenStream,
+    method: &str,
+    path: &str,
+) -> proc_macro2::TokenStream {
+    let content_type_check = if require_json {
+        quote! {
+            {
+                let __ras_content_type_ok = headers
+                    .get(axum::http::header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    .map(|value| {
+                        value
+                            .split(';')
+                            .next()
+                            .unwrap_or("")
+                            .trim()
+                            .eq_ignore_ascii_case("application/json")
+                    })
+                    .unwrap_or(false);
+                if !__ras_content_type_ok {
                     use axum::response::IntoResponse;
+                    ras_rest_core::tracing::warn!(
+                        method = #method,
+                        path = #path,
+                        "rejected request: Content-Type is not application/json"
+                    );
+                    return (
+                        axum::http::StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                        axum::Json(serde_json::json!({
+                            "error": "Unsupported Media Type: expected application/json"
+                        }))
+                    ).into_response();
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    quote! {
+        #content_type_check
+
+        let body = {
+            // Reject an over-declared Content-Length up front so a 413 is
+            // unambiguous without reading the body. A chunked body with no
+            // declared length is still capped by `to_bytes`; that error is then
+            // classified below (over-limit -> 413, genuine read error -> 400).
+            if let Some(__ras_declared_len) = headers
+                .get(axum::http::header::CONTENT_LENGTH)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<usize>().ok())
+            {
+                if __ras_declared_len > #limit {
+                    use axum::response::IntoResponse;
+                    ras_rest_core::tracing::warn!(
+                        method = #method,
+                        path = #path,
+                        declared_len = __ras_declared_len,
+                        limit = #limit,
+                        "rejected request: body exceeds limit"
+                    );
                     return (
                         axum::http::StatusCode::PAYLOAD_TOO_LARGE,
                         axum::Json(serde_json::json!({
-                            "error": "Request body too large or unreadable"
+                            "error": "Request body too large"
                         }))
+                    ).into_response();
+                }
+            }
+
+            let body_bytes = match ::axum::body::to_bytes(request.into_body(), #limit).await {
+                Ok(bytes) => bytes,
+                Err(__ras_body_err) => {
+                    use axum::response::IntoResponse;
+                    // `to_bytes` fails for both an over-limit body and a genuine
+                    // stream read error. axum wraps http_body_util's
+                    // `LengthLimitError` (Display: "length limit exceeded") for
+                    // the former; classify on it so a read failure is a 400 and
+                    // only a real overflow is a 413 — the two are no longer
+                    // conflated. (A body carrying a declared `Content-Length` over
+                    // the limit is already rejected above without being read.)
+                    let (__ras_status, __ras_client_msg) =
+                        if __ras_body_err.to_string().contains("length limit exceeded") {
+                            (
+                                axum::http::StatusCode::PAYLOAD_TOO_LARGE,
+                                "Request body too large",
+                            )
+                        } else {
+                            (
+                                axum::http::StatusCode::BAD_REQUEST,
+                                "Could not read request body",
+                            )
+                        };
+                    ras_rest_core::tracing::warn!(
+                        method = #method,
+                        path = #path,
+                        status = __ras_status.as_u16(),
+                        "rejected request: {}",
+                        __ras_client_msg
+                    );
+                    return (
+                        __ras_status,
+                        axum::Json(serde_json::json!({ "error": __ras_client_msg }))
                     ).into_response();
                 },
             };
             match serde_json::from_slice(&body_bytes) {
                 Ok(body) => body,
-                Err(_) => {
+                Err(__ras_json_err) => {
                     use axum::response::IntoResponse;
+                    // Log the classification and location so the reason is
+                    // recoverable server-side; never log the rejected value.
+                    ras_rest_core::tracing::warn!(
+                        method = #method,
+                        path = #path,
+                        category = ?__ras_json_err.classify(),
+                        line = __ras_json_err.line(),
+                        column = __ras_json_err.column(),
+                        "rejected request: malformed JSON body"
+                    );
                     return (
                         axum::http::StatusCode::BAD_REQUEST,
                         axum::Json(serde_json::json!({
@@ -1712,17 +2007,33 @@ fn generate_body_extraction() -> proc_macro2::TokenStream {
     }
 }
 
+/// The effective body-size limit expression for an endpoint: its per-endpoint
+/// `body_limit` override when set, otherwise the service-level `__RAS_BODY_LIMIT`.
+fn effective_body_limit_tokens(endpoint: &EndpointDefinition) -> proc_macro2::TokenStream {
+    match endpoint.body_limit {
+        Some(limit) => quote! { #limit },
+        None => quote! { __RAS_BODY_LIMIT },
+    }
+}
+
 fn generate_handler_body(
     endpoint: &EndpointDefinition,
     handler_name: &Ident,
     method: &str,
     path: &str,
+    require_json: bool,
 ) -> proc_macro2::TokenStream {
+    let body_limit_tokens = effective_body_limit_tokens(endpoint);
     // Handle authentication if required
     match &endpoint.auth {
         AuthRequirement::Unauthorized => {
             // Build argument list for unauthorized endpoint
             let mut args = Vec::new();
+
+            // Opt-in request headers (before path params)
+            if endpoint.with_headers {
+                args.push(quote! { headers.clone() });
+            }
 
             // Add path parameters
             if endpoint.path_params.len() == 1 {
@@ -1743,7 +2054,7 @@ fn generate_handler_body(
             // Handle JSON body extraction with error handling
             let json_handling = if endpoint.request_type.is_some() {
                 args.push(quote! { body });
-                generate_body_extraction()
+                generate_body_extraction(require_json, &body_limit_tokens, method, path)
             } else {
                 quote! {}
             };
@@ -1763,20 +2074,16 @@ fn generate_handler_body(
 
                 let result = match service.#handler_name(#(#args),*).await {
                     Ok(rest_response) => {
-                        use axum::response::IntoResponse;
                         let status_code = axum::http::StatusCode::from_u16(rest_response.status)
                             .unwrap_or(axum::http::StatusCode::OK);
-                        (
-                            status_code,
-                            axum::Json(rest_response.body)
-                        ).into_response()
+                        __ras_success_response(status_code, rest_response.body)
                     },
                     Err(rest_error) => {
                         use axum::response::IntoResponse;
 
                         // Log internal error if present
                         if let Some(internal) = &rest_error.internal_error {
-                            tracing::error!(error = ?internal, "Request failed with status {}", rest_error.status);
+                            ras_rest_core::tracing::error!(error = ?internal, "Request failed with status {}", rest_error.status);
                         }
 
                         let status_code = axum::http::StatusCode::from_u16(rest_error.status)
@@ -1804,6 +2111,11 @@ fn generate_handler_body(
             // Build argument list; the caller is passed by value as the first arg.
             let mut args = vec![quote! { caller }];
 
+            // Opt-in request headers (after the caller, before path params)
+            if endpoint.with_headers {
+                args.push(quote! { headers.clone() });
+            }
+
             // Add path parameters
             if endpoint.path_params.len() == 1 {
                 args.push(quote! { path_params });
@@ -1823,7 +2135,7 @@ fn generate_handler_body(
             // Handle JSON body extraction with error handling
             let json_handling = if endpoint.request_type.is_some() {
                 args.push(quote! { body });
-                generate_body_extraction()
+                generate_body_extraction(require_json, &body_limit_tokens, method, path)
             } else {
                 quote! {}
             };
@@ -1855,19 +2167,15 @@ fn generate_handler_body(
 
                 let result = match service.#handler_name(#(#args),*).await {
                     Ok(rest_response) => {
-                        use axum::response::IntoResponse;
                         let status_code = axum::http::StatusCode::from_u16(rest_response.status)
                             .unwrap_or(axum::http::StatusCode::OK);
-                        (
-                            status_code,
-                            axum::Json(rest_response.body)
-                        ).into_response()
+                        __ras_success_response(status_code, rest_response.body)
                     },
                     Err(rest_error) => {
                         use axum::response::IntoResponse;
 
                         if let Some(internal) = &rest_error.internal_error {
-                            tracing::error!(error = ?internal, "Request failed with status {}", rest_error.status);
+                            ras_rest_core::tracing::error!(error = ?internal, "Request failed with status {}", rest_error.status);
                         }
 
                         let status_code = axum::http::StatusCode::from_u16(rest_error.status)
@@ -1895,6 +2203,11 @@ fn generate_handler_body(
             // Build argument list for authenticated endpoint
             let mut args = vec![quote! { &user }];
 
+            // Opt-in request headers (after the user, before path params)
+            if endpoint.with_headers {
+                args.push(quote! { headers.clone() });
+            }
+
             // Add path parameters
             if endpoint.path_params.len() == 1 {
                 args.push(quote! { path_params });
@@ -1914,7 +2227,7 @@ fn generate_handler_body(
             // Handle JSON body extraction with error handling
             let json_handling = if endpoint.request_type.is_some() {
                 args.push(quote! { body });
-                generate_body_extraction()
+                generate_body_extraction(require_json, &body_limit_tokens, method, path)
             } else {
                 quote! {}
             };
@@ -1948,20 +2261,16 @@ fn generate_handler_body(
 
                 let result = match service.#handler_name(#(#args),*).await {
                     Ok(rest_response) => {
-                        use axum::response::IntoResponse;
                         let status_code = axum::http::StatusCode::from_u16(rest_response.status)
                             .unwrap_or(axum::http::StatusCode::OK);
-                        (
-                            status_code,
-                            axum::Json(rest_response.body)
-                        ).into_response()
+                        __ras_success_response(status_code, rest_response.body)
                     },
                     Err(rest_error) => {
                         use axum::response::IntoResponse;
 
                         // Log internal error if present
                         if let Some(internal) = &rest_error.internal_error {
-                            tracing::error!(error = ?internal, "Request failed with status {}", rest_error.status);
+                            ras_rest_core::tracing::error!(error = ?internal, "Request failed with status {}", rest_error.status);
                         }
 
                         let status_code = axum::http::StatusCode::from_u16(rest_error.status)

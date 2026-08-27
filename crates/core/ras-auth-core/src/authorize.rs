@@ -31,9 +31,13 @@ pub enum AuthorizeError {
 ///
 /// `groups` is a disjunction of conjunctions: access is granted when the user
 /// holds every permission of at least one group (verified through the
-/// provider's `check_permissions`, which custom providers may override). A
-/// group list with no non-empty groups — `WITH_PERMISSIONS([])` or any empty
-/// inner group — grants access to any authenticated user.
+/// provider's `check_permissions`, which custom providers may override).
+///
+/// An empty group means "any authenticated user", but *only* as the entire
+/// requirement — `WITH_PERMISSIONS([])`, i.e. no groups or only empty groups.
+/// An empty group mixed with non-empty siblings (`["admin"] | []`) is ignored
+/// here rather than treated as a blanket grant; the service macros reject that
+/// shape at compile time, and this runtime guard is the belt-and-suspenders.
 pub fn check_permission_groups<P>(
     provider: &P,
     user: &AuthenticatedUser,
@@ -42,12 +46,12 @@ pub fn check_permission_groups<P>(
 where
     P: AuthProvider + ?Sized,
 {
-    if !groups.iter().any(|group| !group.is_empty()) {
+    if groups.iter().all(|group| group.is_empty()) {
         return Ok(());
     }
 
     for group in groups {
-        if group.is_empty() || provider.check_permissions(user, group).is_ok() {
+        if !group.is_empty() && provider.check_permissions(user, group).is_ok() {
             return Ok(());
         }
     }
@@ -66,14 +70,13 @@ where
 /// an auth provider (e.g. the bidirectional WebSocket handler, which
 /// authorizes against the cached connection user).
 pub fn user_satisfies_permission_groups(user: &AuthenticatedUser, groups: &[Vec<String>]) -> bool {
-    if !groups.iter().any(|group| !group.is_empty()) {
+    if groups.iter().all(|group| group.is_empty()) {
         return true;
     }
 
     groups
         .iter()
         .any(|group| !group.is_empty() && group.iter().all(|perm| user.permissions.contains(perm)))
-        || groups.iter().any(|group| group.is_empty())
 }
 
 /// The credential → CSRF → authenticate → permission pipeline shared by the
@@ -194,8 +197,21 @@ mod tests {
     }
 
     #[test]
-    fn empty_inner_group_grants_any_authenticated_user() {
+    fn empty_inner_group_mixed_with_non_empty_does_not_grant_any_authenticated_user() {
+        // `["admin"] | []` must NOT collapse to authenticated-only. A user with
+        // no permissions is denied; only a user actually holding `admin` passes.
         let g = groups(&[&["admin"], &[]]);
+        assert!(check_permission_groups(&StaticProvider, &user(&[]), &g).is_err());
+        assert!(!user_satisfies_permission_groups(&user(&[]), &g));
+
+        assert!(check_permission_groups(&StaticProvider, &user(&["admin"]), &g).is_ok());
+        assert!(user_satisfies_permission_groups(&user(&["admin"]), &g));
+    }
+
+    #[test]
+    fn only_empty_groups_are_authenticated_only() {
+        // `[[]]` — a single empty group — remains authenticated-only, same as `[]`.
+        let g = groups(&[&[]]);
         assert!(check_permission_groups(&StaticProvider, &user(&[]), &g).is_ok());
         assert!(user_satisfies_permission_groups(&user(&[]), &g));
     }

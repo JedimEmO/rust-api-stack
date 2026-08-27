@@ -1,6 +1,6 @@
 [package]
 name = "ras-observability-otel"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
 description = "OpenTelemetry implementation for Rust Agent Stack observability"
@@ -10,8 +10,8 @@ homepage = "https://github.com/JedimEmO/rust-api-stack"
 readme = "README.md"
 
 [dependencies]
-ras-observability-core = { path = "../../core/ras-observability-core", version = "0.1.0" }
-ras-auth-core = { path = "../../core/ras-auth-core", version = "0.1.0" }
+ras-observability-core = { path = "../../core/ras-observability-core", version = "0.2.0" }
+ras-auth-core = { path = "../../core/ras-auth-core", version = "0.2.0" }
 
 # OpenTelemetry dependencies
 opentelemetry = { workspace = true }

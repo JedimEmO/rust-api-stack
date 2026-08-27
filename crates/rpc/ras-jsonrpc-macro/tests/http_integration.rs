@@ -1,7 +1,5 @@
 use rand::Rng;
-use ras_jsonrpc_core::{
-    AuthCookieConfig, AuthError, AuthFuture, AuthProvider, AuthenticatedUser, CsrfConfig,
-};
+use ras_jsonrpc_core::{AuthCookieConfig, AuthError, AuthFuture, AuthProvider, AuthenticatedUser};
 use ras_jsonrpc_macro::jsonrpc_service;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -265,15 +263,13 @@ fn create_test_server() -> axum_test::TestServer {
         .unwrap()
 }
 
-fn create_cookie_test_server(csrf: bool) -> axum_test::TestServer {
-    let mut builder = TestServiceBuilder::new(TestServiceImpl)
+// `auth_cookie` now always installs a default double-submit CSRF config (H2),
+// so there is no cookie-without-CSRF server to construct.
+fn create_cookie_test_server() -> axum_test::TestServer {
+    let builder = TestServiceBuilder::new(TestServiceImpl)
         .base_url("/rpc")
         .auth_provider(TestAuthProvider::new())
         .auth_cookie(AuthCookieConfig::default());
-
-    if csrf {
-        builder = builder.csrf_protection(CsrfConfig::default());
-    }
 
     let app = builder.build().expect("Failed to build app");
     axum_test::TestServer::builder()
@@ -428,7 +424,7 @@ async fn test_authentication_required_methods() {
 
 #[tokio::test]
 async fn test_cookie_auth_coexists_with_bearer_tokens() {
-    let server = create_cookie_test_server(false);
+    let server = create_cookie_test_server();
     let request_body = json!({
         "jsonrpc": "2.0",
         "method": "get_user_info",
@@ -436,9 +432,14 @@ async fn test_cookie_auth_coexists_with_bearer_tokens() {
         "id": 1
     });
 
+    // Cookie auth on a POST now requires the double-submit CSRF header (H2).
     let response: Value = server
         .post("/rpc")
-        .add_header("Cookie", "__Host-ras-session=valid-user-token")
+        .add_header(
+            "Cookie",
+            "__Host-ras-session=valid-user-token; __Host-ras-csrf=csrf-token",
+        )
+        .add_header("x-ras-csrf", "csrf-token")
         .json(&request_body)
         .await
         .json();
@@ -469,7 +470,7 @@ async fn test_cookie_auth_coexists_with_bearer_tokens() {
 
 #[tokio::test]
 async fn test_cookie_auth_csrf_guard_for_jsonrpc_posts() {
-    let server = create_cookie_test_server(true);
+    let server = create_cookie_test_server();
     let request_body = json!({
         "jsonrpc": "2.0",
         "method": "get_user_info",

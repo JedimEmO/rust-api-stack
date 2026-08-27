@@ -32,6 +32,29 @@ mod static_hosting;
 /// });
 /// ```
 ///
+/// # Service options
+///
+/// Optional fields alongside `service_name` / `methods`:
+///
+/// * `require_json_content_type: <bool>` (default `true`) — reject a request
+///   whose `Content-Type` is not `application/json` with `415` before parsing.
+///   Requiring `application/json` forces a CORS preflight for cross-origin
+///   requests, closing the simple-request CSRF shape. Set to `false` to accept
+///   any content type (e.g. for a device client that cannot set the header).
+/// * `body_limit: <bytes>` (default 2 MiB) — maximum request body size.
+/// * `openrpc: true` / `explorer: true` — emit the OpenRPC document and host the
+///   API explorer.
+/// * `docs_require_auth: <bool>` (default `false`) — when the explorer is
+///   enabled, gate the explorer page and `openrpc.json` behind authentication
+///   (any authenticated user). Default is public, matching conventional API
+///   explorers; the RPC endpoint itself is never gated by this option.
+/// * `feature_gated: <bool>` — wrap the server/client in the consumer crate's own
+///   `server`/`client` features.
+///
+/// A malformed JSON body and authentication/authorization rejections are logged
+/// server-side (via `tracing`); a service with any `WITH_PERMISSIONS` method (or
+/// a gated explorer) that is built without an auth provider fails `build()`.
+///
 /// See the tests for further usage examples.
 #[proc_macro]
 pub fn jsonrpc_service(input: TokenStream) -> TokenStream {
@@ -49,8 +72,20 @@ struct ServiceDefinition {
     openrpc: Option<OpenRpcConfig>,
     explorer: Option<ExplorerConfig>,
     feature_gated: bool,
+    /// Require an `application/json` request `Content-Type`. Defaults to `true`.
+    /// Set `require_json_content_type: false` to accept any content type.
+    require_json_content_type: bool,
+    /// Maximum request body size in bytes. Defaults to 2 MiB (axum's default).
+    body_limit: Option<usize>,
+    /// Gate the explorer page and `openrpc.json` behind authentication (any
+    /// authenticated user). Defaults to `false` — the explorer is public when
+    /// enabled, matching conventional API-explorer behavior.
+    docs_require_auth: bool,
     methods: Vec<MethodDefinition>,
 }
+
+/// Default maximum JSON body size in bytes (matches axum's default).
+const DEFAULT_BODY_LIMIT: usize = 2 * 1024 * 1024;
 
 #[derive(Debug)]
 enum OpenRpcConfig {
@@ -173,6 +208,9 @@ impl Parse for ServiceDefinition {
         let mut openrpc = None;
         let mut explorer = None;
         let mut feature_gated = false;
+        let mut require_json_content_type = true;
+        let mut body_limit = None;
+        let mut docs_require_auth = false;
 
         // Parse optional fields until we hit "methods"
         while content.peek(Ident) {
@@ -221,6 +259,20 @@ impl Parse for ServiceDefinition {
             } else if field_name == "feature_gated" {
                 let enabled = content.parse::<syn::LitBool>()?;
                 feature_gated = enabled.value();
+            } else if field_name == "require_json_content_type" {
+                let enabled = content.parse::<syn::LitBool>()?;
+                require_json_content_type = enabled.value();
+            } else if field_name == "body_limit" {
+                let limit = content.parse::<syn::LitInt>()?;
+                body_limit = Some(limit.base10_parse::<usize>()?);
+            } else if field_name == "docs_require_auth" {
+                let enabled = content.parse::<syn::LitBool>()?;
+                docs_require_auth = enabled.value();
+            } else {
+                return Err(syn::Error::new(
+                    field_name.span(),
+                    format!("Unknown field: {field_name}"),
+                ));
             }
 
             let _ = content.parse::<Token![,]>()?;
@@ -249,6 +301,9 @@ impl Parse for ServiceDefinition {
             openrpc,
             explorer,
             feature_gated,
+            require_json_content_type,
+            body_limit,
+            docs_require_auth,
             methods,
         })
     }
@@ -303,6 +358,18 @@ impl Parse for MethodDefinition {
                             }
                         }
                         permission_groups.push(group);
+                    }
+
+                    if permission_groups.len() > 1
+                        && permission_groups.iter().any(|group| group.is_empty())
+                    {
+                        return Err(syn::Error::new(
+                            auth_ident.span(),
+                            "an empty permission group is only valid as the entire requirement \
+                             (WITH_PERMISSIONS([]), meaning any authenticated user); mixing an \
+                             empty group with non-empty groups would silently grant access to any \
+                             authenticated user",
+                        ));
                     }
 
                     AuthRequirement::WithPermissions(permission_groups)
@@ -559,20 +626,138 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
 
 fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenStream {
     let service_name = &service_def.service_name;
+    let service_name_str = service_name.to_string();
     let service_trait_name = quote::format_ident!("{}Trait", service_name);
     let builder_name = quote::format_ident!("{}Builder", service_name);
 
-    // Generate explorer route integration if enabled
-    let explorer_route_integration =
-        if service_def.explorer.is_some() && service_def.openrpc.is_some() {
-            let service_name_str = service_name.to_string();
-            let service_name_lower = service_name_str.to_lowercase();
-            let explorer_routes_fn_str = [&service_name_lower, "_explorer_routes"].concat();
-            let explorer_routes_fn = syn::Ident::new(&explorer_routes_fn_str, service_name.span());
-            quote! { router = router.merge(#explorer_routes_fn(&base_url)); }
+    let explorer_enabled = service_def.explorer.is_some() && service_def.openrpc.is_some();
+
+    // Content-Type gate (#1): reject a non-`application/json` body with 415 before
+    // parsing. Requiring `application/json` forces a CORS preflight for
+    // cross-origin requests, closing the simple-request CSRF shape.
+    let content_type_gate = if service_def.require_json_content_type {
+        quote! {
+            {
+                let __ras_content_type_ok = headers
+                    .get(axum::http::header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    .map(|value| {
+                        value
+                            .split(';')
+                            .next()
+                            .unwrap_or("")
+                            .trim()
+                            .eq_ignore_ascii_case("application/json")
+                    })
+                    .unwrap_or(false);
+                if !__ras_content_type_ok {
+                    ras_jsonrpc_core::tracing::warn!(
+                        "rejected JSON-RPC request: Content-Type is not application/json"
+                    );
+                    return (
+                        axum::http::StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                        [("Content-Type", "application/json")],
+                        serde_json::to_string(&ras_jsonrpc_types::JsonRpcResponse::error(
+                            ras_jsonrpc_types::JsonRpcError::invalid_request(),
+                            None,
+                        ))
+                        .unwrap_or_else(|_| "{}".to_string()),
+                    );
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    // Body-size cap (#6a): apply as a DefaultBodyLimit layer so an over-limit body
+    // is rejected by the extractor before the handler runs.
+    let body_limit_value = service_def.body_limit.unwrap_or(DEFAULT_BODY_LIMIT);
+
+    // Startup assertion (#6c): a service with any WITH_PERMISSIONS method (or a
+    // gated explorer) needs an auth provider, else every such call silently fails
+    // authentication at runtime. Fail the build instead.
+    let any_route_requires_auth = service_def
+        .methods
+        .iter()
+        .any(|method| matches!(method.auth, AuthRequirement::WithPermissions(_)))
+        || (explorer_enabled && service_def.docs_require_auth);
+    let provider_check = if any_route_requires_auth {
+        quote! {
+            if self.auth_provider.is_none() {
+                return Err(concat!(
+                    "JSON-RPC service `",
+                    #service_name_str,
+                    "` has methods requiring authorization (WITH_PERMISSIONS) but no ",
+                    "auth_provider was configured; call .auth_provider(...) before build()"
+                )
+                .to_string());
+            }
+        }
+    } else {
+        quote! {}
+    };
+
+    // Explorer route integration (#4): merge the explorer/openrpc routes, gated
+    // behind authentication when `docs_require_auth` is set. The default explorer
+    // routes function stays public and unchanged; gating is applied here (where
+    // the built service, and thus the auth config, is in scope) via a layer.
+    let explorer_route_integration = if explorer_enabled {
+        let service_name_lower = service_name_str.to_lowercase();
+        let explorer_routes_fn_str = [&service_name_lower, "_explorer_routes"].concat();
+        let explorer_routes_fn = syn::Ident::new(&explorer_routes_fn_str, service_name.span());
+        if service_def.docs_require_auth {
+            quote! {
+                {
+                    let __ras_docs_service = service.clone();
+                    // `route_layer` (not `layer`) so the gate runs only for the
+                    // explorer/openrpc routes that actually match — an unrelated
+                    // path 404s without the middleware, and the RPC endpoint
+                    // (a separate route) is never gated.
+                    let __ras_explorer = #explorer_routes_fn(&base_url).route_layer(
+                        axum::middleware::from_fn(move |__ras_req: axum::extract::Request, __ras_next: axum::middleware::Next| {
+                            let __ras_docs_service = __ras_docs_service.clone();
+                            async move {
+                                use axum::response::IntoResponse;
+                                let __ras_headers = __ras_req.headers().clone();
+                                let __ras_empty: Vec<Vec<String>> = Vec::new();
+                                match ras_jsonrpc_core::authorize_request(
+                                    "GET",
+                                    &__ras_headers,
+                                    &__ras_docs_service.auth_transport,
+                                    __ras_docs_service.auth_provider.as_deref(),
+                                    &__ras_empty,
+                                ).await {
+                                    Ok(_) => __ras_next.run(__ras_req).await,
+                                    Err(__ras_err) => {
+                                        let __ras_status = match __ras_err {
+                                            ras_jsonrpc_core::AuthorizeError::CsrfValidationFailed
+                                            | ras_jsonrpc_core::AuthorizeError::InsufficientPermissions(_) =>
+                                                axum::http::StatusCode::FORBIDDEN,
+                                            ras_jsonrpc_core::AuthorizeError::NoAuthProvider =>
+                                                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                                            _ => axum::http::StatusCode::UNAUTHORIZED,
+                                        };
+                                        ras_jsonrpc_core::tracing::warn!(status = __ras_status.as_u16(), "explorer request rejected");
+                                        (
+                                            __ras_status,
+                                            [("Content-Type", "application/json")],
+                                            serde_json::json!({ "error": "Authentication required" }).to_string(),
+                                        ).into_response()
+                                    }
+                                }
+                            }
+                        })
+                    );
+                    router = router.merge(__ras_explorer);
+                }
+            }
         } else {
-            quote! {}
-        };
+            quote! { router = router.merge(#explorer_routes_fn(&base_url)); }
+        }
+    } else {
+        quote! {}
+    };
 
     // Generate trait methods
     let trait_methods = service_def.methods.iter().map(|method| {
@@ -672,8 +857,15 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
             }
 
             /// Enable cookie authentication alongside bearer tokens.
+            ///
+            /// Installs a default double-submit CSRF config when none is set,
+            /// because cookie credentials are CSRF-exploitable on unsafe methods.
+            /// Override with `csrf_protection`.
             pub fn auth_cookie(mut self, cookie: ras_jsonrpc_core::AuthCookieConfig) -> Self {
                 self.auth_transport.cookie = Some(cookie);
+                if self.auth_transport.csrf.is_none() {
+                    self.auth_transport.csrf = Some(ras_jsonrpc_core::CsrfConfig::default());
+                }
                 self
             }
 
@@ -721,12 +913,21 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
                     .validate()
                     .map_err(|err| err.to_string())?;
 
+                #provider_check
+
                 let base_url = self.base_url.clone();
                 let service = std::sync::Arc::new(self);
 
-                let rpc_handler = axum::routing::post(move |headers: axum::http::HeaderMap, body: String| {
+                let rpc_handler = axum::routing::post({
+                    // Clone into the handler so the outer `service` survives for
+                    // the (optional) docs auth gate below.
+                    let service = service.clone();
+                    move |headers: axum::http::HeaderMap, body: String| {
                     let service = service.clone();
                     async move {
+                        // Reject a non-`application/json` body with 415 before parsing.
+                        #content_type_gate
+
                         let response = service.handle_request(headers, body).await;
 
                         // Determine HTTP status code based on JSON-RPC error code
@@ -744,11 +945,25 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
                             axum::http::StatusCode::OK
                         };
 
+                        // Rejections otherwise bypass the usage/duration trackers
+                        // (which run mid-dispatch); log auth/CSRF/permission
+                        // rejections here so a bad-credential caller is observable.
+                        if status_code != axum::http::StatusCode::OK {
+                            if let Some(ref error) = response.error {
+                                ras_jsonrpc_core::tracing::warn!(
+                                    status = status_code.as_u16(),
+                                    code = error.code,
+                                    "JSON-RPC request rejected"
+                                );
+                            }
+                        }
+
                         (
                             status_code,
                             [("Content-Type", "application/json")],
                             serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string())
                         )
+                    }
                     }
                 });
 
@@ -756,6 +971,9 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
 
                 // Add the JSON-RPC endpoint
                 router = router.route(&base_url, rpc_handler);
+
+                // Bound the request body size for the JSON-RPC endpoint (#6a).
+                router = router.layer(axum::extract::DefaultBodyLimit::max(#body_limit_value));
 
                 // Include explorer routes if explorer is enabled
                 #explorer_route_integration
@@ -767,7 +985,17 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
                 // Parse JSON-RPC request
                 let request: ras_jsonrpc_types::JsonRpcRequest = match serde_json::from_str(&body) {
                     Ok(req) => req,
-                    Err(_) => return ras_jsonrpc_types::JsonRpcResponse::error(ras_jsonrpc_types::JsonRpcError::parse_error(), None),
+                    Err(__ras_json_err) => {
+                        // Log the classification and location so the reason is
+                        // recoverable server-side; never log the rejected value.
+                        ras_jsonrpc_core::tracing::warn!(
+                            category = ?__ras_json_err.classify(),
+                            line = __ras_json_err.line(),
+                            column = __ras_json_err.column(),
+                            "rejected JSON-RPC request: malformed JSON body"
+                        );
+                        return ras_jsonrpc_types::JsonRpcResponse::error(ras_jsonrpc_types::JsonRpcError::parse_error(), None);
+                    }
                 };
 
                 let request_id = request.id.clone();
@@ -907,12 +1135,14 @@ fn jsonrpc_auth_check_code(
                     let required_permission_groups: Vec<Vec<String>> = #permission_groups_code;
                     let provider = self.auth_provider.as_ref().expect("auth provider required for WITH_PERMISSIONS methods");
                     if let Err(error) = ras_jsonrpc_core::check_permission_groups(provider.as_ref(), user, &required_permission_groups) {
-                        let (required, has) = match error {
-                            ras_jsonrpc_core::AuthError::InsufficientPermissions { required, has } => (required, has),
-                            _ => (Vec::new(), Vec::new()),
+                        // Only `required` is surfaced to the client; the caller's
+                        // full grant set (`has`) stays server-side (M1).
+                        let required = match error {
+                            ras_jsonrpc_core::AuthError::InsufficientPermissions { required, .. } => required,
+                            _ => Vec::new(),
                         };
                         return ras_jsonrpc_types::JsonRpcResponse::error(
-                            ras_jsonrpc_types::JsonRpcError::insufficient_permissions(required, has),
+                            ras_jsonrpc_types::JsonRpcError::insufficient_permissions(required),
                             request.id.clone()
                         );
                     }

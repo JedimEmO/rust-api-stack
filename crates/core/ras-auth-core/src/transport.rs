@@ -6,11 +6,35 @@ use cookie::{
 };
 use http::header::{AUTHORIZATION, COOKIE, HeaderName, SET_COOKIE};
 use http::{HeaderMap, HeaderValue};
+use subtle::ConstantTimeEq;
 use thiserror::Error;
 
 const DEFAULT_COOKIE_NAME: &str = "__Host-ras-session";
 const DEFAULT_CSRF_COOKIE_NAME: &str = "__Host-ras-csrf";
 const DEFAULT_CSRF_HEADER: &str = "x-ras-csrf";
+
+/// Header names that provide no CSRF protection because a browser either sends
+/// them automatically cross-origin (CORS-safelisted request headers) or
+/// populates them itself (forbidden headers a page cannot control). A CSRF
+/// header must be a custom header, since only a custom header forces a CORS
+/// preflight that a cross-site attacker cannot satisfy.
+const CSRF_UNSAFE_HEADER_NAMES: &[&str] = &[
+    // CORS-safelisted request headers — sent cross-origin without a preflight.
+    "accept",
+    "accept-language",
+    "content-language",
+    "content-type",
+    // Browser-controlled / forbidden headers — auto-sent, not page-settable.
+    "cookie",
+    "origin",
+    "referer",
+    "host",
+    "user-agent",
+    "content-length",
+    "connection",
+    "accept-encoding",
+    "date",
+];
 
 /// Source from which an authentication token was extracted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -398,6 +422,23 @@ impl CsrfConfig {
 
     /// Validate CSRF configuration.
     pub fn validate(&self) -> Result<(), AuthTransportError> {
+        // A CORS-safelisted or browser-controlled header name provides zero CSRF
+        // protection (it is sent automatically cross-origin), so reject it —
+        // otherwise `header_presence_only(HeaderName::from_static("accept"))`
+        // would produce a config that passes validation but never blocks a
+        // forged request.
+        let header = self.header_name.as_str();
+        if CSRF_UNSAFE_HEADER_NAMES
+            .iter()
+            .any(|name| header.eq_ignore_ascii_case(name))
+        {
+            return Err(AuthTransportError::InvalidCsrfConfig(format!(
+                "CSRF header `{header}` is CORS-safelisted or browser-controlled \
+                 and provides no protection; use a custom header name (e.g. \
+                 `x-csrf-token`)"
+            )));
+        }
+
         if let Some(expected) = &self.expected_value
             && expected.trim().is_empty()
         {
@@ -433,7 +474,7 @@ impl CsrfConfig {
         }
 
         if let Some(expected) = &self.expected_value
-            && value != expected
+            && !ct_eq_str(value, expected)
         {
             return Err(AuthTransportError::CsrfValidationFailed);
         }
@@ -447,7 +488,7 @@ impl CsrfConfig {
                 return Err(AuthTransportError::CsrfValidationFailed);
             };
 
-            if cookie_value.trim().is_empty() || cookie_value != value {
+            if cookie_value.trim().is_empty() || !ct_eq_str(&cookie_value, value) {
                 return Err(AuthTransportError::CsrfValidationFailed);
             }
         }
@@ -495,8 +536,16 @@ impl Default for AuthTransportConfig {
 
 impl AuthTransportConfig {
     /// Enable cookie auth alongside the default bearer transport.
+    ///
+    /// Cookie credentials are vulnerable to CSRF on unsafe methods, so this also
+    /// installs a default double-submit [`CsrfConfig`] when none is configured
+    /// yet. Override it with [`Self::with_csrf`] if you need a different policy;
+    /// there is intentionally no builder path to cookie auth without CSRF.
     pub fn with_cookie(mut self, cookie: AuthCookieConfig) -> Self {
         self.cookie = Some(cookie);
+        if self.csrf.is_none() {
+            self.csrf = Some(CsrfConfig::default());
+        }
         self
     }
 
@@ -517,6 +566,18 @@ impl AuthTransportConfig {
         if !self.bearer && self.cookie.is_none() {
             return Err(AuthTransportError::InvalidAuthTransportConfig(
                 "at least one auth transport must be enabled".to_string(),
+            ));
+        }
+
+        // Cookie credentials are automatically attached by the browser, so
+        // cookie auth without a CSRF guard lets any cross-site request act as
+        // the victim on unsafe methods. `with_cookie` installs a default CSRF
+        // config; a struct literal that clears it must fail closed here.
+        if self.cookie.is_some() && self.csrf.is_none() {
+            return Err(AuthTransportError::InvalidAuthTransportConfig(
+                "cookie auth requires a CSRF configuration; use with_cookie (which sets a \
+                 default double-submit CsrfConfig) or with_csrf"
+                    .to_string(),
             ));
         }
 
@@ -633,6 +694,14 @@ fn redact_header(headers: &mut HeaderMap, name: HeaderName) {
         headers.remove(&name);
         headers.insert(name, HeaderValue::from_static("[REDACTED]"));
     }
+}
+
+/// Constant-time string comparison for CSRF tokens.
+///
+/// Length is allowed to leak (subtle short-circuits on differing lengths), but
+/// equal-length values are compared without an input-dependent early return.
+fn ct_eq_str(a: &str, b: &str) -> bool {
+    a.as_bytes().ct_eq(b.as_bytes()).into()
 }
 
 fn is_unsafe_method(method: &str) -> bool {
@@ -926,6 +995,81 @@ mod tests {
             HeaderValue::from_static("[REDACTED]")
         );
         assert_eq!(redacted.get("user-agent").unwrap(), "test-agent");
+    }
+
+    #[test]
+    fn with_cookie_installs_default_csrf_and_validates() {
+        let config = AuthTransportConfig::default().with_cookie(AuthCookieConfig::default());
+
+        assert!(config.csrf.is_some());
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn csrf_config_rejects_cors_safelisted_header_names() {
+        // A safelisted / browser-controlled header name provides no CSRF
+        // protection and must fail validation even though it is "present".
+        for name in [
+            "accept",
+            "content-type",
+            "Accept-Language",
+            "cookie",
+            "origin",
+        ] {
+            let csrf =
+                CsrfConfig::header_presence_only(HeaderName::from_bytes(name.as_bytes()).unwrap());
+            let error = csrf.validate().expect_err(name);
+            assert!(
+                matches!(error, AuthTransportError::InvalidCsrfConfig(_)),
+                "{name} should be rejected"
+            );
+        }
+
+        // A genuinely custom header (forces a CORS preflight) is accepted.
+        let ok = CsrfConfig::header_presence_only(HeaderName::from_static("x-csrf-token"));
+        assert!(ok.validate().is_ok());
+    }
+
+    #[test]
+    fn cookie_without_csrf_fails_validate() {
+        let config = AuthTransportConfig {
+            bearer: true,
+            cookie: Some(AuthCookieConfig::default()),
+            csrf: None,
+        };
+
+        let error = config.validate().unwrap_err();
+
+        assert!(matches!(
+            error,
+            AuthTransportError::InvalidAuthTransportConfig(_)
+        ));
+    }
+
+    #[test]
+    fn with_cookie_default_still_requires_csrf_header_on_unsafe_cookie_request() {
+        let config = AuthTransportConfig::default().with_cookie(AuthCookieConfig::default());
+        let cookie = AuthCredential::new("cookie-token", AuthTokenSource::Cookie);
+
+        // No CSRF header present -> unsafe cookie request is rejected.
+        assert_eq!(
+            validate_csrf_for_credential("POST", &HeaderMap::new(), &cookie, &config).unwrap_err(),
+            AuthTransportError::CsrfValidationFailed
+        );
+
+        // Bearer credentials stay exempt even on unsafe methods.
+        let bearer = AuthCredential::new("bearer-token", AuthTokenSource::Bearer);
+        assert!(validate_csrf_for_credential("POST", &HeaderMap::new(), &bearer, &config).is_ok());
+
+        // GET cookie requests stay exempt.
+        assert!(validate_csrf_for_credential("GET", &HeaderMap::new(), &cookie, &config).is_ok());
+
+        // Valid double-submit header + cookie passes.
+        let headers = headers(&[
+            (DEFAULT_CSRF_HEADER, "csrf-token"),
+            ("cookie", "__Host-ras-csrf=csrf-token"),
+        ]);
+        assert!(validate_csrf_for_credential("POST", &headers, &cookie, &config).is_ok());
     }
 
     #[test]

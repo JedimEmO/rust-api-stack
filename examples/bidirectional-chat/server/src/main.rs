@@ -1555,10 +1555,11 @@ async fn main() -> Result<()> {
     let session_config = SessionConfig {
         jwt_secret: config.auth.jwt_secret.clone(),
         jwt_ttl: chrono::Duration::seconds(config.auth.jwt_ttl_seconds),
-        refresh_enabled: config.auth.refresh_enabled,
         enforce_active_sessions: true,
         algorithm: JwtAlgorithm::from_name(&config.auth.jwt_algorithm)
             .unwrap_or(JwtAlgorithm::HS256),
+        iss: None,
+        aud: None,
     };
     info!(
         "Creating session service with JWT TTL: {} seconds",
@@ -2344,7 +2345,11 @@ mod tests {
             response_by_id(&messages, "send-before-join").expect("send_message error response");
         let error = error_response.error.as_ref().expect("send_message error");
         assert_eq!(error.code, ras_jsonrpc_types::error_codes::INTERNAL_ERROR);
-        assert!(error.message.contains("User not in any room"));
+        // Handler error detail is no longer forwarded to the client (H3); the
+        // wire message is generic and the real reason is logged server-side.
+        // (A production app should return client-facing errors in an Ok response
+        // rather than via a handler `Err`.)
+        assert_eq!(error.message, "Internal error");
 
         let join_response =
             response_by_id(&messages, "join-after-error").expect("join_room response");
@@ -2398,8 +2403,9 @@ mod tests {
         let second_send = response_by_id(&messages, "send-2").expect("second send response");
         let error = second_send.error.as_ref().expect("rate limit error");
         assert_eq!(error.code, ras_jsonrpc_types::error_codes::INTERNAL_ERROR);
-        assert!(error.message.contains("Rate limit exceeded"));
-        assert!(error.message.contains("1 messages per minute"));
+        // Handler error detail (the rate-limit reason) is sanitized on the wire
+        // (H3) and logged server-side instead.
+        assert_eq!(error.message, "Internal error");
 
         let after_limit =
             response_by_id(&messages, "list-after-limit").expect("list_rooms after rate limit");

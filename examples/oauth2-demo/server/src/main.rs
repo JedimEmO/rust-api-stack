@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
-use axum::http::Method;
+use axum::http::header::{COOKIE, SET_COOKIE};
+use axum::http::{HeaderMap, HeaderValue, Method};
 use axum::{
     Json, Router,
     extract::{Query, State},
-    response::{Html, Redirect},
+    response::{Html, IntoResponse, Redirect},
     routing::{get, post},
 };
 use ras_identity_oauth2::{
@@ -14,9 +15,34 @@ use ras_identity_session::{JwtAlgorithm, JwtAuthProvider, SessionConfig, Session
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 use tracing::{error, info, warn};
+
+/// Cookie carrying the login-CSRF binding for an in-flight OAuth2 flow.
+///
+/// Not marked `Secure` because the example runs over plain HTTP on localhost; a
+/// production deployment MUST serve over HTTPS and add `Secure`.
+const BINDING_COOKIE: &str = "oauth2_binding";
+
+/// Origin the browser front-end is served from (for CORS).
+const DEMO_ORIGIN: &str = "http://localhost:3000";
+
+fn set_binding_cookie(value: &str) -> String {
+    format!("{BINDING_COOKIE}={value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600")
+}
+
+fn clear_binding_cookie() -> String {
+    format!("{BINDING_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0")
+}
+
+fn read_binding_cookie(headers: &HeaderMap) -> Option<String> {
+    let cookies = headers.get(COOKIE)?.to_str().ok()?;
+    cookies.split(';').find_map(|pair| {
+        let (name, value) = pair.trim().split_once('=')?;
+        (name == BINDING_COOKIE).then(|| value.to_string())
+    })
+}
 
 mod permissions;
 mod service;
@@ -70,11 +96,15 @@ pub struct CallbackQuery {
     error_description: Option<String>,
 }
 
-/// OAuth2 flow initiation request
+/// OAuth2 flow initiation request.
+///
+/// Deliberately carries no client-controlled parameter map: forwarding an
+/// arbitrary map into the authorize URL let a caller inject reserved OAuth
+/// parameters (H1/H4). Any extra IdP parameters are hardcoded server-side in
+/// `create_oauth2_provider`.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StartOAuth2Request {
     provider_id: String,
-    additional_params: Option<HashMap<String, String>>,
 }
 
 /// OAuth2 flow initiation response
@@ -158,9 +188,11 @@ fn create_session_service(config: &AppConfig) -> Result<SessionService> {
     let session_config = SessionConfig {
         jwt_secret: config.jwt_secret.clone(),
         jwt_ttl: chrono::Duration::hours(24),
-        refresh_enabled: true,
-        enforce_active_sessions: false,
+        // Enabled so logout/revocation actually invalidates a session (H4).
+        enforce_active_sessions: true,
         algorithm: JwtAlgorithm::HS256,
+        iss: None,
+        aud: None,
     };
 
     let permissions_provider = Arc::new(GoogleOAuth2Permissions::new());
@@ -176,22 +208,42 @@ async fn index_handler() -> Html<&'static str> {
     Html(include_str!("../static/index.html"))
 }
 
-/// Handler to start the OAuth2 flow
+/// Handler to start the OAuth2 flow.
+///
+/// `start_flow` generates a login-CSRF binding; we store it in an HttpOnly
+/// cookie that the browser returns on the same-site callback (M2/H4).
 async fn start_oauth2_handler(
     State(state): State<AppState>,
     Json(request): Json<StartOAuth2Request>,
-) -> Result<Json<StartOAuth2Response>, String> {
+) -> Result<impl IntoResponse, String> {
     info!("Starting OAuth2 flow for provider: {}", request.provider_id);
 
     match state
         .oauth2_provider
-        .start_flow(&request.provider_id, request.additional_params)
+        .start_flow(&request.provider_id, None)
         .await
     {
-        Ok(OAuth2Response::AuthorizationUrl { url, state }) => Ok(Json(StartOAuth2Response {
-            authorization_url: url,
+        Ok(OAuth2Response::AuthorizationUrl {
+            url,
             state,
-        })),
+            binding,
+        }) => {
+            let mut headers = HeaderMap::new();
+            if let Some(binding) = binding {
+                headers.insert(
+                    SET_COOKIE,
+                    HeaderValue::from_str(&set_binding_cookie(&binding))
+                        .map_err(|e| format!("invalid cookie: {e}"))?,
+                );
+            }
+            Ok((
+                headers,
+                Json(StartOAuth2Response {
+                    authorization_url: url,
+                    state,
+                }),
+            ))
+        }
         Ok(OAuth2Response::Error { message }) => Err(format!("OAuth2 error: {}", message)),
         Err(e) => Err(format!("OAuth2 provider error: {}", e)),
     }
@@ -200,9 +252,18 @@ async fn start_oauth2_handler(
 /// Handler for OAuth2 callback
 async fn oauth2_callback_handler(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(callback_query): Query<CallbackQuery>,
-) -> Result<Redirect, String> {
+) -> Result<impl IntoResponse, String> {
     info!("Handling OAuth2 callback");
+
+    // The binding cookie is always cleared once the flow completes (or fails).
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(
+        SET_COOKIE,
+        HeaderValue::from_str(&clear_binding_cookie())
+            .map_err(|e| format!("invalid cookie: {e}"))?,
+    );
 
     // Check for error in callback
     if let Some(error) = &callback_query.error {
@@ -211,7 +272,7 @@ async fn oauth2_callback_handler(
             .as_deref()
             .unwrap_or("No description");
         error!("OAuth2 callback error: {}: {}", error, error_desc);
-        return Ok(Redirect::to("/error"));
+        return Ok((response_headers, Redirect::to("/error")));
     }
 
     let code = callback_query
@@ -222,6 +283,9 @@ async fn oauth2_callback_handler(
         .state
         .ok_or_else(|| "Missing state parameter in callback".to_string())?;
 
+    // Echo the login-CSRF binding read back from the cookie (M2/H4).
+    let binding = read_binding_cookie(&headers);
+
     // Complete the OAuth2 flow
     let auth_payload = OAuth2AuthPayload::Callback {
         provider_id: "google".to_string(),
@@ -229,7 +293,7 @@ async fn oauth2_callback_handler(
         state: state_param,
         error: callback_query.error,
         error_description: callback_query.error_description,
-        binding: None,
+        binding,
     };
 
     let payload_json = serde_json::to_value(auth_payload)
@@ -242,12 +306,17 @@ async fn oauth2_callback_handler(
         .await
         .map_err(|e| format!("Failed to create session: {}", e))?;
 
-    info!("OAuth2 callback successful, redirecting with token");
+    info!("OAuth2 callback successful, redirecting to success page");
 
-    // The success page immediately moves the token into sessionStorage and
-    // clears it from the URL. A production app should use its own token
-    // delivery policy.
-    Ok(Redirect::to(&format!("/success?token={}", token)))
+    // Deliver the JWT in the URL *fragment*, not the query string: fragments are
+    // never sent to the server (no access-log entry) and are not included in the
+    // `Referer` header. success.html moves it into sessionStorage and clears the
+    // fragment immediately. A production app should prefer a Set-Cookie session
+    // (which the library now pairs with CSRF) over any URL-based delivery.
+    Ok((
+        response_headers,
+        Redirect::to(&format!("/success#token={}", token)),
+    ))
 }
 
 /// Handler for success page.
@@ -332,10 +401,11 @@ async fn main() -> Result<()> {
         .route("/api-docs", get(api_docs_handler))
         .nest_service("/static", ServeDir::new("../static"))
         .layer(
+            // Restrict CORS to the demo's own origin rather than `Any` (H4).
             CorsLayer::new()
-                .allow_origin(Any)
+                .allow_origin(HeaderValue::from_static(DEMO_ORIGIN))
                 .allow_methods([Method::GET, Method::POST])
-                .allow_headers(Any),
+                .allow_headers([axum::http::header::CONTENT_TYPE]),
         )
         .with_state(app_state);
 
@@ -389,5 +459,41 @@ mod static_page_tests {
     fn success_page_api_docs_action_preserves_session_token() {
         assert!(SUCCESS_HTML.contains("sessionStorage.setItem('jwt_token', jwtToken)"));
         assert!(SUCCESS_HTML.contains("onclick=\"storeAndRedirect()\">Interactive API Docs"));
+    }
+
+    #[test]
+    fn success_page_reads_token_from_fragment_and_clears_url() {
+        // Token is read from the URL fragment (never sent to the server) and the
+        // URL is scrubbed immediately (H4).
+        assert!(SUCCESS_HTML.contains("window.location.hash"));
+        assert!(SUCCESS_HTML.contains("history.replaceState"));
+        // It must NOT read the token from the query string anymore.
+        assert!(
+            !SUCCESS_HTML.contains("URLSearchParams(window.location.search)"),
+            "success page must not read the token from the query string"
+        );
+    }
+}
+
+#[cfg(test)]
+mod handler_tests {
+    use super::*;
+
+    #[test]
+    fn binding_cookie_round_trips_through_headers() {
+        let set = set_binding_cookie("abc-123");
+        assert!(set.contains("oauth2_binding=abc-123"));
+        assert!(set.contains("HttpOnly"));
+        assert!(set.contains("SameSite=Lax"));
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            COOKIE,
+            HeaderValue::from_static("theme=dark; oauth2_binding=abc-123"),
+        );
+        assert_eq!(read_binding_cookie(&headers).as_deref(), Some("abc-123"));
+
+        // Cleared cookie has Max-Age=0.
+        assert!(clear_binding_cookie().contains("Max-Age=0"));
     }
 }

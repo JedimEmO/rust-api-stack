@@ -14,13 +14,26 @@ use std::fmt;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct LocalUser {
     pub username: String,
     pub password_hash: String,
     pub email: Option<String>,
     pub display_name: Option<String>,
     pub metadata: Option<serde_json::Value>,
+}
+
+/// Redacting `Debug` so the Argon2 `password_hash` never lands in logs (L1).
+impl fmt::Debug for LocalUser {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LocalUser")
+            .field("username", &self.username)
+            .field("password_hash", &"[REDACTED]")
+            .field("email", &self.email)
+            .field("display_name", &self.display_name)
+            .field("metadata", &self.metadata)
+            .finish()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -187,6 +200,22 @@ impl IdentityProvider for LocalUserProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debug_redacts_password_hash() {
+        let user = LocalUser {
+            username: "alice".to_string(),
+            password_hash: "$argon2id$v=19$m=19456,t=2,p=1$secretsecret$hashhashhash".to_string(),
+            email: None,
+            display_name: None,
+            metadata: None,
+        };
+        let debug = format!("{user:?}");
+        assert!(!debug.contains("hashhashhash"));
+        assert!(!debug.contains("$argon2id$"));
+        assert!(debug.contains("[REDACTED]"));
+        assert!(debug.contains("alice"));
+    }
 
     async fn setup_test_provider() -> LocalUserProvider {
         let provider = LocalUserProvider::new();

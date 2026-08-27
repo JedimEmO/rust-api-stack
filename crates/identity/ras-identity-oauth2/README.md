@@ -72,27 +72,35 @@ let session_service = SessionService::new(session_config)?;
 
 session_service.register_provider(Box::new(oauth2_provider.clone())).await;
 
-// Start OAuth2 flow
+// Start OAuth2 flow. `start_flow` always generates a login-CSRF `binding`;
+// store it in a cookie and echo it back on the callback (a callback without it
+// is rejected).
 match oauth2_provider.start_flow("google", None).await? {
-    OAuth2Response::AuthorizationUrl { url, state } => {
-        // Redirect user to `url`
+    OAuth2Response::AuthorizationUrl { url, state, binding } => {
+        // 1. Set `binding` in a Secure, HttpOnly cookie on the redirect response.
+        // 2. Redirect the user to `url`.
         println!("Redirect to: {}", url);
+        let _ = (state, binding);
     }
     OAuth2Response::Error { message } => {
         eprintln!("OAuth2 start-flow failed: {message}");
     }
 }
 
-// Handle callback
+// Handle callback — read `binding` back from the cookie and include it.
 let callback_payload = serde_json::json!({
     "type": "Callback",
     "provider_id": "google",
     "code": "authorization_code_from_callback",
-    "state": "state_from_callback"
+    "state": "state_from_callback",
+    "binding": "binding_from_cookie"
 });
 
 let jwt_token = session_service.begin_session("oauth2", callback_payload).await?;
 ```
+
+For a non-browser flow where login CSRF does not apply, use
+`start_flow_bound(provider_id, params, None)` to opt out of binding explicitly.
 
 ## OAuth2 Flow
 

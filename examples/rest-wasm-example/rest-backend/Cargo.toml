@@ -20,8 +20,8 @@ ras-permission-manifest = { path = "../../../crates/specs/ras-permission-manifes
 
 [dependencies]
 rest-api = { path = "../rest-api", version = "0.1.0", features = ["server"] }
-ras-auth-core = { path = "../../../crates/core/ras-auth-core", version = "0.1.0" }
-ras-rest-core = { path = "../../../crates/rest/ras-rest-core", version = "0.1.1" }
+ras-auth-core = { path = "../../../crates/core/ras-auth-core", version = "0.2.0" }
+ras-rest-core = { path = "../../../crates/rest/ras-rest-core", version = "0.2.0" }
 axum = { workspace = true }
 axum-extra = { workspace = true }
 tokio = { workspace = true, features = ["full"] }

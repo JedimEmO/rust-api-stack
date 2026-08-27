@@ -35,9 +35,10 @@ provider
 let session_service = Arc::new(SessionService::new(SessionConfig {
     jwt_secret: "use-at-least-32-bytes-of-random-secret".to_string(),
     jwt_ttl: Duration::hours(1),
-    refresh_enabled: false,
     enforce_active_sessions: true,
     algorithm: JwtAlgorithm::HS256,
+    iss: None,
+    aud: None,
 })?);
 
 session_service.register_provider(Box::new(provider)).await;

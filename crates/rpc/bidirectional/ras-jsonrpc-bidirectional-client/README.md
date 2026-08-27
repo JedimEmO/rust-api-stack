@@ -32,7 +32,7 @@ For native clients:
 
 ```toml
 [dependencies]
-ras-jsonrpc-bidirectional-client = "0.1.0"
+ras-jsonrpc-bidirectional-client = "0.2.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1.0", features = ["full"] }

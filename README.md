@@ -289,7 +289,7 @@ Package-level README files remain available for crate-specific details:
 ### Authentication & Security
 - **Timing Attack Mitigation** - Missing local users verify against an Argon2 sentinel hash
 - **Username Enumeration Mitigation** - Uniform invalid-credentials errors
-- **Rate Limiting** - Local authentication limits concurrent verification attempts
+- **Concurrency Bound** - Local authentication caps *concurrent* verification attempts (a Semaphore), which is not a rate limiter; deploy a per-user/per-IP rate limiter at the HTTP edge for brute-force protection
 - **Password Storage** - Per-user salted Argon2id hashes
 - **JWT Configuration** - Configurable algorithms, secrets, TTLs, and active-session enforcement
 - **PKCE OAuth2** - Proof Key for Code Exchange by default

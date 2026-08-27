@@ -131,9 +131,10 @@ impl TestChatServer {
         let session_config = SessionConfig {
             jwt_secret: config.auth.jwt_secret.clone(),
             jwt_ttl: chrono::Duration::seconds(config.auth.jwt_ttl_seconds),
-            refresh_enabled: config.auth.refresh_enabled,
             enforce_active_sessions: true,
             algorithm: JwtAlgorithm::HS256,
+            iss: None,
+            aud: None,
         };
 
         let session_service = Arc::new(

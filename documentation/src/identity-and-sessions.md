@@ -46,9 +46,16 @@ specific permission.
 ## Secure Browser Sessions
 
 Browser-facing services can use secure `HttpOnly` cookies instead of manually
-placing bearer tokens in JavaScript. The same generated builders support cookie
-auth transport and double-submit CSRF protection for unsafe cookie-authenticated
-requests.
+placing bearer tokens in JavaScript. Cookie auth is not two independent knobs:
+because the browser attaches cookies automatically, cookie credentials are
+**always** paired with CSRF protection. Calling `.auth_cookie(...)` installs a
+default double-submit `CsrfConfig` for you, and a transport that enables cookies
+without a CSRF config fails to `build()`. Override the default with
+`.csrf_protection(...)` if you need a session-bound token or a custom header, but
+there is deliberately no builder path to cookie auth without CSRF.
+
+CSRF is enforced only for cookie credentials on unsafe methods (`POST`, `PUT`,
+`PATCH`, `DELETE`). Bearer tokens and safe methods remain exempt.
 
 See the OAuth2 example in
 [examples/oauth2-demo](https://github.com/JedimEmO/rust-api-stack/tree/master/examples/oauth2-demo).
