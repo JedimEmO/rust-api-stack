@@ -72,9 +72,12 @@ pub enum ClientError {
     Io(#[from] std::io::Error),
 
     /// Tungstenite WebSocket error (native only)
+    ///
+    /// Boxed: `tungstenite::Error` is 136 bytes on its own, which would make
+    /// every `ClientResult` pay for it (clippy::result_large_err).
     #[cfg(not(target_arch = "wasm32"))]
     #[error("WebSocket error: {0}")]
-    WebSocket(#[from] tokio_tungstenite::tungstenite::Error),
+    WebSocket(Box<tokio_tungstenite::tungstenite::Error>),
 
     /// URL parsing error (native only)
     #[cfg(not(target_arch = "wasm32"))]
@@ -90,6 +93,13 @@ pub enum ClientError {
     #[cfg(target_arch = "wasm32")]
     #[error("WASM binding error: {0}")]
     WasmBinding(String),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl From<tokio_tungstenite::tungstenite::Error> for ClientError {
+    fn from(err: tokio_tungstenite::tungstenite::Error) -> Self {
+        Self::WebSocket(Box::new(err))
+    }
 }
 
 impl ClientError {
@@ -271,6 +281,17 @@ mod tests {
     }
 
     #[test]
+    fn client_error_stays_small_enough_for_result_large_err() {
+        // clippy::result_large_err fires at 128 bytes. ClientError sits in the
+        // Err slot of every client call, so keep the big transport errors boxed.
+        assert!(
+            std::mem::size_of::<ClientError>() <= 128,
+            "ClientError grew to {} bytes; box the offending variant",
+            std::mem::size_of::<ClientError>()
+        );
+    }
+
+    #[test]
     fn from_impls_route_to_correct_variants() {
         let json_err = serde_json::from_str::<serde_json::Value>("not json").unwrap_err();
         assert!(matches!(ClientError::from(json_err), ClientError::Json(_)));
@@ -288,6 +309,13 @@ mod tests {
         assert!(matches!(
             ClientError::from(url_err),
             ClientError::UrlParse(_)
+        ));
+
+        // Hand-written (boxed) conversion, so `?` on a tungstenite error works.
+        let ws_err = tokio_tungstenite::tungstenite::Error::ConnectionClosed;
+        assert!(matches!(
+            ClientError::from(ws_err),
+            ClientError::WebSocket(_)
         ));
     }
 
