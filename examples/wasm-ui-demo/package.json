@@ -13,6 +13,6 @@
   "devDependencies": {
     "@wasm-tool/rollup-plugin-rust": "^3.1.5",
     "rollup": "^4.60.4",
-    "vite": "^8.0.14"
+    "vite": "^8.0.16"
   }
 }
