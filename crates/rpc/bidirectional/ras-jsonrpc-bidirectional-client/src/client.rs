@@ -354,7 +354,6 @@ impl Client {
             .collect()
     }
 
-
     async fn send_message(&self, message: BidirectionalMessage) -> ClientResult<()> {
         if let Some(tx) = self.message_tx.read().await.as_ref() {
             tx.send(message)
