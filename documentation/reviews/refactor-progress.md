@@ -57,10 +57,11 @@ Final verification investigation:
 - All 927 tests pass without retries at four-worker concurrency, with one existing
   ignored test. Workspace doctests also pass. No skips or production crypto changes
   were introduced to address the local failures.
-- GitHub rejected optional workflow edits because the configured OAuth token
-  lacks `workflow` scope. Those edits were removed. MR #28 targets `master` to
-  run existing CI and depends on comment-cleanup MR #27; the comment-only diff
-  disappears once #27 merges. The browser regression command remains available locally.
+- GitHub rejected the workflow edits during the refactor because the configured OAuth
+  token lacked `workflow` scope, so the WASM UI browser test was initially local-only.
+  The post-review follow-up re-added it to the `wasm-ui-example` CI job, and the spec
+  now opens and closes the task detail panel explicitly instead of relying on click
+  bubbling from the checkbox.
 - The finish skill's `/simplify` slash command is unavailable in this runtime;
   no matching installed skill or callable slash-command tool was found.
 
@@ -75,11 +76,14 @@ Final project gates:
   package README/Markdown links, and cargo-deny policy checks pass.
 - All 13 CI feature combinations and generated-client specification checks pass.
 - Final browser checks pass: 11 explorer tests and one WASM task-flow test.
-- Explorer HTML remains byte-identical to the original 60,172-byte response.
+- Explorer HTML was byte-identical to the original 60,172-byte response at checkpoint 8.
+  The post-review follow-up moved the style and script wrapper tags out of the fragments
+  into the assembler so each asset is a standalone file; the served page now differs
+  from the original only by one blank line before the closing script tag, and unit
+  tests in the assets crate guard the placeholder and document structure.
   The asset and both macro archives package successfully; both unpacked macros compile
   against the packaged asset using local dependency patches.
-- Diff review retains original whitespace in embedded HTML/CSS fragments and the UI's
-  raw stylesheet string; trimming fragment boundaries would change the assembled bytes.
+- Diff review retains original whitespace in the UI's raw stylesheet string.
 - The application constructor documents its validated-configuration precondition.
   No unresolved implementation TODOs or temporary debugging artifacts were added.
 

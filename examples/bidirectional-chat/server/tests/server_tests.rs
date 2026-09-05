@@ -382,8 +382,10 @@ async fn test_message_persistence() -> Result<()> {
 
 #[tokio::test]
 async fn application_router_authenticates_websocket_and_persists_messages() -> Result<()> {
+    use bidirectional_chat_api::{
+        ChatServiceClientBuilder, JoinRoomRequest, ListRoomsRequest, SendMessageRequest,
+    };
     use bidirectional_chat_server::persistence::PersistenceManager;
-    use ras_jsonrpc_bidirectional_types::BidirectionalMessage;
     use serde_json::json;
     use std::time::Duration;
 
@@ -410,42 +412,42 @@ async fn application_router_authenticates_websocket_and_persists_messages() -> R
         .json(&json!({"username": "socket-user", "password": "socket-password"}))
         .await
         .json();
-    let mut socket = server
-        .get_websocket("/ws")
-        .add_header(
-            "authorization",
-            format!("Bearer {}", login["token"].as_str().unwrap()),
-        )
-        .await
-        .into_websocket()
-        .await;
+    let token = login["token"].as_str().unwrap().to_string();
+
+    // Drive the router through the generated client, the same one the TUI uses.
+    let http_url = server.server_address().expect("http transport address");
+    let ws_url = format!(
+        "ws://{}:{}/ws",
+        http_url.host_str().unwrap(),
+        http_url.port().unwrap()
+    );
+    let client = ChatServiceClientBuilder::new(ws_url)
+        .with_jwt_token(token)
+        .build()
+        .await?;
+
     tokio::time::timeout(Duration::from_secs(5), async {
-        let first: BidirectionalMessage = socket.receive_json().await;
-        assert!(matches!(first, BidirectionalMessage::ConnectionEstablished { .. }));
-        for (id, method, params) in [
-            ("join", "join_room", json!({"room_name": "general"})),
-            ("send", "send_message", json!({"text": "persisted through application router"})),
-            ("list", "list_rooms", json!({})),
-        ] {
-            socket.send_json(&json!({"type": "request", "jsonrpc": "2.0", "id": id, "method": method, "params": params})).await;
-            loop {
-                let message: BidirectionalMessage = socket.receive_json().await;
-                if let BidirectionalMessage::Response(response) = message
-                    && response.id == Some(json!(id))
-                {
-                    assert!(response.error.is_none(), "{response:?}");
-                    if id == "list" {
-                        assert!(response.result.unwrap()["rooms"].as_array().unwrap().iter().any(|room| room["room_id"] == "general"));
-                    }
-                    break;
-                }
-            }
-        }
-        socket.close().await;
+        client.connect().await?;
+        client
+            .join_room(JoinRoomRequest {
+                room_name: "general".to_string(),
+            })
+            .await?;
+        client
+            .send_message(SendMessageRequest {
+                text: "persisted through application router".to_string(),
+            })
+            .await?;
+        let rooms = client.list_rooms(ListRoomsRequest {}).await?;
+        assert!(rooms.rooms.iter().any(|room| room.room_id == "general"));
+        client.disconnect().await?;
         while manager.connection_count() != 0 {
             tokio::task::yield_now().await;
         }
-    }).await?;
+        anyhow::Ok(())
+    })
+    .await??;
+
     let messages = PersistenceManager::new(&config.chat.data_dir)
         .load_room_messages("general", None)
         .await?;

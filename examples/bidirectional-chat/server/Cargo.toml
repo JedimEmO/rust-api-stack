@@ -42,7 +42,8 @@ config = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-axum-test = { workspace = true, features = ["ws"] }
+axum-test = { workspace = true }
+bidirectional-chat-api = { path = "../api", version = "0.1.0", features = ["client"] }
 
 [features]
 default = ["server"]
