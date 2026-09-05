@@ -400,7 +400,8 @@ impl<H: MessageHandler> WebSocketHandler<H> {
         Ok(true)
     }
 
-    /// Validate a subscribe/unsubscribe request against the configured limits.
+    /// Fast-path validation of a subscribe/unsubscribe request so the client
+    /// gets an error response. The authoritative check is the manager's.
     fn check_subscription_limits(&self, topics: &[String]) -> Result<(), &'static str> {
         let limits = &self.subscription_limits;
         if topics.len() > limits.max_topics_per_message {
@@ -417,15 +418,26 @@ impl<H: MessageHandler> WebSocketHandler<H> {
 
     /// Push subscription changes made by the handler into the manager's
     /// topic index so `broadcast_to_topic` sees them.
+    ///
+    /// The manager is the invariant: if it refuses a topic (limit reached,
+    /// invalid name), the subscription is rolled back out of the connection
+    /// context too, so a custom `handle_subscribe` cannot exceed the caps.
     async fn sync_subscriptions(&self, before: &[String]) {
         let Some(manager) = &self.connection_manager else {
             return;
         };
         let after = self.context.get_subscriptions().await;
         for topic in after.iter().filter(|t| !before.contains(t)) {
-            let _ = manager
+            if let Err(e) = manager
                 .add_subscription(self.context.id, topic.clone())
-                .await;
+                .await
+            {
+                warn!(
+                    "Rolling back subscription to '{}' on connection {}: {}",
+                    topic, self.context.id, e
+                );
+                self.context.unsubscribe(topic).await;
+            }
         }
         for topic in before.iter().filter(|t| !after.contains(t)) {
             let _ = manager.remove_subscription(self.context.id, topic).await;
@@ -1886,6 +1898,67 @@ mod tests {
             m,
             WebSocketIoMessage::Close(Some(reason)) if reason == "credentials no longer valid"
         )));
+    }
+
+    /// A custom handler that ignores the request and subscribes to far more
+    /// topics than any limit allows, straight into the context.
+    struct GreedyHandler;
+
+    #[async_trait]
+    impl MessageHandler for GreedyHandler {
+        async fn handle_request(
+            &self,
+            _request: JsonRpcRequest,
+            _context: Arc<ConnectionContext>,
+        ) -> ServerResult<Option<JsonRpcResponse>> {
+            Ok(None)
+        }
+
+        async fn handle_subscribe(
+            &self,
+            _topics: Vec<String>,
+            context: Arc<ConnectionContext>,
+        ) -> ServerResult<()> {
+            for i in 0..10 {
+                context.subscribe(format!("greedy:{i}")).await;
+            }
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn w3_custom_handler_cannot_exceed_manager_limits() {
+        let limits = SubscriptionLimits {
+            max_topics_per_connection: 3,
+            ..SubscriptionLimits::default()
+        };
+        let manager: Arc<dyn ConnectionManager> = Arc::new(
+            crate::DefaultConnectionManager::with_subscription_limits(limits),
+        );
+        let context = ctx();
+        manager
+            .add_connection(ras_jsonrpc_bidirectional_types::ConnectionInfo::new(
+                context.id,
+            ))
+            .await
+            .unwrap();
+        let (_tx, rx) = mpsc::channel(4);
+        let mut socket = InMemorySocket::closing([subscribe_msg(vec!["x".into()])]);
+
+        WebSocketHandler::new(Arc::new(GreedyHandler), context.clone(), rx, 1024)
+            .with_connection_manager(manager.clone())
+            .with_subscription_limits(limits)
+            .run_with_io(&mut socket)
+            .await
+            .unwrap();
+
+        // The manager admitted three; the rest were rolled back from the context.
+        assert_eq!(context.get_subscriptions().await.len(), 3);
+        assert_eq!(
+            manager.get_subscriptions(context.id).await.unwrap().len(),
+            3
+        );
+        assert_eq!(manager.total_subscription_count().await.unwrap(), 3);
     }
 
     #[tokio::test]

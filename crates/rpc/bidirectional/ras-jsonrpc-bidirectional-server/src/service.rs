@@ -69,23 +69,17 @@ pub trait WebSocketService: Clone + Send + Sync + 'static {
         DEFAULT_AUTH_REVALIDATION_INTERVAL
     }
 
-    /// Maximum simultaneous connections; further upgrades are refused with
-    /// `503`. Defaults to [`DEFAULT_MAX_CONNECTIONS`].
-    ///
-    /// Custom `WebSocketService` implementations that do not override
-    /// [`connection_permits`](Self::connection_permits) get a
-    /// checked-then-added advisory check that can briefly overshoot under a
-    /// burst; `BuiltWebSocketService` enforces it atomically.
+    /// Configured cap on simultaneous connections, for reporting. Admission
+    /// itself is decided by [`connection_permits`](Self::connection_permits).
     fn max_connections(&self) -> Option<usize> {
-        Some(DEFAULT_MAX_CONNECTIONS)
+        self.connection_permits().map(|_| DEFAULT_MAX_CONNECTIONS)
     }
 
     /// Semaphore whose permits are the connection slots. A permit is taken
     /// before the upgrade and held for the life of the connection, so the cap
-    /// cannot be exceeded by concurrent upgrades.
-    fn connection_permits(&self) -> Option<Arc<tokio::sync::Semaphore>> {
-        None
-    }
+    /// cannot be exceeded by concurrent upgrades. Return `None` only to run
+    /// unbounded; there is no advisory fallback.
+    fn connection_permits(&self) -> Option<Arc<tokio::sync::Semaphore>>;
 
     /// Limits on client-initiated subscriptions.
     fn subscription_limits(&self) -> SubscriptionLimits {
@@ -198,26 +192,16 @@ enum Admission {
     Pending,
 }
 
-/// Take a connection slot. `Ok(Some(permit))` when the service enforces the
-/// cap atomically, `Ok(None)` when the advisory check passed (or no cap),
-/// `Err(())` when the cap is reached.
+/// Take a connection slot. `Ok(Some(permit))` when a cap is configured,
+/// `Ok(None)` when the service runs unbounded, `Err(())` when the cap is
+/// reached.
 async fn admit_connection<Svc: WebSocketService>(
     service: &Svc,
 ) -> std::result::Result<Option<tokio::sync::OwnedSemaphorePermit>, ()> {
-    if let Some(permits) = service.connection_permits() {
-        return permits.try_acquire_owned().map(Some).map_err(|_| ());
+    match service.connection_permits() {
+        Some(permits) => permits.try_acquire_owned().map(Some).map_err(|_| ()),
+        None => Ok(None),
     }
-    if let Some(limit) = service.max_connections() {
-        let current = service
-            .connection_manager()
-            .active_connection_count()
-            .await
-            .unwrap_or(0);
-        if current >= limit {
-            return Err(());
-        }
-    }
-    Ok(None)
 }
 
 async fn run_connection_with_io<Svc, S>(
@@ -352,9 +336,11 @@ where
         BuiltWebSocketService {
             handler: self.handler,
             auth_provider: self.auth_provider,
-            connection_manager: self
-                .connection_manager
-                .unwrap_or_else(|| Arc::new(DefaultConnectionManager::new())),
+            connection_manager: self.connection_manager.unwrap_or_else(|| {
+                Arc::new(DefaultConnectionManager::with_subscription_limits(
+                    self.subscription_limits,
+                ))
+            }),
             require_auth: self.require_auth,
             message_channel_capacity: self.message_channel_capacity,
             max_message_size: self.max_message_size,

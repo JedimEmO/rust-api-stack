@@ -20,7 +20,8 @@ pub const MAX_LOG_DETAIL_BYTES: usize = 256;
 ///
 /// Control characters (including newlines, which enable log injection) are
 /// replaced with `?`, and the result is truncated to
-/// [`MAX_LOG_DETAIL_BYTES`] on a UTF-8 boundary with a `…` marker. Use it for
+/// [`MAX_LOG_DETAIL_BYTES`] on a UTF-8 boundary, the trailing `…` marker
+/// included in that budget. Use it for
 /// any request-derived detail, such as extractor rejection text, before it
 /// reaches `tracing`.
 pub fn sanitize_log_detail(raw: &str) -> String {
@@ -28,13 +29,14 @@ pub fn sanitize_log_detail(raw: &str) -> String {
         .chars()
         .map(|c| if c.is_control() { '?' } else { c })
         .collect();
+    const MARKER: char = '…';
     if out.len() > MAX_LOG_DETAIL_BYTES {
-        let mut cut = MAX_LOG_DETAIL_BYTES;
+        let mut cut = MAX_LOG_DETAIL_BYTES - MARKER.len_utf8();
         while !out.is_char_boundary(cut) {
             cut -= 1;
         }
         out.truncate(cut);
-        out.push('…');
+        out.push(MARKER);
     }
     out
 }
@@ -268,7 +270,7 @@ mod tests {
         let long = "é".repeat(MAX_LOG_DETAIL_BYTES);
         let cut = sanitize_log_detail(&long);
         assert!(cut.ends_with('…'));
-        assert!(cut.len() <= MAX_LOG_DETAIL_BYTES + '…'.len_utf8());
+        assert!(cut.len() <= MAX_LOG_DETAIL_BYTES);
     }
 
     #[test]

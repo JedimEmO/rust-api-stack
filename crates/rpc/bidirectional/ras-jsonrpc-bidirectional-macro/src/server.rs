@@ -534,7 +534,10 @@ pub fn generate_server_code(
             pub fn build(self) -> ras_jsonrpc_bidirectional_server::service::BuiltWebSocketService<#handler_name<T, ras_jsonrpc_bidirectional_server::DefaultConnectionManager>, A, ras_jsonrpc_bidirectional_server::DefaultConnectionManager> {
                 use ras_jsonrpc_bidirectional_server::DefaultConnectionManager;
 
-                let connection_manager = std::sync::Arc::new(DefaultConnectionManager::new());
+                let subscription_limits = self.subscription_limits.unwrap_or_default();
+                let connection_manager = std::sync::Arc::new(
+                    DefaultConnectionManager::with_subscription_limits(subscription_limits),
+                );
                 let auth_provider_dyn: std::sync::Arc<dyn ras_auth_core::AuthProvider> = self.auth_provider.clone();
                 let handler = #handler_name::new(
                     self.service.clone(),
@@ -548,7 +551,7 @@ pub fn generate_server_code(
                     .require_auth(self.require_auth)
                     .max_connections(self.max_connections)
                     .maybe_max_message_size(self.max_message_size)
-                    .maybe_subscription_limits(self.subscription_limits)
+                    .subscription_limits(subscription_limits)
                     .maybe_keepalive(self.keepalive)
                     .maybe_on_permission_change(self.on_permission_change)
                     .build();
