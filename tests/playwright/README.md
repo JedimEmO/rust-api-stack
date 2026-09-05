@@ -34,3 +34,18 @@ Test tokens:
 
 - `user-token`
 - `admin-token`
+
+## WASM UI interactions
+
+Build the UI and run its separate Chromium suite:
+
+```bash
+npm --prefix examples/wasm-ui-demo ci
+npm --prefix examples/wasm-ui-demo run build
+npm --prefix tests/playwright test -- --config wasm-ui.config.ts
+```
+
+Run these commands from the repository root after installing the Playwright browser.
+The suite serves the compiled bundle and supplies deterministic JSON-RPC responses.
+It checks login failure/success, task list/create/complete/delete, failed-create state,
+and browser panics. CI runs it after building the WASM UI example.

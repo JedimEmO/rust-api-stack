@@ -42,3 +42,25 @@ REST baseline: 61/61 passed.
 | 25 | File-service e2e transfer, validation, limit, and schema/client scenarios | All 49 discovered names/counts retained; 23 moved cases; 49 tests, docs/Clippy/features pass. |
 | 26 | Local-identity companion tests | All 20 discovered local-identity cases retained (one existing ignored); 40 local/session tests pass, docs/Clippy pass. Provider implementation unchanged. |
 | 27 | Rename history-based macro test targets to `http_service_contracts` | 120 REST/JSON-RPC tests, docs/Clippy/features pass; source files renamed without changing their cases. No external target-name references found. |
+
+Final verification investigation:
+
+- The first complete run executed 927 tests: 922 passed; four identity tests
+  SIGSEGVed and one session test rejected freshly created credentials.
+- A fresh target directory with `CARGO_INCREMENTAL=0` still reproduced identity
+  failures at the default local parallelism (924 passed, three failures).
+- The exact workspace-feature identity binaries pass their 40-test filtered run.
+  GDB under the full workload captured an invalid reference in Argon2 block XOR.
+- The host kernel journal records a NULL-pointer fault in `filemap_release_folio`
+  and termination of `kcompactd0` during this session. Host instability is a
+  hypothesis, not a confirmed root cause. Kernel/debugger logs are in the raw-log directory.
+- All 927 tests pass without retries at four-worker concurrency, with one existing
+  ignored test. Workspace doctests also pass. No skips or production crypto changes
+  were introduced to address the local failures.
+- CI now accepts PRs targeting any branch, so the stacked MR can run the same
+  checks before its comment-cleanup dependency merges.
+- The finish skill's `/simplify` slash command is unavailable in this runtime;
+  no matching installed skill or callable slash-command tool was found.
+
+Deferred items remain the optional TUI/OAuth2 demo cleanups, optional OpenRPC model
+companion tests, and the breaking bidirectional adapter package move.
