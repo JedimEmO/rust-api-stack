@@ -29,3 +29,4 @@ REST baseline: 61/61 passed.
 | 13 | Session config, claims, JWT signing/verification, lifecycle, and auth adapter | Before and after: 40 identity tests pass (1 existing skipped), including both original crashing cases; docs/Clippy and chat consumer build. Original full-workspace SIGSEGV cause remains unreproduced. |
 | 14 | OAuth2 HTTP transport, PKCE, authorization parameters, ID-token validation, and companion tests | Baseline and result: 55 tests; all 19 moved client tests retained; docs and Clippy. Timeout construction moved into the transport owner. |
 | 15 | HTTP query serialization and path encoding | Baseline and result: 36 tests; docs/Clippy; no-default build; all three generated API clients compile for WASM. Root exports preserved. |
+| 16 | Observability core depends directly on `http`, not Axum | Baseline and result: 37 core/OTEL tests; docs/Clippy; depth-one dependency tree contains `http` and no Axum. |

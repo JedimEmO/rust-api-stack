@@ -2961,7 +2961,7 @@ name = "ras-observability-core"
 version = "0.2.0"
 dependencies = [
  "async-trait",
- "axum",
+ "http",
  "ras-auth-core",
  "serde",
  "serde_json",
