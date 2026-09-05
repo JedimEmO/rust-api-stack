@@ -20,6 +20,7 @@ reqwest = ["client", "ras-transport-core/reqwest"]
 permissions = []
 
 [dependencies]
+ras-api-explorer-assets = { path = "../../specs/ras-api-explorer-assets", version = "0.1.0" }
 syn = { workspace = true }
 quote = { workspace = true }
 proc-macro2 = { workspace = true }

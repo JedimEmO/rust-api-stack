@@ -1,0 +1,91 @@
+Single-MR responsibility refactor. Base: `84346d6` (PR #27).
+
+The accepted plan is executed sequentially on `refactor/responsibility-boundaries`.
+Every checkpoint below passed its affected-package gate before the next extraction.
+The gate includes formatting, nextest, doctests, Clippy with warnings denied,
+and additional feature/consumer checks where recorded. Raw logs are in
+`/tmp/ras-refactor-logs` for this workspace session.
+
+Baseline: workspace nextest ran 926 tests: 924 passed, two SIGSEGV failures,
+one skipped. The failures were `ras-identity-session::permissions_are_frozen_into_the_token_snapshot`
+and `ras-identity-local::test_duplicate_user_is_rejected`, before refactoring.
+Identity work must investigate these failures before its checkpoint can pass.
+REST baseline: 61/61 passed.
+
+| Step | Change | Verification |
+| --- | --- | --- |
+| 1 | REST model and parser | 61 tests, 1 doctest; Clippy; no-default/server/client macro builds; no-default/server native and client WASM `rest-api` builds. |
+| 2 | REST expansion, routing, request extraction, canonical/versioned handlers | 61 tests, 1 doctest; Clippy; all three macro feature modes; server native and client WASM consumer builds. |
+| 3 | JSON-RPC model and parser | 59 tests; doctests (1 pre-existing ignored example); Clippy; all macro feature modes and no-default/server/client-WASM `basic-jsonrpc-api` builds. |
+| 4 | JSON-RPC builder, HTTP envelope/auth policy, method/version dispatch | 59 tests; doctests; Clippy; all macro feature modes; native-server and WASM-client consumer builds. |
+| 5 | Shared explorer assets crate | Original template SHA-256 preserved; 120 macro tests; docs/Clippy/features; 11/11 browser tests (baseline also 11/11); asset and macro packages created offline, unpacked macro builds pass using local dependency patches. |
+| 6 | WebSocket subscription policy/accounting and handler test organization | 112 server/macro tests including all 29 moved handler tests; docs and Clippy; chat server consumer build. Checked mutation and egress checks unchanged. |
+| 7 | WebSocket handler contract, socket IO, and lifecycle configuration | 112 server/macro tests; docs and Clippy. Public handler paths re-export moved types; connection loop remains together. |
+| 8 | Explorer markup, styles, rendering, state, and request assets | Assembled HTML remains byte-identical (60,172 bytes); 120 tests; docs/Clippy/macro features; 11 browser tests; packaged and unpacked macro builds. |
+| 9 | File-service types, uploads, downloads, routes, and auth generation | Baseline and result: 49 tests; docs/Clippy; no-default/server/client macro checks; native and WASM API consumer checks. |
+| 10 | OpenAPI schema collection/normalization and operation emission | 61 tests, doctest, Clippy/features, 11 browser tests. 64 original and extracted document samples produce the same four JSON variants: schema titles already vary with HashMap insertion order. No output policy changed. |
+| 11 | OpenRPC schemas/references, examples, and methods | 59 tests, docs/Clippy/features, 11 browser tests; three baseline JSON documents equal all 64 extracted samples each. |
+| 12 | HTTP credential, cookie, CSRF, and redaction policy behind the transport facade | Auth baseline 39 tests; result 208 auth/HTTP macro tests; all 24 transport tests retained under scenario owners; docs/Clippy/macro feature matrix. |
+| 13 | Session config, claims, JWT signing/verification, lifecycle, and auth adapter | Before and after: 40 identity tests pass (1 existing skipped), including both original crashing cases; docs/Clippy and chat consumer build. Original full-workspace SIGSEGV cause remains unreproduced. |
+| 14 | OAuth2 HTTP transport, PKCE, authorization parameters, ID-token validation, and companion tests | Baseline and result: 55 tests; all 19 moved client tests retained; docs and Clippy. Timeout construction moved into the transport owner. |
+| 15 | HTTP query serialization and path encoding | Baseline and result: 36 tests; docs/Clippy; no-default build; all three generated API clients compile for WASM. Root exports preserved. |
+| 16 | Observability core depends directly on `http`, not Axum | Baseline and result: 37 core/OTEL tests; docs/Clippy; depth-one dependency tree contains `http` and no Axum. |
+| 17 | WebSocket client test scenarios | Baseline and result: 53 tests (18 moved client cases); doctest/Clippy; WASM build with the CI no-default/wasm feature combination. Pre-existing extra blank line formatted. |
+| 18 | WebSocket client builder and message driver | 53 tests, doctest/Clippy; explicit native and WASM CI builds. Existing driver/heartbeat ordering and lock scopes retained. |
+| 19 | Chat library application constructor, state, operations, auth, and persistence conversions | Baseline and result: 28 tests; docs/Clippy. Ten service methods delegate to cohesive operation owners sharing the existing state/locks. Main retains environment, tracing, listener and serving; constructor accepts explicit identity storage and development seeding and returns router/session/manager handles. |
+| 20 | Chat fixtures call the production application constructor | 29 tests (28 retained + router-level authenticated WebSocket/persistence/cleanup test); docs/Clippy. Removed duplicate auth/chat implementations and health-only stand-in. Assertions now reflect existing production 201 registration, 400 malformed input, and JSON health contracts. |
+| 21a | Fix existing task-details CSS-token panic before UI extraction | Seven Rust tests, Clippy, WASM bundle and browser interaction test pass. Browser baseline had panicked on one space-separated `class` token; split it into two calls. New browser test covers login failure/success, list/create/complete/delete and failed-create state. cdylib has no doctest target. |
+| 21 | WASM UI app state/actions and component renderers | Seven Rust tests, Clippy, WASM bundle and Chromium interaction test pass after extraction. Native cdylib doctests are not applicable. Signal/event ownership unchanged. |
+| 22 | Bidirectional wire/connection models and sender contracts/adapters | Type baseline 14 tests; result 158 type/client/server tests; docs/Clippy and WASM client build. Existing root and sender-module exports and dependencies preserved. |
+| 23 | REST integration/e2e scenarios | All 61 discovered names/counts retained; 43 moved cases grouped under their original test targets; 61 tests, doctest/Clippy/features pass. |
+| 24 | JSON-RPC integration/e2e scenarios | All 59 discovered names/counts retained, including conditional client cases; 27 moved cases; 59 tests, docs/Clippy/features pass. |
+| 25 | File-service e2e transfer, validation, limit, and schema/client scenarios | All 49 discovered names/counts retained; 23 moved cases; 49 tests, docs/Clippy/features pass. |
+| 26 | Local-identity companion tests | All 20 discovered local-identity cases retained (one existing ignored); 40 local/session tests pass, docs/Clippy pass. Provider implementation unchanged. |
+| 27 | Rename history-based macro test targets to `http_service_contracts` | 120 REST/JSON-RPC tests, docs/Clippy/features pass; source files renamed without changing their cases. No external target-name references found. |
+
+Final verification investigation:
+
+- The first complete run executed 927 tests: 922 passed; four identity tests
+  SIGSEGVed and one session test rejected freshly created credentials.
+- A fresh target directory with `CARGO_INCREMENTAL=0` still reproduced identity
+  failures at the default local parallelism (924 passed, three failures).
+- The exact workspace-feature identity binaries pass their 40-test filtered run.
+  GDB under the full workload captured an invalid reference in Argon2 block XOR.
+- The host kernel journal records a NULL-pointer fault in `filemap_release_folio`
+  and termination of `kcompactd0` during this session. Host instability is a
+  hypothesis, not a confirmed root cause. Kernel/debugger logs are in the raw-log directory.
+- All 927 tests pass without retries at four-worker concurrency, with one existing
+  ignored test. Workspace doctests also pass. No skips or production crypto changes
+  were introduced to address the local failures.
+- GitHub rejected the workflow edits during the refactor because the configured OAuth
+  token lacked `workflow` scope, so the WASM UI browser test was initially local-only.
+  The post-review follow-up re-added it to the `wasm-ui-example` CI job, and the spec
+  now opens and closes the task detail panel explicitly instead of relying on click
+  bubbling from the checkbox.
+- The finish skill's `/simplify` slash command is unavailable in this runtime;
+  no matching installed skill or callable slash-command tool was found.
+
+Deferred items remain the optional TUI/OAuth2 demo cleanups, optional OpenRPC model
+companion tests, and the breaking bidirectional adapter package move.
+
+Final project gates:
+
+- Hosted [workspace test job](https://github.com/JedimEmO/rust-api-stack/actions/runs/33960234279/job/101290741016)
+  passes all 927 tests without retries, with one existing ignored test, plus workspace doctests.
+- Local workspace format, Clippy (`-D warnings`), rustdoc (`-D warnings`), mdBook,
+  package README/Markdown links, and cargo-deny policy checks pass.
+- All 13 CI feature combinations and generated-client specification checks pass.
+- Final browser checks pass: 11 explorer tests and one WASM task-flow test.
+- Explorer HTML was byte-identical to the original 60,172-byte response at checkpoint 8.
+  The post-review follow-up moved the style and script wrapper tags out of the fragments
+  into the assembler so each asset is a standalone file; the served page now differs
+  from the original only by one blank line before the closing script tag, and unit
+  tests in the assets crate guard the placeholder and document structure.
+  The asset and both macro archives package successfully; both unpacked macros compile
+  against the packaged asset using local dependency patches.
+- Diff review retains original whitespace in the UI's raw stylesheet string.
+- The application constructor documents its validated-configuration precondition.
+  No unresolved implementation TODOs or temporary debugging artifacts were added.
+
+The default-parallel local identity failures remain a separate unresolved baseline issue;
+this refactor does not claim to fix the host or cryptographic runtime.

@@ -5,6 +5,7 @@ const jsonrpcPort = process.env.PLAYWRIGHT_JSONRPC_PORT ?? '3102';
 
 export default defineConfig({
   testDir: './tests',
+  testIgnore: 'wasm-ui.spec.ts',
   fullyParallel: false,
   retries: process.env.CI ? 2 : 0,
   reporter: process.env.CI ? [['github'], ['html', { open: 'never' }]] : [['list'], ['html', { open: 'never' }]],

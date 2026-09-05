@@ -1,0 +1,106 @@
+</head>
+<body>
+    <div class="app">
+        <aside class="sidebar">
+            <div class="topbar">
+                <div class="brand">
+                    <h1 id="service-name">API Explorer</h1>
+                    <div class="sub" id="service-subtitle">Loading specification</div>
+                </div>
+                <button id="theme-toggle" class="ghost" title="Toggle theme">Theme</button>
+            </div>
+            <div class="stack">
+                <div class="field">
+                    <label for="environment-select">Environment</label>
+                    <div class="row">
+                        <select id="environment-select" class="grow"></select>
+                        <button id="add-environment" title="Add environment">Add</button>
+                    </div>
+                </div>
+                <div class="field">
+                    <label for="base-url">Base URL</label>
+                    <input id="base-url" type="text" spellcheck="false">
+                </div>
+                <div class="field">
+                    <label for="bearer-token">Bearer token</label>
+                    <input id="bearer-token" type="password" autocomplete="off" placeholder="Token for this session">
+                </div>
+                <div class="row">
+                    <button id="save-token" class="primary">Apply token</button>
+                    <button id="clear-token">Clear</button>
+                    <span id="auth-state" class="badge">No token</span>
+                </div>
+            </div>
+            <div class="search">
+                <input id="operation-search" type="search" placeholder="Search operations">
+            </div>
+            <div id="operation-list" class="list"></div>
+        </aside>
+
+        <main class="workspace">
+            <div class="topbar">
+                <div class="titleline">
+                    <h2 id="operation-title">Select an operation</h2>
+                    <div id="operation-description" class="description markdown">Choose an operation to prepare a request.</div>
+                </div>
+                <div class="row">
+                    <button id="save-request">Save</button>
+                    <button id="send-request" class="primary" disabled>Send</button>
+                </div>
+            </div>
+            <div class="main-scroll">
+                <section class="panel">
+                    <div class="panel-head">
+                        <strong>Request</strong>
+                        <span id="request-url" class="hint mono"></span>
+                    </div>
+                    <div id="request-form" class="panel-body">
+                        <div class="empty">No operation selected.</div>
+                    </div>
+                </section>
+                <section class="panel">
+                    <div class="panel-head">
+                        <strong>Saved requests</strong>
+                        <button id="clear-saved">Clear saved</button>
+                    </div>
+                    <div id="saved-list" class="panel-body"></div>
+                </section>
+            </div>
+        </main>
+
+        <aside class="response">
+            <div class="topbar">
+                <div class="brand">
+                    <h1>Response</h1>
+                    <div id="response-meta" class="sub">No request sent</div>
+                </div>
+                <button id="copy-response">Copy</button>
+            </div>
+            <div class="response-scroll">
+                <section class="panel">
+                    <div class="panel-head">
+                        <div class="tabs">
+                            <button class="tab active" data-response-tab="body">Body</button>
+                            <button class="tab" data-response-tab="headers">Headers</button>
+                            <button class="tab" data-response-tab="request">Request</button>
+                        </div>
+                        <span id="response-status" class="status">Idle</span>
+                    </div>
+                    <div class="panel-body">
+                        <pre id="response-output"></pre>
+                    </div>
+                </section>
+                <section class="panel">
+                    <div class="panel-head">
+                        <strong>History (last 30)</strong>
+                        <button id="clear-history">Clear history</button>
+                    </div>
+                    <div id="history-list" class="panel-body"></div>
+                </section>
+            </div>
+        </aside>
+    </div>
+    <div id="toast" class="toast"></div>
+
+    <!-- Replaced by the Rust macro as raw JSON script content. Keep this token outside HTML attributes and JS strings. -->
+    <script id="ras-explorer-config" type="application/json">{EXPLORER_CONFIG_JSON}</script>

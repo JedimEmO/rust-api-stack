@@ -22,7 +22,7 @@ Chat server auth and lifecycle tests:
 - **Admin Permissions**: Tests admin vs regular user permissions in JWT claims
 - **Concurrent Users**: Tests multiple users logging in simultaneously
 
-### `../src/main.rs` Unit Tests
+### `../src/chat/tests.rs` Unit Tests
 Socketless WebSocket flow tests for the real chat server implementation:
 - **Generated WebSocket Dispatch**: Runs the generated `ChatServiceHandler` through the in-memory `WebSocketIo` adapter
 - **Room Join Flow**: Verifies an authenticated client can join the default room
@@ -104,11 +104,11 @@ The tests cover the following areas:
 
 ## Test Architecture
 
-The tests use in-memory harnesses:
-- `server_tests.rs` keeps configuration, health, and persistence checks isolated from auth setup.
-- `auth_lifecycle_tests.rs` runs HTTP-style requests through `axum-test` with login and registration wired through the same in-memory identity provider.
-- The `../src/main.rs` WebSocket unit tests exercise the real `ChatServer` through the generated handler, in-memory socket adapter, and in-memory connection manager.
-- Both suites use `axum-test` mock transport instead of binding sockets for HTTP checks.
+The tests exercise the library application and its local state owners:
+- `server_tests.rs` covers configuration and persistence, calls `build_application` for startup checks, and exercises an authenticated WebSocket session through the production router.
+- `auth_lifecycle_tests.rs` calls `build_application` with explicit configuration and an in-memory identity provider, then tests production login, registration, and permission assignment.
+- The `../src/chat/tests.rs` WebSocket unit tests exercise the real `ChatServer` through the generated handler, in-memory socket adapter, and in-memory connection manager.
+- HTTP-only checks use `axum-test` mock transport; the router-level WebSocket check binds an ephemeral local port and verifies persisted messages and disconnect cleanup.
 - Both suites create temporary directories for runtime data and support concurrent test execution.
 
 ## Known Coverage Gaps

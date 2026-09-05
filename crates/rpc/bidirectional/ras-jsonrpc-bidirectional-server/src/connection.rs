@@ -1,9 +1,9 @@
 //! Connection context and management
 
-use crate::handler::{SubscriptionAccounting, SubscriptionLimits};
+pub use crate::subscriptions::SubscriptionPolicy;
 use ras_auth_core::AuthenticatedUser;
 use ras_jsonrpc_bidirectional_types::{
-    BidirectionalError, BidirectionalMessage, ConnectionId, ConnectionInfo, ConnectionManager,
+    BidirectionalError, BidirectionalMessage, ConnectionId, ConnectionInfo,
 };
 use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
@@ -74,28 +74,6 @@ impl ChannelMessageSender {
     /// Get the connection ID
     pub fn connection_id(&self) -> ConnectionId {
         self.connection_id
-    }
-}
-
-/// Everything a subscription mutation has to be checked against and mirrored
-/// into. Owned by the service and shared by all of its connections.
-#[derive(Clone, Default)]
-pub struct SubscriptionPolicy {
-    /// Caps applied to every subscribe
-    pub limits: SubscriptionLimits,
-    /// Service-wide counter behind the global cap
-    pub accounting: Arc<SubscriptionAccounting>,
-    /// Manager whose topic index mirrors accepted subscriptions
-    pub manager: Option<Arc<dyn ConnectionManager>>,
-}
-
-impl std::fmt::Debug for SubscriptionPolicy {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SubscriptionPolicy")
-            .field("limits", &self.limits)
-            .field("held", &self.accounting.total())
-            .field("manager", &self.manager.is_some())
-            .finish()
     }
 }
 
