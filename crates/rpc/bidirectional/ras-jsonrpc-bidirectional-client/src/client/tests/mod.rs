@@ -1,5 +1,8 @@
+use super::driver::IncomingMessageContext;
 use super::*;
+use crate::config::{AuthConfig, ReconnectConfig};
 use std::sync::Mutex;
+use std::time::Duration;
 
 struct IncomingHarness {
     pending_requests: DashMap<Value, PendingRequest>,

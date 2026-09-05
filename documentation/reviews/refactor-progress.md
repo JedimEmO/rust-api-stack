@@ -31,3 +31,4 @@ REST baseline: 61/61 passed.
 | 15 | HTTP query serialization and path encoding | Baseline and result: 36 tests; docs/Clippy; no-default build; all three generated API clients compile for WASM. Root exports preserved. |
 | 16 | Observability core depends directly on `http`, not Axum | Baseline and result: 37 core/OTEL tests; docs/Clippy; depth-one dependency tree contains `http` and no Axum. |
 | 17 | WebSocket client test scenarios | Baseline and result: 53 tests (18 moved client cases); doctest/Clippy; WASM build with the CI no-default/wasm feature combination. Pre-existing extra blank line formatted. |
+| 18 | WebSocket client builder and message driver | 53 tests, doctest/Clippy; explicit native and WASM CI builds. Existing driver/heartbeat ordering and lock scopes retained. |
