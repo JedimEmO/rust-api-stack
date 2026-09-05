@@ -38,3 +38,4 @@ REST baseline: 61/61 passed.
 | 21 | WASM UI app state/actions and component renderers | Seven Rust tests, Clippy, WASM bundle and Chromium interaction test pass after extraction. Native cdylib doctests are not applicable. Signal/event ownership unchanged. |
 | 22 | Bidirectional wire/connection models and sender contracts/adapters | Type baseline 14 tests; result 158 type/client/server tests; docs/Clippy and WASM client build. Existing root and sender-module exports and dependencies preserved. |
 | 23 | REST integration/e2e scenarios | All 61 discovered names/counts retained; 43 moved cases grouped under their original test targets; 61 tests, doctest/Clippy/features pass. |
+| 24 | JSON-RPC integration/e2e scenarios | All 59 discovered names/counts retained, including conditional client cases; 27 moved cases; 59 tests, docs/Clippy/features pass. |
