@@ -15,3 +15,4 @@ REST baseline: 61/61 passed.
 | Step | Change | Verification |
 | --- | --- | --- |
 | 1 | REST model and parser | 61 tests, 1 doctest; Clippy; no-default/server/client macro builds; no-default/server native and client WASM `rest-api` builds. |
+| 2 | REST expansion, routing, request extraction, canonical/versioned handlers | 61 tests, 1 doctest; Clippy; all three macro feature modes; server native and client WASM consumer builds. |
