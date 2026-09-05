@@ -22,3 +22,4 @@ REST baseline: 61/61 passed.
 | 6 | WebSocket subscription policy/accounting and handler test organization | 112 server/macro tests including all 29 moved handler tests; docs and Clippy; chat server consumer build. Checked mutation and egress checks unchanged. |
 | 7 | WebSocket handler contract, socket IO, and lifecycle configuration | 112 server/macro tests; docs and Clippy. Public handler paths re-export moved types; connection loop remains together. |
 | 8 | Explorer markup, styles, rendering, state, and request assets | Assembled HTML remains byte-identical (60,172 bytes); 120 tests; docs/Clippy/macro features; 11 browser tests; packaged and unpacked macro builds. |
+| 9 | File-service types, uploads, downloads, routes, and auth generation | Baseline and result: 49 tests; docs/Clippy; no-default/server/client macro checks; native and WASM API consumer checks. |
