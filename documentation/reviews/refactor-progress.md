@@ -27,3 +27,4 @@ REST baseline: 61/61 passed.
 | 11 | OpenRPC schemas/references, examples, and methods | 59 tests, docs/Clippy/features, 11 browser tests; three baseline JSON documents equal all 64 extracted samples each. |
 | 12 | HTTP credential, cookie, CSRF, and redaction policy behind the transport facade | Auth baseline 39 tests; result 208 auth/HTTP macro tests; all 24 transport tests retained under scenario owners; docs/Clippy/macro feature matrix. |
 | 13 | Session config, claims, JWT signing/verification, lifecycle, and auth adapter | Before and after: 40 identity tests pass (1 existing skipped), including both original crashing cases; docs/Clippy and chat consumer build. Original full-workspace SIGSEGV cause remains unreproduced. |
+| 14 | OAuth2 HTTP transport, PKCE, authorization parameters, ID-token validation, and companion tests | Baseline and result: 55 tests; all 19 moved client tests retained; docs and Clippy. Timeout construction moved into the transport owner. |
