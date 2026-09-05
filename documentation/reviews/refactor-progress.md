@@ -24,3 +24,4 @@ REST baseline: 61/61 passed.
 | 8 | Explorer markup, styles, rendering, state, and request assets | Assembled HTML remains byte-identical (60,172 bytes); 120 tests; docs/Clippy/macro features; 11 browser tests; packaged and unpacked macro builds. |
 | 9 | File-service types, uploads, downloads, routes, and auth generation | Baseline and result: 49 tests; docs/Clippy; no-default/server/client macro checks; native and WASM API consumer checks. |
 | 10 | OpenAPI schema collection/normalization and operation emission | 61 tests, doctest, Clippy/features, 11 browser tests. 64 original and extracted document samples produce the same four JSON variants: schema titles already vary with HashMap insertion order. No output policy changed. |
+| 11 | OpenRPC schemas/references, examples, and methods | 59 tests, docs/Clippy/features, 11 browser tests; three baseline JSON documents equal all 64 extracted samples each. |

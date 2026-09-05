@@ -41,3 +41,7 @@ sketchpad/
 
 # External security review input (not part of the published repo)
 SECURITY_FINDINGS.md
+
+# Specification emitter source modules are not generated documents.
+!crates/rest/ras-rest-macro/src/openapi/
+!crates/rpc/ras-jsonrpc-macro/src/openrpc/
