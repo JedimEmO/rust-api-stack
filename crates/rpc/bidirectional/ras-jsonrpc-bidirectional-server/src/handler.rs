@@ -1895,12 +1895,13 @@ mod tests {
                     .await
             })
         };
-        for _ in 0..100 {
-            if accounting.total() == 2 {
-                break;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while accounting.total() != 2 {
+                tokio::task::yield_now().await;
             }
-            tokio::time::sleep(Duration::from_millis(2)).await;
-        }
+        })
+        .await
+        .expect("first connection should reserve its 2 slots");
         assert_eq!(first.get_subscriptions().await.len(), 2);
 
         let second = ctx_with(policy);

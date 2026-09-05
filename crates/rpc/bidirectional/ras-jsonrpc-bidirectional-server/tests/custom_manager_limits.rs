@@ -269,13 +269,13 @@ async fn permissive_custom_manager_cannot_exceed_global_cap() {
         })
     };
     // Wait until the first connection holds its 4 slots.
-    for _ in 0..100 {
-        if service.subscription_accounting().total() == 4 {
-            break;
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while service.subscription_accounting().total() != 4 {
+            tokio::task::yield_now().await;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-    }
-    assert_eq!(service.subscription_accounting().total(), 4);
+    })
+    .await
+    .expect("first connection should reserve its 4 slots");
 
     let mut socket = Socket {
         incoming: VecDeque::from([subscribe_frame()]),
