@@ -13,6 +13,32 @@ use thiserror::Error;
 pub use authorize::*;
 pub use transport::*;
 
+/// Maximum length of an attacker-influenced string included in a log line.
+pub const MAX_LOG_DETAIL_BYTES: usize = 256;
+
+/// Make an untrusted string safe to place in a log record.
+///
+/// Control characters (including newlines, which enable log injection) are
+/// replaced with `?`, and the result is truncated to
+/// [`MAX_LOG_DETAIL_BYTES`] on a UTF-8 boundary with a `…` marker. Use it for
+/// any request-derived detail, such as extractor rejection text, before it
+/// reaches `tracing`.
+pub fn sanitize_log_detail(raw: &str) -> String {
+    let mut out: String = raw
+        .chars()
+        .map(|c| if c.is_control() { '?' } else { c })
+        .collect();
+    if out.len() > MAX_LOG_DETAIL_BYTES {
+        let mut cut = MAX_LOG_DETAIL_BYTES;
+        while !out.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        out.truncate(cut);
+        out.push('…');
+    }
+    out
+}
+
 /// Errors that can occur during authentication or authorization.
 ///
 /// Deliberately **not** `Serialize`/`Deserialize`: this is a server-side
@@ -230,6 +256,19 @@ mod tests {
                 .collect(),
             metadata: Some(json!({ "tenant": "acme" })),
         }
+    }
+
+    #[test]
+    fn log_detail_strips_control_chars_and_truncates() {
+        let injected = "bad value\n[ERROR] forged line\r\x1b[31m";
+        let cleaned = sanitize_log_detail(injected);
+        assert!(!cleaned.contains('\n') && !cleaned.contains('\r') && !cleaned.contains('\x1b'));
+        assert!(cleaned.starts_with("bad value?[ERROR] forged line"));
+
+        let long = "é".repeat(MAX_LOG_DETAIL_BYTES);
+        let cut = sanitize_log_detail(&long);
+        assert!(cut.ends_with('…'));
+        assert!(cut.len() <= MAX_LOG_DETAIL_BYTES + '…'.len_utf8());
     }
 
     #[test]

@@ -13,6 +13,7 @@ pub use bytes;
 pub use futures_core;
 pub use futures_util;
 pub use http;
+pub use ras_auth_core::sanitize_log_detail;
 pub use tracing;
 
 /// Result type used by generated file services.

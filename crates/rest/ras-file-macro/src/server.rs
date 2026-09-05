@@ -127,7 +127,7 @@ pub fn generate_server(definition: &FileServiceDefinition) -> TokenStream {
             } else {
                 ::ras_file_core::tracing::warn!(
                     status = error.status().as_u16(),
-                    detail = %error.body_text(),
+                    detail = %::ras_file_core::sanitize_log_detail(&error.body_text()),
                     "rejected request: invalid multipart body"
                 );
                 ::ras_file_core::FileError::bad_request("invalid multipart body")
@@ -473,7 +473,7 @@ fn generate_upload_handler(
                     // offending header value); log it and send a fixed message.
                     ::ras_file_core::tracing::warn!(
                         status = rejection.status().as_u16(),
-                        detail = %rejection.body_text(),
+                        detail = %::ras_file_core::sanitize_log_detail(&rejection.body_text()),
                         "rejected request: invalid multipart request"
                     );
                     return __ras_file_error_response(
@@ -894,7 +894,7 @@ fn generate_path_extraction(path_params: &[PathParam], path_struct: &Ident) -> T
                         // log it server-side and send a fixed message.
                         ::ras_file_core::tracing::warn!(
                             status = error.status().as_u16(),
-                            detail = %error.body_text(),
+                            detail = %::ras_file_core::sanitize_log_detail(&error.body_text()),
                             "rejected request: invalid path parameters"
                         );
                         return __ras_file_error_response(::ras_file_core::FileError::bad_request("invalid path parameters"));
@@ -912,7 +912,7 @@ fn generate_path_extraction(path_params: &[PathParam], path_struct: &Ident) -> T
                         // log it server-side and send a fixed message.
                         ::ras_file_core::tracing::warn!(
                             status = error.status().as_u16(),
-                            detail = %error.body_text(),
+                            detail = %::ras_file_core::sanitize_log_detail(&error.body_text()),
                             "rejected request: invalid path parameters"
                         );
                         return __ras_file_error_response(::ras_file_core::FileError::bad_request("invalid path parameters"));

@@ -19,6 +19,8 @@ pub struct DefaultConnectionManager {
 
     /// Topic subscriptions - maps topic to set of connection IDs
     subscriptions: DashMap<String, Vec<ConnectionId>>,
+    /// Exact count of (connection, topic) pairs in `subscriptions`
+    total_subscriptions: std::sync::atomic::AtomicUsize,
 
     /// Pending requests for server-to-client RPC calls
     /// Maps connection_id -> request_id -> response_sender
@@ -34,6 +36,7 @@ impl DefaultConnectionManager {
         Self {
             connections: DashMap::new(),
             subscriptions: DashMap::new(),
+            total_subscriptions: std::sync::atomic::AtomicUsize::new(0),
             pending_requests: DashMap::new(),
         }
     }
@@ -90,10 +93,17 @@ impl DefaultConnectionManager {
         &self,
         recipients: Vec<(ConnectionId, ChannelMessageSender)>,
         message: BidirectionalMessage,
+        topic: Option<&str>,
     ) -> (usize, Vec<ConnectionId>) {
         let sends = recipients.into_iter().map(|(id, sender)| {
             let message = message.clone();
-            async move { (id, sender.send(message).await) }
+            async move {
+                let result = match topic {
+                    Some(topic) => sender.send_on_topic(topic, message).await,
+                    None => sender.send(message).await,
+                };
+                (id, result)
+            }
         });
 
         let mut sent_count = 0;
@@ -146,7 +156,10 @@ impl ConnectionManager for DefaultConnectionManager {
             // empty-entry cleanup atomic against concurrent subscribes.
             for topic in info.subscriptions.iter() {
                 if let Some(mut entry) = self.subscriptions.get_mut(topic) {
+                    let before = entry.len();
                     entry.retain(|&connection_id| connection_id != id);
+                    self.total_subscriptions
+                        .fetch_sub(before - entry.len(), std::sync::atomic::Ordering::Relaxed);
                 }
                 self.subscriptions.remove_if(topic, |_, ids| ids.is_empty());
             }
@@ -176,6 +189,12 @@ impl ConnectionManager for DefaultConnectionManager {
 
     async fn active_connection_count(&self) -> Result<usize> {
         Ok(self.connections.len())
+    }
+
+    async fn total_subscription_count(&self) -> Result<usize> {
+        Ok(self
+            .total_subscriptions
+            .load(std::sync::atomic::Ordering::Relaxed))
     }
 
     async fn get_subscribed_connections(&self, topic: &str) -> Result<Vec<ConnectionInfo>> {
@@ -232,6 +251,8 @@ impl ConnectionManager for DefaultConnectionManager {
             let mut entry = self.subscriptions.entry(topic.clone()).or_default();
             if !entry.contains(&id) {
                 entry.push(id);
+                self.total_subscriptions
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
         }
 
@@ -239,7 +260,10 @@ impl ConnectionManager for DefaultConnectionManager {
         // the index insert; undo so no zombie entry survives the race.
         if !self.connections.contains_key(&id) {
             if let Some(mut entry) = self.subscriptions.get_mut(&topic) {
+                let before = entry.len();
                 entry.retain(|&connection_id| connection_id != id);
+                self.total_subscriptions
+                    .fetch_sub(before - entry.len(), std::sync::atomic::Ordering::Relaxed);
             }
             self.subscriptions
                 .remove_if(&topic, |_, ids| ids.is_empty());
@@ -253,7 +277,10 @@ impl ConnectionManager for DefaultConnectionManager {
     async fn remove_subscription(&self, id: ConnectionId, topic: &str) -> Result<()> {
         // Update topic subscriptions
         if let Some(mut entry) = self.subscriptions.get_mut(topic) {
+            let before = entry.len();
             entry.retain(|&connection_id| connection_id != id);
+            self.total_subscriptions
+                .fetch_sub(before - entry.len(), std::sync::atomic::Ordering::Relaxed);
         }
         // Drop the topic entry only if it is still empty at removal time, so
         // a concurrent subscribe between the retain above and this call is
@@ -318,7 +345,7 @@ impl ConnectionManager for DefaultConnectionManager {
             }
         }
 
-        let (sent_count, send_failures) = self.fan_out(recipients, message).await;
+        let (sent_count, send_failures) = self.fan_out(recipients, message, Some(topic)).await;
         failed_connections.extend(send_failures);
 
         // Clean up failed connections from topic subscriptions
@@ -341,7 +368,7 @@ impl ConnectionManager for DefaultConnectionManager {
             .map(|entry| (*entry.key(), entry.value().1.clone()))
             .collect();
 
-        let (sent_count, _) = self.fan_out(recipients, message).await;
+        let (sent_count, _) = self.fan_out(recipients, message, None).await;
 
         debug!("Broadcasted to {} authenticated connections", sent_count);
         Ok(sent_count)
@@ -359,7 +386,7 @@ impl ConnectionManager for DefaultConnectionManager {
             .map(|entry| (*entry.key(), entry.value().1.clone()))
             .collect();
 
-        let (sent_count, _) = self.fan_out(recipients, message).await;
+        let (sent_count, _) = self.fan_out(recipients, message, None).await;
 
         debug!(
             "Broadcasted to {} connections with permission: {}",

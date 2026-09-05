@@ -1,6 +1,6 @@
 //! Message handlers for WebSocket communication
 
-use crate::{ConnectionContext, ServerError, ServerResult};
+use crate::{ConnectionContext, ServerError, ServerResult, connection::OutboundMessage};
 use async_trait::async_trait;
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use futures::stream::StreamExt;
@@ -228,6 +228,11 @@ pub struct SubscriptionLimits {
     pub max_topics_per_connection: usize,
     /// Maximum topic name length in bytes
     pub max_topic_length: usize,
+    /// Maximum (connection, topic) pairs across the whole manager. `0`
+    /// disables the cap. Enforced only when the manager reports its count
+    /// (`ConnectionManager::total_subscription_count`); the default manager
+    /// does.
+    pub max_total_subscriptions: usize,
 }
 
 impl Default for SubscriptionLimits {
@@ -236,6 +241,7 @@ impl Default for SubscriptionLimits {
             max_topics_per_message: 64,
             max_topics_per_connection: 256,
             max_topic_length: 256,
+            max_total_subscriptions: 100_000,
         }
     }
 }
@@ -271,7 +277,7 @@ pub struct WebSocketHandler<H: MessageHandler> {
     /// Connection context
     context: Arc<ConnectionContext>,
     /// Channel for receiving messages to send to client
-    message_rx: mpsc::Receiver<BidirectionalMessage>,
+    message_rx: mpsc::Receiver<OutboundMessage>,
     max_message_size: usize,
     /// Optional periodic credential re-validation
     auth_revalidation: Option<AuthRevalidation>,
@@ -287,7 +293,7 @@ impl<H: MessageHandler> WebSocketHandler<H> {
     pub fn new(
         handler: Arc<H>,
         context: Arc<ConnectionContext>,
-        message_rx: mpsc::Receiver<BidirectionalMessage>,
+        message_rx: mpsc::Receiver<OutboundMessage>,
         max_message_size: usize,
     ) -> Self {
         Self {
@@ -382,6 +388,9 @@ impl<H: MessageHandler> WebSocketHandler<H> {
                     "Dropping subscription to '{}' on connection {}: no longer authorized",
                     topic, self.context.id
                 );
+                // Context first: the egress gate consults it, so from this
+                // point no broadcast on the topic can leave this connection,
+                // regardless of when the manager index catches up.
                 self.context.unsubscribe(&topic).await;
                 if let Some(manager) = &self.connection_manager {
                     let _ = manager.remove_subscription(self.context.id, &topic).await;
@@ -458,21 +467,45 @@ impl<H: MessageHandler> WebSocketHandler<H> {
         }
 
         let mut revalidation_timer = self.auth_revalidation.as_ref().map(|revalidation| {
-            let mut timer = tokio::time::interval_at(
-                tokio::time::Instant::now() + revalidation.interval,
-                revalidation.interval,
-            );
-            timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            timer
-        });
-
-        let mut ping_timer = self.keepalive.ping_interval.map(|interval| {
+            // tokio panics on a zero period; a zero interval is a config
+            // error, not a request to hammer the provider. Fall back to the
+            // default rather than disabling re-validation.
+            let interval = if revalidation.interval.is_zero() {
+                warn!(
+                    "auth re-validation interval is zero; using default {:?}",
+                    DEFAULT_AUTH_REVALIDATION_INTERVAL
+                );
+                DEFAULT_AUTH_REVALIDATION_INTERVAL
+            } else {
+                revalidation.interval
+            };
             let mut timer =
                 tokio::time::interval_at(tokio::time::Instant::now() + interval, interval);
             timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             timer
         });
-        let idle_timeout = self.keepalive.idle_timeout;
+
+        let mut ping_timer = self
+            .keepalive
+            .ping_interval
+            .filter(|interval| {
+                if interval.is_zero() {
+                    warn!("keepalive ping interval is zero; pings disabled");
+                }
+                !interval.is_zero()
+            })
+            .map(|interval| {
+                let mut timer =
+                    tokio::time::interval_at(tokio::time::Instant::now() + interval, interval);
+                timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                timer
+            });
+        let idle_timeout = self.keepalive.idle_timeout.filter(|timeout| {
+            if timeout.is_zero() {
+                warn!("keepalive idle timeout is zero; idle timeout disabled");
+            }
+            !timeout.is_zero()
+        });
         let idle_deadline = tokio::time::sleep(idle_timeout.unwrap_or(Duration::from_secs(0)));
         tokio::pin!(idle_deadline);
 
@@ -552,8 +585,22 @@ impl<H: MessageHandler> WebSocketHandler<H> {
                 // Handle outgoing messages
                 msg = self.message_rx.recv() => {
                     match msg {
-                        Some(msg) => {
-                            if let Err(e) = self.send_message(socket, msg).await {
+                        Some(OutboundMessage { message, topic }) => {
+                            // Egress gate: a message routed on a topic while
+                            // the subscription was still in the manager index
+                            // is dropped here if the connection no longer
+                            // holds it, closing the window between
+                            // re-authorization and index removal.
+                            if let Some(topic) = topic
+                                && !self.context.is_subscribed_to(&topic).await
+                            {
+                                debug!(
+                                    "Dropping message on '{}' for connection {}: not subscribed",
+                                    topic, self.context.id
+                                );
+                                continue;
+                            }
+                            if let Err(e) = self.send_message(socket, message).await {
                                 error!("Error sending message: {}", e);
                                 break;
                             }
@@ -684,11 +731,20 @@ impl<H: MessageHandler> WebSocketHandler<H> {
             }
             BidirectionalMessage::Subscribe { topics } => {
                 let before = self.context.get_subscriptions().await;
-                let limit_error = self.check_subscription_limits(&topics).err().or_else(|| {
-                    let new = topics.iter().filter(|t| !before.contains(t)).count();
+                let new = topics.iter().filter(|t| !before.contains(t)).count();
+                let mut limit_error = self.check_subscription_limits(&topics).err().or_else(|| {
                     (before.len() + new > self.subscription_limits.max_topics_per_connection)
                         .then_some("subscription limit for this connection reached")
                 });
+                if limit_error.is_none()
+                    && self.subscription_limits.max_total_subscriptions > 0
+                    && let Some(manager) = &self.connection_manager
+                {
+                    let total = manager.total_subscription_count().await.unwrap_or(0);
+                    if total + new > self.subscription_limits.max_total_subscriptions {
+                        limit_error = Some("global subscription limit reached");
+                    }
+                }
                 if let Some(reason) = limit_error {
                     warn!(
                         "Rejected subscribe on connection {}: {}",
@@ -1200,7 +1256,7 @@ mod tests {
             },
         );
         let (tx, rx) = mpsc::channel(4);
-        tx.send(notification).await.unwrap();
+        tx.send(OutboundMessage::from(notification)).await.unwrap();
         drop(tx);
 
         let mut socket = InMemorySocket::pending();
@@ -1652,6 +1708,183 @@ mod tests {
         assert!(socket.outgoing.iter().any(|m| matches!(
             m,
             WebSocketIoMessage::Close(Some(reason)) if reason == "idle timeout"
+        )));
+    }
+
+    /// Like `PermissionGated`, but when it denies a topic during
+    /// re-authorization it first pushes a broadcast for that topic into the
+    /// connection's queue, simulating a `broadcast_to_topic` that snapshotted
+    /// the manager index in the window before the subscription was removed.
+    struct RacingAuthorizer;
+
+    #[async_trait]
+    impl MessageHandler for RacingAuthorizer {
+        async fn handle_request(
+            &self,
+            _request: JsonRpcRequest,
+            _context: Arc<ConnectionContext>,
+        ) -> ServerResult<Option<JsonRpcResponse>> {
+            Ok(None)
+        }
+
+        async fn authorize_subscribe(
+            &self,
+            topic: &str,
+            context: &Arc<ConnectionContext>,
+        ) -> ServerResult<bool> {
+            if context.has_permission("room:read").await {
+                return Ok(true);
+            }
+            let stale = BidirectionalMessage::Broadcast(
+                ras_jsonrpc_bidirectional_types::BroadcastMessage {
+                    topic: topic.to_string(),
+                    method: "secret".into(),
+                    params: serde_json::json!({}),
+                    metadata: None,
+                },
+            );
+            context.sender.send_on_topic(topic, stale).await.unwrap();
+            Ok(false)
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn w1_broadcast_queued_during_revocation_window_is_not_delivered() {
+        let context = ctx();
+        context.set_user(auth_user_with("u", &["room:read"])).await;
+        let manager = manager_with(&context).await;
+        let (tx, rx) = mpsc::channel(4);
+        // The handler's context must share this channel so the authorizer
+        // can enqueue through `context.sender`.
+        let context = Arc::new(ConnectionContext::new(
+            context.id,
+            ChannelMessageSender::new(context.id, tx),
+        ));
+        context.set_user(auth_user_with("u", &["room:read"])).await;
+        let mut socket = InMemorySocket::pending();
+        socket
+            .incoming
+            .push_back(subscribe_msg(vec!["room:1".into()]));
+
+        WebSocketHandler::new(Arc::new(RacingAuthorizer), context.clone(), rx, 1024)
+            .with_connection_manager(manager)
+            .with_auth_revalidation(AuthRevalidation {
+                auth_provider: Arc::new(SequenceAuthProvider::new([Ok(auth_user_with("u", &[]))])),
+                token: "t".into(),
+                interval: Duration::from_secs(30),
+                on_permission_change: PermissionChangePolicy::DropSubscriptions,
+            })
+            .run_with_io(&mut socket)
+            .await
+            .unwrap();
+
+        assert!(!context.is_subscribed_to("room:1").await);
+        let leaked = bidirectional_outgoing(&socket)
+            .iter()
+            .any(|m| matches!(m, BidirectionalMessage::Broadcast(b) if b.method == "secret"));
+        assert!(
+            !leaked,
+            "broadcast queued during the revocation window must be dropped"
+        );
+    }
+
+    #[tokio::test]
+    async fn w1_egress_gate_only_filters_topic_routed_messages() {
+        let context = ctx();
+        let (tx, rx) = mpsc::channel(4);
+        let ping = BidirectionalMessage::Ping;
+        tx.send(OutboundMessage::from(ping.clone())).await.unwrap();
+        tx.send(OutboundMessage {
+            message: ping,
+            topic: Some("room:never".into()),
+        })
+        .await
+        .unwrap();
+        drop(tx);
+
+        let mut socket = InMemorySocket::pending();
+        WebSocketHandler::new(Arc::new(PassThrough), context, rx, 1024)
+            .run_with_io(&mut socket)
+            .await
+            .unwrap();
+
+        let pings = bidirectional_outgoing(&socket)
+            .iter()
+            .filter(|m| matches!(m, BidirectionalMessage::Ping))
+            .count();
+        assert_eq!(
+            pings, 1,
+            "untagged delivered, topic-tagged unsubscribed dropped"
+        );
+    }
+
+    #[tokio::test]
+    async fn w3_global_subscription_cap_is_enforced_across_connections() {
+        let manager: Arc<dyn ConnectionManager> = Arc::new(crate::DefaultConnectionManager::new());
+        let limits = SubscriptionLimits {
+            max_total_subscriptions: 2,
+            ..SubscriptionLimits::default()
+        };
+
+        // Two connections, each subscribing to two topics: the second
+        // connection's request exceeds the global cap and is refused.
+        let mut contexts = Vec::new();
+        for _ in 0..2 {
+            let context = ctx();
+            context.set_user(auth_user_with("u", &["room:read"])).await;
+            manager
+                .add_connection(ras_jsonrpc_bidirectional_types::ConnectionInfo::new(
+                    context.id,
+                ))
+                .await
+                .unwrap();
+            let (_tx, rx) = mpsc::channel(4);
+            let mut socket = InMemorySocket::closing([subscribe_msg(vec!["a".into(), "b".into()])]);
+            WebSocketHandler::new(Arc::new(PermissionGated), context.clone(), rx, 1024)
+                .with_connection_manager(manager.clone())
+                .with_subscription_limits(limits)
+                .run_with_io(&mut socket)
+                .await
+                .unwrap();
+            contexts.push(context);
+        }
+
+        assert_eq!(contexts[0].get_subscriptions().await.len(), 2);
+        assert!(contexts[1].get_subscriptions().await.is_empty());
+        assert_eq!(manager.total_subscription_count().await.unwrap(), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn w4_zero_durations_do_not_panic() {
+        let (_tx, rx) = mpsc::channel(4);
+        let mut socket = InMemorySocket::pending();
+
+        // Zero ping and idle: both disabled; zero revalidation: default used.
+        // The sequence provider fails on its first tick, which closes the loop.
+        WebSocketHandler::new(Arc::new(PassThrough), ctx(), rx, 1024)
+            .with_keepalive(KeepaliveConfig {
+                ping_interval: Some(Duration::ZERO),
+                idle_timeout: Some(Duration::ZERO),
+            })
+            .with_auth_revalidation(AuthRevalidation {
+                auth_provider: Arc::new(SequenceAuthProvider::new([])),
+                token: "t".into(),
+                interval: Duration::ZERO,
+                on_permission_change: PermissionChangePolicy::default(),
+            })
+            .run_with_io(&mut socket)
+            .await
+            .unwrap();
+
+        assert!(
+            !socket
+                .outgoing
+                .iter()
+                .any(|m| matches!(m, WebSocketIoMessage::Ping(_)))
+        );
+        assert!(socket.outgoing.iter().any(|m| matches!(
+            m,
+            WebSocketIoMessage::Close(Some(reason)) if reason == "credentials no longer valid"
         )));
     }
 

@@ -1872,7 +1872,7 @@ fn generate_axum_handler(
                         method = #method,
                         path = #path,
                         status = __ras_rejection.status().as_u16(),
-                        detail = %__ras_rejection.body_text(),
+                        detail = %ras_rest_core::sanitize_log_detail(&__ras_rejection.body_text()),
                         "rejected request: invalid path parameters"
                     );
                     return (
@@ -1901,7 +1901,7 @@ fn generate_axum_handler(
                         method = #method,
                         path = #path,
                         status = __ras_rejection.status().as_u16(),
-                        detail = %__ras_rejection.body_text(),
+                        detail = %ras_rest_core::sanitize_log_detail(&__ras_rejection.body_text()),
                         "rejected request: invalid query parameters"
                     );
                     return (

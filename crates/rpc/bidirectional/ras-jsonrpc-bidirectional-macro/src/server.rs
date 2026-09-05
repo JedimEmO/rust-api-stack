@@ -468,6 +468,11 @@ pub fn generate_server_code(
             service: std::sync::Arc<T>,
             auth_provider: std::sync::Arc<A>,
             require_auth: bool,
+            max_connections: Option<usize>,
+            max_message_size: Option<usize>,
+            subscription_limits: Option<ras_jsonrpc_bidirectional_server::SubscriptionLimits>,
+            keepalive: Option<ras_jsonrpc_bidirectional_server::KeepaliveConfig>,
+            on_permission_change: Option<ras_jsonrpc_bidirectional_server::PermissionChangePolicy>,
         }
 
         impl<T: #service_trait_name, A: ras_auth_core::AuthProvider> #builder_name<T, A> {
@@ -480,12 +485,48 @@ pub fn generate_server_code(
                     service: std::sync::Arc::new(service),
                     auth_provider: std::sync::Arc::new(auth_provider),
                     require_auth: true,
+                    max_connections: Some(ras_jsonrpc_bidirectional_server::service::DEFAULT_MAX_CONNECTIONS),
+                    max_message_size: None,
+                    subscription_limits: None,
+                    keepalive: None,
+                    on_permission_change: None,
                 }
             }
 
             /// Set whether authentication is required
             pub fn require_auth(mut self, require_auth: bool) -> Self {
                 self.require_auth = require_auth;
+                self
+            }
+
+            /// Cap on simultaneous connections (`None` lifts the cap). Defaults
+            /// to `DEFAULT_MAX_CONNECTIONS`; admission is atomic.
+            pub fn max_connections(mut self, max_connections: Option<usize>) -> Self {
+                self.max_connections = max_connections;
+                self
+            }
+
+            /// Maximum inbound message size in bytes, enforced at the transport.
+            pub fn max_message_size(mut self, max_message_size: usize) -> Self {
+                self.max_message_size = Some(max_message_size);
+                self
+            }
+
+            /// Per-message, per-connection, topic-length and global subscription caps.
+            pub fn subscription_limits(mut self, limits: ras_jsonrpc_bidirectional_server::SubscriptionLimits) -> Self {
+                self.subscription_limits = Some(limits);
+                self
+            }
+
+            /// Server ping interval and idle timeout.
+            pub fn keepalive(mut self, keepalive: ras_jsonrpc_bidirectional_server::KeepaliveConfig) -> Self {
+                self.keepalive = Some(keepalive);
+                self
+            }
+
+            /// What to do when a live connection's permissions change on re-validation.
+            pub fn on_permission_change(mut self, policy: ras_jsonrpc_bidirectional_server::PermissionChangePolicy) -> Self {
+                self.on_permission_change = Some(policy);
                 self
             }
 
@@ -505,6 +546,11 @@ pub fn generate_server_code(
                     .handler(std::sync::Arc::new(handler))
                     .auth_provider(self.auth_provider)
                     .require_auth(self.require_auth)
+                    .max_connections(self.max_connections)
+                    .maybe_max_message_size(self.max_message_size)
+                    .maybe_subscription_limits(self.subscription_limits)
+                    .maybe_keepalive(self.keepalive)
+                    .maybe_on_permission_change(self.on_permission_change)
                     .build();
                 builder.build()
             }

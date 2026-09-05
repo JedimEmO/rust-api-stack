@@ -136,11 +136,13 @@ the corresponding `WebSocketService` method:
 | Setting | Default | What it does |
 |---|---|---|
 | `max_message_size` | 1 MiB | Enforced at the transport, so an oversized frame is rejected before it is buffered. |
-| `subscription_limits` | 64 topics per message, 256 per connection, 256-byte names | An over-limit `Subscribe` gets an invalid-params error and the connection stays open. |
+| `subscription_limits` | 64 topics per message, 256 per connection, 256-byte names, 100 000 globally | An over-limit `Subscribe` gets an invalid-params error and the connection stays open. |
 | `keepalive` | ping every 30 s, close after 90 s idle | Reclaims half-open sockets. Browsers and tungstenite answer pings automatically. |
 | `auth_revalidation_interval` | 30 s | Re-runs the auth provider on the connection's token. Failure closes the socket. |
-| `on_permission_change` | `DropSubscriptions` | On successful re-validation every held subscription is re-run through `authorize_subscribe`; topics no longer authorized are dropped. `Close` closes the socket instead so the client must reconnect. |
-| `max_connections` | unbounded | Set a cap in production. |
+| `on_permission_change` | `DropSubscriptions` | On successful re-validation every held subscription is re-run through `authorize_subscribe`; topics no longer authorized are dropped, and any topic message already queued for the socket is discarded at send time. `Close` closes the socket instead so the client must reconnect. |
+| `max_connections` | 10 000 | Enforced atomically with a semaphore permit held for the connection's lifetime. `None` lifts the cap. |
+
+All of these are also settable on the generated `<Service>Builder`.
 
 Topic subscriptions are default-deny: override `authorize_subscribe` on the
 handler to allow the topics a connection is entitled to. `WITH_PERMISSIONS`

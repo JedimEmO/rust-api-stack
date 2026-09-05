@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use ras_auth_core::AuthenticatedUser;
 use ras_jsonrpc_bidirectional_server::DefaultConnectionManager;
-use ras_jsonrpc_bidirectional_server::connection::ChannelMessageSender;
+use ras_jsonrpc_bidirectional_server::connection::{ChannelMessageSender, OutboundMessage};
 use ras_jsonrpc_bidirectional_types::{
     BidirectionalMessage, ConnectionId, ConnectionInfo, ConnectionManager,
 };
@@ -27,9 +27,7 @@ fn user(id: &str, perms: &[&str]) -> AuthenticatedUser {
 }
 
 /// Build a connection paired with a real receiver so we can observe sends.
-async fn join(
-    mgr: &DefaultConnectionManager,
-) -> (ConnectionId, mpsc::Receiver<BidirectionalMessage>) {
+async fn join(mgr: &DefaultConnectionManager) -> (ConnectionId, mpsc::Receiver<OutboundMessage>) {
     let id = ConnectionId::new();
     let (tx, rx) = mpsc::channel(16);
     let sender = ChannelMessageSender::new(id, tx);
@@ -272,7 +270,9 @@ async fn broadcast_to_full_channel_does_not_block_map_access() {
         // Connection with a capacity-1 channel, pre-filled so sends park.
         let id = ConnectionId::new();
         let (tx, mut rx) = mpsc::channel(1);
-        tx.send(BidirectionalMessage::Ping).await.unwrap();
+        tx.send(OutboundMessage::from(BidirectionalMessage::Ping))
+            .await
+            .unwrap();
         let sender = ChannelMessageSender::new(id, tx);
         mgr.add_connection_with_sender_direct(ConnectionInfo::new(id), sender)
             .await

@@ -1805,7 +1805,7 @@ mod tests {
 
     struct TestConnection {
         context: Arc<ConnectionContext>,
-        messages: mpsc::Receiver<BidirectionalMessage>,
+        messages: mpsc::Receiver<ras_jsonrpc_bidirectional_server::OutboundMessage>,
         user: AuthenticatedUser,
     }
 
@@ -1835,11 +1835,11 @@ mod tests {
     }
 
     fn drain_messages(
-        receiver: &mut mpsc::Receiver<BidirectionalMessage>,
+        receiver: &mut mpsc::Receiver<ras_jsonrpc_bidirectional_server::OutboundMessage>,
     ) -> Vec<BidirectionalMessage> {
         let mut messages = Vec::new();
-        while let Ok(message) = receiver.try_recv() {
-            messages.push(message);
+        while let Ok(outbound) = receiver.try_recv() {
+            messages.push(outbound.message);
         }
         messages
     }

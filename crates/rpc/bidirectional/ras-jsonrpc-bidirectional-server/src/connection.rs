@@ -5,16 +5,38 @@ use ras_jsonrpc_bidirectional_types::{BidirectionalMessage, ConnectionId, Connec
 use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
 
+/// A message queued for a connection's socket.
+///
+/// `topic` is set when the message was routed through a topic broadcast. The
+/// handler loop re-checks the subscription right before writing to the socket
+/// and drops the message if it was revoked in the meantime, so a broadcast
+/// that snapshotted the topic index moments before a permission change can
+/// never reach a connection that no longer holds the subscription.
+#[derive(Debug, Clone)]
+pub struct OutboundMessage {
+    pub message: BidirectionalMessage,
+    pub topic: Option<String>,
+}
+
+impl From<BidirectionalMessage> for OutboundMessage {
+    fn from(message: BidirectionalMessage) -> Self {
+        Self {
+            message,
+            topic: None,
+        }
+    }
+}
+
 /// A simple channel-based message sender
 #[derive(Debug, Clone)]
 pub struct ChannelMessageSender {
     connection_id: ConnectionId,
-    sender: mpsc::Sender<BidirectionalMessage>,
+    sender: mpsc::Sender<OutboundMessage>,
 }
 
 impl ChannelMessageSender {
     /// Create a new channel message sender
-    pub fn new(connection_id: ConnectionId, sender: mpsc::Sender<BidirectionalMessage>) -> Self {
+    pub fn new(connection_id: ConnectionId, sender: mpsc::Sender<OutboundMessage>) -> Self {
         Self {
             connection_id,
             sender,
@@ -23,7 +45,26 @@ impl ChannelMessageSender {
 
     /// Send a message through the channel
     pub async fn send(&self, message: BidirectionalMessage) -> Result<(), String> {
-        self.sender.send(message).await.map_err(|e| e.to_string())
+        self.sender
+            .send(message.into())
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    /// Send a message that was routed on `topic`; the receiving handler drops
+    /// it if the connection is no longer subscribed when it is dequeued.
+    pub async fn send_on_topic(
+        &self,
+        topic: &str,
+        message: BidirectionalMessage,
+    ) -> Result<(), String> {
+        self.sender
+            .send(OutboundMessage {
+                message,
+                topic: Some(topic.to_string()),
+            })
+            .await
+            .map_err(|e| e.to_string())
     }
 
     /// Get the connection ID
@@ -156,7 +197,7 @@ mod tests {
 
         sender.send(BidirectionalMessage::Ping).await.unwrap();
         let received = rx.recv().await.unwrap();
-        assert!(matches!(received, BidirectionalMessage::Ping));
+        assert!(matches!(received.message, BidirectionalMessage::Ping));
     }
 
     #[tokio::test]

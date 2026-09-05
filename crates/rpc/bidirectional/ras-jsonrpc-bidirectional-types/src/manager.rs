@@ -32,6 +32,16 @@ pub trait ConnectionManager: Send + Sync {
 
     /// Number of active connections. Implementations should override this
     /// with a cheap counter; the default clones every ConnectionInfo.
+    /// Total number of (connection, topic) subscription pairs held by this
+    /// manager, used to enforce the global subscription cap.
+    ///
+    /// The default returns `0`, which disables the global cap for custom
+    /// managers that do not track it; `DefaultConnectionManager` tracks it
+    /// exactly.
+    async fn total_subscription_count(&self) -> Result<usize> {
+        Ok(0)
+    }
+
     async fn active_connection_count(&self) -> Result<usize> {
         Ok(self.get_all_connections().await?.len())
     }

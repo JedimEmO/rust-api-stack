@@ -24,6 +24,10 @@ use tracing::{error, info};
 
 const DEFAULT_MESSAGE_CHANNEL_CAPACITY: usize = 1024;
 const DEFAULT_MAX_MESSAGE_SIZE: usize = 1024 * 1024;
+/// Default cap on simultaneous connections. Bounded by default so a single
+/// deployment cannot be driven to memory exhaustion by connection count;
+/// pass `max_connections(None)` explicitly to lift it.
+pub const DEFAULT_MAX_CONNECTIONS: usize = 10_000;
 
 /// Trait for services that handle WebSocket JSON-RPC communication
 #[allow(async_fn_in_trait)]
@@ -65,12 +69,21 @@ pub trait WebSocketService: Clone + Send + Sync + 'static {
         DEFAULT_AUTH_REVALIDATION_INTERVAL
     }
 
-    /// Maximum simultaneous connections; further upgrades are refused.
+    /// Maximum simultaneous connections; further upgrades are refused with
+    /// `503`. Defaults to [`DEFAULT_MAX_CONNECTIONS`].
     ///
-    /// The check is advisory (checked-then-added, not atomic), so a burst
-    /// can briefly overshoot by a few connections. Unbounded by default;
-    /// production deployments should set a cap.
+    /// Custom `WebSocketService` implementations that do not override
+    /// [`connection_permits`](Self::connection_permits) get a
+    /// checked-then-added advisory check that can briefly overshoot under a
+    /// burst; `BuiltWebSocketService` enforces it atomically.
     fn max_connections(&self) -> Option<usize> {
+        Some(DEFAULT_MAX_CONNECTIONS)
+    }
+
+    /// Semaphore whose permits are the connection slots. A permit is taken
+    /// before the upgrade and held for the life of the connection, so the cap
+    /// cannot be exceeded by concurrent upgrades.
+    fn connection_permits(&self) -> Option<Arc<tokio::sync::Semaphore>> {
         None
     }
 
@@ -95,20 +108,17 @@ pub trait WebSocketService: Clone + Send + Sync + 'static {
         upgrade: AxumWebSocketUpgrade,
         headers: HeaderMap,
     ) -> Result<Response, (axum::http::StatusCode, String)> {
-        // Refuse before upgrading when the connection cap is reached.
-        if let Some(limit) = self.max_connections() {
-            let current = self
-                .connection_manager()
-                .active_connection_count()
-                .await
-                .unwrap_or(0);
-            if current >= limit {
+        // Refuse before upgrading when the connection cap is reached. The
+        // permit is held by the connection future, so admission is atomic.
+        let permit = match admit_connection(self).await {
+            Ok(permit) => permit,
+            Err(()) => {
                 return Err((
                     axum::http::StatusCode::SERVICE_UNAVAILABLE,
                     "Connection limit reached".to_string(),
                 ));
             }
-        }
+        };
 
         // Enforce the message limit at the transport so an oversized frame is
         // rejected before it is buffered, not after (W2).
@@ -130,7 +140,17 @@ pub trait WebSocketService: Clone + Send + Sync + 'static {
                 self.require_auth(),
                 move |socket, user| {
                     Box::pin(async move {
-                        if let Err(e) = service.handle_connection(socket, user, auth_token).await {
+                        let _permit = permit;
+                        let mut socket = AxumWebSocketIo::new(socket);
+                        if let Err(e) = run_connection_with_io(
+                            service,
+                            &mut socket,
+                            user,
+                            auth_token,
+                            Admission::Granted,
+                        )
+                        .await
+                        {
                             error!("WebSocket connection error: {}", e);
                         }
                     })
@@ -149,7 +169,7 @@ pub trait WebSocketService: Clone + Send + Sync + 'static {
         let service = self.clone();
         async move {
             let mut socket = AxumWebSocketIo::new(socket);
-            run_connection_with_io(service, &mut socket, user, auth_token).await
+            run_connection_with_io(service, &mut socket, user, auth_token, Admission::Pending).await
         }
     }
 
@@ -166,8 +186,38 @@ pub trait WebSocketService: Clone + Send + Sync + 'static {
         S: WebSocketIo + ?Sized + 'a,
     {
         let service = self.clone();
-        async move { run_connection_with_io(service, socket, user, None).await }
+        async move { run_connection_with_io(service, socket, user, None, Admission::Pending).await }
     }
+}
+
+/// Whether the caller already holds a connection slot.
+enum Admission {
+    /// `handle_upgrade` admitted the connection and holds its permit.
+    Granted,
+    /// Admission still has to happen (transports that bypass `handle_upgrade`).
+    Pending,
+}
+
+/// Take a connection slot. `Ok(Some(permit))` when the service enforces the
+/// cap atomically, `Ok(None)` when the advisory check passed (or no cap),
+/// `Err(())` when the cap is reached.
+async fn admit_connection<Svc: WebSocketService>(
+    service: &Svc,
+) -> std::result::Result<Option<tokio::sync::OwnedSemaphorePermit>, ()> {
+    if let Some(permits) = service.connection_permits() {
+        return permits.try_acquire_owned().map(Some).map_err(|_| ());
+    }
+    if let Some(limit) = service.max_connections() {
+        let current = service
+            .connection_manager()
+            .active_connection_count()
+            .await
+            .unwrap_or(0);
+        if current >= limit {
+            return Err(());
+        }
+    }
+    Ok(None)
 }
 
 async fn run_connection_with_io<Svc, S>(
@@ -175,6 +225,7 @@ async fn run_connection_with_io<Svc, S>(
     socket: &mut S,
     user: Option<ras_auth_core::AuthenticatedUser>,
     auth_token: Option<String>,
+    admission: Admission,
 ) -> ServerResult<()>
 where
     Svc: WebSocketService,
@@ -184,23 +235,22 @@ where
     info!("New WebSocket connection: {}", connection_id);
 
     // Enforce the connection cap for transports that bypass handle_upgrade.
-    if let Some(limit) = service.max_connections() {
-        let current = service
-            .connection_manager()
-            .active_connection_count()
-            .await
-            .unwrap_or(0);
-        if current >= limit {
-            let _ = socket
-                .send(WebSocketIoMessage::Close(Some(
+    let _permit = match admission {
+        Admission::Granted => None,
+        Admission::Pending => match admit_connection(&service).await {
+            Ok(permit) => permit,
+            Err(()) => {
+                let _ = socket
+                    .send(WebSocketIoMessage::Close(Some(
+                        "connection limit reached".to_string(),
+                    )))
+                    .await;
+                return Err(ServerError::Internal(
                     "connection limit reached".to_string(),
-                )))
-                .await;
-            return Err(ServerError::Internal(
-                "connection limit reached".to_string(),
-            ));
-        }
-    }
+                ));
+            }
+        },
+    };
 
     let channel_capacity = service.message_channel_capacity().max(1);
     let (message_tx, message_rx) = mpsc::channel(channel_capacity);
@@ -278,7 +328,8 @@ pub struct WebSocketServiceBuilder<H, A, M = DefaultConnectionManager> {
     /// Interval between credential re-validations for live connections
     #[builder(default = DEFAULT_AUTH_REVALIDATION_INTERVAL)]
     auth_revalidation_interval: Duration,
-    /// Maximum simultaneous connections (None = unbounded)
+    /// Maximum simultaneous connections (`None` = unbounded)
+    #[builder(required, default = Some(DEFAULT_MAX_CONNECTIONS))]
     max_connections: Option<usize>,
     /// Limits on client-initiated subscriptions
     #[builder(default)]
@@ -309,6 +360,9 @@ where
             max_message_size: self.max_message_size,
             auth_revalidation_interval: self.auth_revalidation_interval,
             max_connections: self.max_connections,
+            connection_permits: self
+                .max_connections
+                .map(|limit| Arc::new(tokio::sync::Semaphore::new(limit))),
             subscription_limits: self.subscription_limits,
             keepalive: self.keepalive,
             on_permission_change: self.on_permission_change,
@@ -333,6 +387,9 @@ where
             max_message_size: self.max_message_size,
             auth_revalidation_interval: self.auth_revalidation_interval,
             max_connections: self.max_connections,
+            connection_permits: self
+                .max_connections
+                .map(|limit| Arc::new(tokio::sync::Semaphore::new(limit))),
             subscription_limits: self.subscription_limits,
             keepalive: self.keepalive,
             on_permission_change: self.on_permission_change,
@@ -350,6 +407,7 @@ pub struct BuiltWebSocketService<H, A, M> {
     max_message_size: usize,
     auth_revalidation_interval: Duration,
     max_connections: Option<usize>,
+    connection_permits: Option<Arc<tokio::sync::Semaphore>>,
     subscription_limits: SubscriptionLimits,
     keepalive: KeepaliveConfig,
     on_permission_change: PermissionChangePolicy,
@@ -366,6 +424,8 @@ impl<H, A, M> Clone for BuiltWebSocketService<H, A, M> {
             max_message_size: self.max_message_size,
             auth_revalidation_interval: self.auth_revalidation_interval,
             max_connections: self.max_connections,
+            // Shared, not rebuilt: every clone must draw from the same pool.
+            connection_permits: self.connection_permits.clone(),
             subscription_limits: self.subscription_limits,
             keepalive: self.keepalive,
             on_permission_change: self.on_permission_change,
@@ -413,6 +473,10 @@ where
 
     fn max_connections(&self) -> Option<usize> {
         self.max_connections
+    }
+
+    fn connection_permits(&self) -> Option<Arc<tokio::sync::Semaphore>> {
+        self.connection_permits.clone()
     }
 
     fn subscription_limits(&self) -> SubscriptionLimits {
@@ -498,6 +562,8 @@ mod tests {
     struct InMemorySocket {
         incoming: VecDeque<WebSocketIoMessage>,
         outgoing: Vec<WebSocketIoMessage>,
+        /// When set, `recv` waits on this instead of closing once drained.
+        hold_open: Option<Arc<tokio::sync::Notify>>,
     }
 
     impl InMemorySocket {
@@ -505,6 +571,15 @@ mod tests {
             Self {
                 incoming: incoming.into_iter().collect(),
                 outgoing: Vec::new(),
+                hold_open: None,
+            }
+        }
+
+        fn held_open(release: Arc<tokio::sync::Notify>) -> Self {
+            Self {
+                incoming: VecDeque::new(),
+                outgoing: Vec::new(),
+                hold_open: Some(release),
             }
         }
 
@@ -524,8 +599,85 @@ mod tests {
         }
 
         async fn recv(&mut self) -> Option<ServerResult<WebSocketIoMessage>> {
-            self.incoming.pop_front().map(Ok)
+            if let Some(message) = self.incoming.pop_front() {
+                return Some(Ok(message));
+            }
+            if let Some(release) = &self.hold_open {
+                release.notified().await;
+            }
+            None
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn connection_cap_is_atomic_under_concurrent_admission() {
+        const CAP: usize = 3;
+        const ATTEMPTS: usize = 40;
+        let manager = Arc::new(DefaultConnectionManager::new());
+        let service = WebSocketServiceBuilder::builder()
+            .handler(Arc::new(MessageRouter::new()))
+            .auth_provider(Arc::new(MockAuthProvider))
+            .max_connections(Some(CAP))
+            .build()
+            .build_with_manager(manager.clone());
+
+        let release = Arc::new(tokio::sync::Notify::new());
+        let start = Arc::new(tokio::sync::Barrier::new(ATTEMPTS));
+        let (done_tx, mut done_rx) = tokio::sync::mpsc::unbounded_channel();
+        for _ in 0..ATTEMPTS {
+            let service = service.clone();
+            let release = release.clone();
+            let start = start.clone();
+            let done_tx = done_tx.clone();
+            tokio::spawn(async move {
+                let mut socket = InMemorySocket::held_open(release);
+                start.wait().await;
+                let result = service
+                    .handle_connection_with_io(&mut socket, Some(test_user()))
+                    .await;
+                let _ = done_tx.send(result.is_ok());
+            });
+        }
+        drop(done_tx);
+
+        // All refusals return immediately; the admitted ones block until released.
+        let mut refused = 0;
+        while refused < ATTEMPTS - CAP {
+            match tokio::time::timeout(Duration::from_secs(5), done_rx.recv()).await {
+                Ok(Some(false)) => refused += 1,
+                Ok(Some(true)) => panic!("an admitted connection finished before release"),
+                _ => panic!("timed out waiting for refusals"),
+            }
+        }
+        assert_eq!(manager.connection_count(), CAP, "never more than the cap");
+
+        release.notify_waiters();
+        let mut admitted = 0;
+        while let Ok(Some(ok)) = tokio::time::timeout(Duration::from_secs(5), done_rx.recv()).await
+        {
+            assert!(ok);
+            admitted += 1;
+        }
+        assert_eq!(admitted, CAP);
+    }
+
+    #[tokio::test]
+    async fn connection_cap_is_bounded_by_default() {
+        let service = WebSocketServiceBuilder::builder()
+            .handler(Arc::new(MessageRouter::new()))
+            .auth_provider(Arc::new(MockAuthProvider))
+            .build()
+            .build();
+        assert_eq!(service.max_connections(), Some(DEFAULT_MAX_CONNECTIONS));
+        assert!(service.connection_permits().is_some());
+
+        let unbounded = WebSocketServiceBuilder::builder()
+            .handler(Arc::new(MessageRouter::new()))
+            .auth_provider(Arc::new(MockAuthProvider))
+            .max_connections(None)
+            .build()
+            .build();
+        assert_eq!(unbounded.max_connections(), None);
     }
 
     #[tokio::test]
@@ -572,7 +724,7 @@ mod tests {
         let builder = WebSocketServiceBuilder::builder()
             .handler(Arc::new(MessageRouter::new()))
             .auth_provider(Arc::new(MockAuthProvider))
-            .max_connections(0)
+            .max_connections(Some(0))
             .build();
         let service = builder.build_with_manager(manager.clone());
 
@@ -597,7 +749,7 @@ mod tests {
         let builder = WebSocketServiceBuilder::builder()
             .handler(Arc::new(MessageRouter::new()))
             .auth_provider(Arc::new(MockAuthProvider))
-            .max_connections(1)
+            .max_connections(Some(1))
             .build();
         let service = builder.build_with_manager(manager.clone());
 

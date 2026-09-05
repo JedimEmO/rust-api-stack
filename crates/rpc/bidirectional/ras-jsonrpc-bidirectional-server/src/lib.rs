@@ -11,7 +11,7 @@ pub mod router;
 pub mod service;
 pub mod upgrade;
 
-pub use connection::ConnectionContext;
+pub use connection::{ChannelMessageSender, ConnectionContext, OutboundMessage};
 pub use error::{ServerError, ServerResult};
 pub use handler::{
     AuthRevalidation, KeepaliveConfig, MessageHandler, PermissionChangePolicy, SubscriptionLimits,

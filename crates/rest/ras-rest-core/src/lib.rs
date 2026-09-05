@@ -7,7 +7,9 @@
 use thiserror::Error;
 
 // Re-export authentication types for convenience
-pub use ras_auth_core::{AuthError, AuthProvider, AuthResult, AuthenticatedUser};
+pub use ras_auth_core::{
+    AuthError, AuthProvider, AuthResult, AuthenticatedUser, sanitize_log_detail,
+};
 pub use ras_version_core::*;
 
 // Re-export `tracing` so generated REST server code can log without requiring
