@@ -16,3 +16,4 @@ REST baseline: 61/61 passed.
 | --- | --- | --- |
 | 1 | REST model and parser | 61 tests, 1 doctest; Clippy; no-default/server/client macro builds; no-default/server native and client WASM `rest-api` builds. |
 | 2 | REST expansion, routing, request extraction, canonical/versioned handlers | 61 tests, 1 doctest; Clippy; all three macro feature modes; server native and client WASM consumer builds. |
+| 3 | JSON-RPC model and parser | 59 tests; doctests (1 pre-existing ignored example); Clippy; all macro feature modes and no-default/server/client-WASM `basic-jsonrpc-api` builds. |
