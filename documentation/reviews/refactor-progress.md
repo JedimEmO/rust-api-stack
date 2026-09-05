@@ -66,3 +66,22 @@ Final verification investigation:
 
 Deferred items remain the optional TUI/OAuth2 demo cleanups, optional OpenRPC model
 companion tests, and the breaking bidirectional adapter package move.
+
+Final project gates:
+
+- Hosted [workspace test job](https://github.com/JedimEmO/rust-api-stack/actions/runs/33960234279/job/101290741016)
+  passes all 927 tests without retries, with one existing ignored test, plus workspace doctests.
+- Local workspace format, Clippy (`-D warnings`), rustdoc (`-D warnings`), mdBook,
+  package README/Markdown links, and cargo-deny policy checks pass.
+- All 13 CI feature combinations and generated-client specification checks pass.
+- Final browser checks pass: 11 explorer tests and one WASM task-flow test.
+- Explorer HTML remains byte-identical to the original 60,172-byte response.
+  The asset and both macro archives package successfully; both unpacked macros compile
+  against the packaged asset using local dependency patches.
+- Diff review retains original whitespace in embedded HTML/CSS fragments and the UI's
+  raw stylesheet string; trimming fragment boundaries would change the assembled bytes.
+- The application constructor documents its validated-configuration precondition.
+  No unresolved implementation TODOs or temporary debugging artifacts were added.
+
+The default-parallel local identity failures remain a separate unresolved baseline issue;
+this refactor does not claim to fix the host or cryptographic runtime.

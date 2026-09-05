@@ -16,23 +16,28 @@ use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tracing::{debug, error, info};
 
+/// Identity storage and optional example-account seeding for application startup.
 pub struct ApplicationDependencies {
     pub identity_provider: Arc<LocalUserProvider>,
+    /// Seed Alice and Bob accounts for local development.
     pub seed_development_users: bool,
 }
 
+/// The assembled router and handles for session revocation and connection management.
 pub struct ChatApplication {
     pub router: Router,
     pub session_service: Arc<SessionService>,
     pub connection_manager: Arc<DefaultConnectionManager>,
 }
 
-/// Assemble the REST and WebSocket application with explicit configuration and identity storage.
+/// Assemble the REST and WebSocket application without binding a socket.
+///
+/// The supplied configuration must pass [`Config::validate`].
 pub async fn build_application(
     config: &Config,
     dependencies: ApplicationDependencies,
 ) -> Result<ChatApplication> {
-    // Create identity provider - use Arc to share between session service and registration
+    // Registration and login must share identity storage.
     info!("Setting up identity provider");
     let identity_provider = dependencies.identity_provider;
 
