@@ -21,3 +21,4 @@ REST baseline: 61/61 passed.
 | 5 | Shared explorer assets crate | Original template SHA-256 preserved; 120 macro tests; docs/Clippy/features; 11/11 browser tests (baseline also 11/11); asset and macro packages created offline, unpacked macro builds pass using local dependency patches. |
 | 6 | WebSocket subscription policy/accounting and handler test organization | 112 server/macro tests including all 29 moved handler tests; docs and Clippy; chat server consumer build. Checked mutation and egress checks unchanged. |
 | 7 | WebSocket handler contract, socket IO, and lifecycle configuration | 112 server/macro tests; docs and Clippy. Public handler paths re-export moved types; connection loop remains together. |
+| 8 | Explorer markup, styles, rendering, state, and request assets | Assembled HTML remains byte-identical (60,172 bytes); 120 tests; docs/Clippy/macro features; 11 browser tests; packaged and unpacked macro builds. |
