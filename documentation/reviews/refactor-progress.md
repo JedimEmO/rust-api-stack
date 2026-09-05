@@ -20,3 +20,4 @@ REST baseline: 61/61 passed.
 | 4 | JSON-RPC builder, HTTP envelope/auth policy, method/version dispatch | 59 tests; doctests; Clippy; all macro feature modes; native-server and WASM-client consumer builds. |
 | 5 | Shared explorer assets crate | Original template SHA-256 preserved; 120 macro tests; docs/Clippy/features; 11/11 browser tests (baseline also 11/11); asset and macro packages created offline, unpacked macro builds pass using local dependency patches. |
 | 6 | WebSocket subscription policy/accounting and handler test organization | 112 server/macro tests including all 29 moved handler tests; docs and Clippy; chat server consumer build. Checked mutation and egress checks unchanged. |
+| 7 | WebSocket handler contract, socket IO, and lifecycle configuration | 112 server/macro tests; docs and Clippy. Public handler paths re-export moved types; connection loop remains together. |
