@@ -19,3 +19,4 @@ REST baseline: 61/61 passed.
 | 3 | JSON-RPC model and parser | 59 tests; doctests (1 pre-existing ignored example); Clippy; all macro feature modes and no-default/server/client-WASM `basic-jsonrpc-api` builds. |
 | 4 | JSON-RPC builder, HTTP envelope/auth policy, method/version dispatch | 59 tests; doctests; Clippy; all macro feature modes; native-server and WASM-client consumer builds. |
 | 5 | Shared explorer assets crate | Original template SHA-256 preserved; 120 macro tests; docs/Clippy/features; 11/11 browser tests (baseline also 11/11); asset and macro packages created offline, unpacked macro builds pass using local dependency patches. |
+| 6 | WebSocket subscription policy/accounting and handler test organization | 112 server/macro tests including all 29 moved handler tests; docs and Clippy; chat server consumer build. Checked mutation and egress checks unchanged. |

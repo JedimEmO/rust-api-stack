@@ -9,6 +9,7 @@ pub mod handler;
 pub mod manager;
 pub mod router;
 pub mod service;
+mod subscriptions;
 pub mod upgrade;
 
 pub use connection::{
