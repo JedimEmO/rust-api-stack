@@ -236,10 +236,10 @@ async fn permissive_custom_manager_cannot_exceed_global_cap() {
     // Keep the first connection open (its handler sees the frame, then the
     // socket parks on an empty queue) so its slots stay reserved while the
     // second connection subscribes.
-    let hold = Arc::new(tokio::sync::Notify::new());
+    let (hold_tx, hold_rx) = tokio::sync::watch::channel(false);
     struct Parked {
         inner: Socket,
-        hold: Arc<tokio::sync::Notify>,
+        hold: tokio::sync::watch::Receiver<bool>,
     }
     #[async_trait]
     impl WebSocketIo for Parked {
@@ -250,13 +250,13 @@ async fn permissive_custom_manager_cannot_exceed_global_cap() {
             if let Some(m) = self.inner.incoming.pop_front() {
                 return Some(Ok(m));
             }
-            self.hold.notified().await;
+            let _ = self.hold.wait_for(|released| *released).await;
             None
         }
     }
     let first = {
         let service = service.clone();
-        let hold = hold.clone();
+        let hold = hold_rx;
         tokio::spawn(async move {
             let mut socket = Parked {
                 inner: Socket {
@@ -298,7 +298,7 @@ async fn permissive_custom_manager_cannot_exceed_global_cap() {
         "second connection released its 1"
     );
 
-    hold.notify_waiters();
+    hold_tx.send(true).unwrap();
     first.await.unwrap().unwrap();
     assert_eq!(service.subscription_accounting().total(), 0);
 }

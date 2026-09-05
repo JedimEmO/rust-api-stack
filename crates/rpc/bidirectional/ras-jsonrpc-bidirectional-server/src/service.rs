@@ -568,8 +568,10 @@ mod tests {
     struct InMemorySocket {
         incoming: VecDeque<WebSocketIoMessage>,
         outgoing: Vec<WebSocketIoMessage>,
-        /// When set, `recv` waits on this instead of closing once drained.
-        hold_open: Option<Arc<tokio::sync::Notify>>,
+        /// When set, `recv` waits until this flips to `true` instead of
+        /// closing once drained. Level-triggered so a late waiter still sees
+        /// the release (a `Notify` would drop wake-ups for tasks not yet parked).
+        hold_open: Option<tokio::sync::watch::Receiver<bool>>,
     }
 
     impl InMemorySocket {
@@ -581,7 +583,7 @@ mod tests {
             }
         }
 
-        fn held_open(release: Arc<tokio::sync::Notify>) -> Self {
+        fn held_open(release: tokio::sync::watch::Receiver<bool>) -> Self {
             Self {
                 incoming: VecDeque::new(),
                 outgoing: Vec::new(),
@@ -608,8 +610,8 @@ mod tests {
             if let Some(message) = self.incoming.pop_front() {
                 return Some(Ok(message));
             }
-            if let Some(release) = &self.hold_open {
-                release.notified().await;
+            if let Some(release) = &mut self.hold_open {
+                let _ = release.wait_for(|released| *released).await;
             }
             None
         }
@@ -627,12 +629,12 @@ mod tests {
             .build()
             .build_with_manager(manager.clone());
 
-        let release = Arc::new(tokio::sync::Notify::new());
+        let (release_tx, release_rx) = tokio::sync::watch::channel(false);
         let start = Arc::new(tokio::sync::Barrier::new(ATTEMPTS));
         let (done_tx, mut done_rx) = tokio::sync::mpsc::unbounded_channel();
         for _ in 0..ATTEMPTS {
             let service = service.clone();
-            let release = release.clone();
+            let release = release_rx.clone();
             let start = start.clone();
             let done_tx = done_tx.clone();
             tokio::spawn(async move {
@@ -657,7 +659,7 @@ mod tests {
         }
         assert_eq!(manager.connection_count(), CAP, "never more than the cap");
 
-        release.notify_waiters();
+        release_tx.send(true).unwrap();
         let mut admitted = 0;
         while let Ok(Some(ok)) = tokio::time::timeout(Duration::from_secs(5), done_rx.recv()).await
         {
