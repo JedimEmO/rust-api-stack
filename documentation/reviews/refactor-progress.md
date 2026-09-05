@@ -57,8 +57,10 @@ Final verification investigation:
 - All 927 tests pass without retries at four-worker concurrency, with one existing
   ignored test. Workspace doctests also pass. No skips or production crypto changes
   were introduced to address the local failures.
-- CI now accepts PRs targeting any branch, so the stacked MR can run the same
-  checks before its comment-cleanup dependency merges.
+- GitHub rejected optional workflow edits because the configured OAuth token
+  lacks `workflow` scope. Those edits were removed. MR #28 targets `master` to
+  run existing CI and depends on comment-cleanup MR #27; the comment-only diff
+  disappears once #27 merges. The browser regression command remains available locally.
 - The finish skill's `/simplify` slash command is unavailable in this runtime;
   no matching installed skill or callable slash-command tool was found.
 
