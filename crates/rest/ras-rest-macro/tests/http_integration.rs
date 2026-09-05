@@ -1351,7 +1351,7 @@ async fn test_body_is_not_parsed_before_auth() {
         .await;
     assert_eq!(response.status_code().as_u16(), 401);
 
-    // With valid credentials the malformed body is now parsed and rejected.
+    // Valid credentials allow body parsing, which rejects the malformed payload.
     let response = server
         .post("/api/v1/users")
         .authorization_bearer("admin-token")

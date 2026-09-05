@@ -64,7 +64,7 @@ impl HttpTransport for ReqwestTransport {
             RequestBody::Stream(stream) => builder.body(reqwest::Body::wrap_stream(stream)),
             #[cfg(target_arch = "wasm32")]
             RequestBody::Stream(mut stream) => {
-                // wasm fetch cannot stream request bodies; collect first.
+                // The WASM adapter sends buffered request bodies.
                 let mut buf = bytes::BytesMut::new();
                 while let Some(chunk) = stream.next().await {
                     buf.extend_from_slice(&chunk?);
@@ -77,9 +77,7 @@ impl HttpTransport for ReqwestTransport {
         let status = resp.status();
         let headers = resp.headers().clone();
 
-        // Native streams the response body; wasm reqwest lacks the `stream`
-        // feature, so collect into a single chunk (response streaming on wasm
-        // is bounded by the fetch implementation regardless).
+        // The WASM reqwest dependency lacks response streaming support.
         #[cfg(not(target_arch = "wasm32"))]
         let body_stream = byte_stream_from(
             resp.bytes_stream()

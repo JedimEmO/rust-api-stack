@@ -194,17 +194,14 @@ fn parse_doc_comment_attr(attr: syn::Attribute, entry_kind: &str) -> syn::Result
 
 impl Parse for ServiceDefinition {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        // Parse the opening brace
         let content;
         syn::braced!(content in input);
 
-        // Parse service_name: Ident
         let _ = content.parse::<Ident>()?; // "service_name"
         let _ = content.parse::<Token![:]>()?;
         let service_name = content.parse::<Ident>()?;
         let _ = content.parse::<Token![,]>()?;
 
-        // Check if openrpc field is present
         let mut openrpc = None;
         let mut explorer = None;
         let mut feature_gated = false;
@@ -212,7 +209,6 @@ impl Parse for ServiceDefinition {
         let mut body_limit = None;
         let mut docs_require_auth = false;
 
-        // Parse optional fields until we hit "methods"
         while content.peek(Ident) {
             let field_name = content.fork().parse::<Ident>()?;
             if field_name == "methods" {
@@ -223,7 +219,6 @@ impl Parse for ServiceDefinition {
             let _ = content.parse::<Token![:]>()?;
 
             if field_name == "openrpc" {
-                // Parse openrpc value - can be true/false or { output: "path" }
                 if content.peek(syn::LitBool) {
                     let enabled = content.parse::<syn::LitBool>()?;
                     if enabled.value() {
@@ -233,14 +228,12 @@ impl Parse for ServiceDefinition {
                     let openrpc_content;
                     syn::braced!(openrpc_content in content);
 
-                    // Parse output: "path"
                     let _ = openrpc_content.parse::<Ident>()?; // "output"
                     let _ = openrpc_content.parse::<Token![:]>()?;
                     let path = openrpc_content.parse::<LitStr>()?;
                     openrpc = Some(OpenRpcConfig::WithPath(path.value()));
                 }
             } else if field_name == "explorer" {
-                // Parse explorer value - can be true/false or { path: "/custom-path" }
                 if content.peek(syn::LitBool) {
                     let enabled = content.parse::<syn::LitBool>()?;
                     if enabled.value() {
@@ -250,7 +243,6 @@ impl Parse for ServiceDefinition {
                     let explorer_content;
                     syn::braced!(explorer_content in content);
 
-                    // Parse path: "/custom-path"
                     let _ = explorer_content.parse::<Ident>()?; // "path"
                     let _ = explorer_content.parse::<Token![:]>()?;
                     let path = explorer_content.parse::<LitStr>()?;
@@ -278,7 +270,6 @@ impl Parse for ServiceDefinition {
             let _ = content.parse::<Token![,]>()?;
         }
 
-        // Parse methods: [...]
         let _ = content.parse::<Ident>()?; // "methods"
         let _ = content.parse::<Token![:]>()?;
 
@@ -290,7 +281,6 @@ impl Parse for ServiceDefinition {
             let method = methods_content.parse::<MethodDefinition>()?;
             methods.push(method);
 
-            // Handle optional trailing comma
             if methods_content.peek(Token![,]) {
                 let _ = methods_content.parse::<Token![,]>()?;
             }
@@ -313,20 +303,17 @@ impl Parse for MethodDefinition {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let docs = parse_doc_comment_attrs(input.call(syn::Attribute::parse_outer)?, "method")?;
 
-        // Parse auth requirement (UNAUTHORIZED, OPTIONAL_AUTH, or WITH_PERMISSIONS([...]))
         let auth = if input.peek(syn::Ident) {
             let auth_ident = input.parse::<Ident>()?;
             match auth_ident.to_string().as_str() {
                 "UNAUTHORIZED" => AuthRequirement::Unauthorized,
                 "OPTIONAL_AUTH" => AuthRequirement::OptionalAuth,
                 "WITH_PERMISSIONS" => {
-                    // Parse ([...] | [...] | ...)
                     let perms_content;
                     syn::parenthesized!(perms_content in input);
 
                     let mut permission_groups = Vec::new();
 
-                    // Parse first permission group
                     let first_group_content;
                     syn::bracketed!(first_group_content in perms_content);
 
@@ -341,7 +328,6 @@ impl Parse for MethodDefinition {
                     }
                     permission_groups.push(first_group);
 
-                    // Parse additional permission groups separated by |
                     while perms_content.peek(Token![|]) {
                         let _ = perms_content.parse::<Token![|]>()?;
 
@@ -388,15 +374,12 @@ impl Parse for MethodDefinition {
             ));
         };
 
-        // Parse method name
         let name = input.parse::<Ident>()?;
 
-        // Parse (RequestType)
         let request_content;
         syn::parenthesized!(request_content in input);
         let request_type = request_content.parse::<Type>()?;
 
-        // Parse -> ResponseType
         let _ = input.parse::<Token![->]>()?;
         let response_type = input.parse::<Type>()?;
 
@@ -521,7 +504,6 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
     let server_mod = format_ident!("__ras_jsonrpc_{}_server", service_name_lower);
     let client_mod = format_ident!("__ras_jsonrpc_{}_client", service_name_lower);
 
-    // Generate OpenRPC code if enabled in the macro input
     let (openrpc_code, schema_checks) = if let Some(openrpc_config) = &service_def.openrpc {
         (
             openrpc::generate_openrpc_code(&service_def, openrpc_config),
@@ -546,8 +528,7 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
             None => static_hosting::StaticHostingConfig::default(),
         };
 
-        // JSON-RPC services in this macro expose the explorer next to a single endpoint.
-        // The static host generator still accepts a base path for future reuse.
+        // The explorer and RPC endpoint share the service root.
         static_hosting::generate_static_hosting_code(
             &explorer_config,
             &service_def.service_name,
@@ -632,7 +613,7 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
 
     let explorer_enabled = service_def.explorer.is_some() && service_def.openrpc.is_some();
 
-    // Content-Type gate (#1): reject a non-`application/json` body with 415 before
+    // Content-Type gate: reject a non-`application/json` body with 415 before
     // parsing. Requiring `application/json` forces a CORS preflight for
     // cross-origin requests, closing the simple-request CSRF shape.
     let content_type_gate = if service_def.require_json_content_type {
@@ -670,11 +651,11 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
         quote! {}
     };
 
-    // Body-size cap (#6a): apply as a DefaultBodyLimit layer so an over-limit body
+    // Body-size cap: apply as a DefaultBodyLimit layer so an over-limit body
     // is rejected by the extractor before the handler runs.
     let body_limit_value = service_def.body_limit.unwrap_or(DEFAULT_BODY_LIMIT);
 
-    // Startup assertion (#6c): a service with any WITH_PERMISSIONS method (or a
+    // Startup assertion: a service with any WITH_PERMISSIONS method (or a
     // gated explorer) needs an auth provider, else every such call silently fails
     // authentication at runtime. Fail the build instead.
     let any_route_requires_auth = service_def
@@ -698,10 +679,8 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
         quote! {}
     };
 
-    // Explorer route integration (#4): merge the explorer/openrpc routes, gated
-    // behind authentication when `docs_require_auth` is set. The default explorer
-    // routes function stays public and unchanged; gating is applied here (where
-    // the built service, and thus the auth config, is in scope) via a layer.
+    // Apply the explorer's auth policy where the service auth configuration
+    // is available.
     let explorer_route_integration = if explorer_enabled {
         let service_name_lower = service_name_str.to_lowercase();
         let explorer_routes_fn_str = [&service_name_lower, "_explorer_routes"].concat();
@@ -759,7 +738,6 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
         quote! {}
     };
 
-    // Generate trait methods
     let trait_methods = service_def.methods.iter().map(|method| {
         let method_name = &method.name;
         let request_type = &method.request_type;
@@ -806,7 +784,6 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
         quote! { matches!(request.method.as_str(), #(#optional_auth_wire_names)|*) }
     };
 
-    // Generate method dispatch logic for the JSON-RPC handler
     let method_dispatch = service_def
         .methods
         .iter()
@@ -969,20 +946,17 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
 
                 let mut router = axum::Router::new();
 
-                // Add the JSON-RPC endpoint
                 router = router.route(&base_url, rpc_handler);
 
-                // Bound the request body size for the JSON-RPC endpoint (#6a).
+                // Bound the request body size for the JSON-RPC endpoint.
                 router = router.layer(axum::extract::DefaultBodyLimit::max(#body_limit_value));
 
-                // Include explorer routes if explorer is enabled
                 #explorer_route_integration
 
                 Ok(router)
             }
 
             async fn handle_request(&self, headers: axum::http::HeaderMap, body: String) -> ras_jsonrpc_types::JsonRpcResponse {
-                // Parse JSON-RPC request
                 let request: ras_jsonrpc_types::JsonRpcRequest = match serde_json::from_str(&body) {
                     Ok(req) => req,
                     Err(__ras_json_err) => {
@@ -1000,7 +974,6 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
 
                 let request_id = request.id.clone();
 
-                // Validate JSON-RPC version
                 if request.jsonrpc != "2.0" {
                     return ras_jsonrpc_types::JsonRpcResponse::error(ras_jsonrpc_types::JsonRpcError::invalid_request(), request_id);
                 }
@@ -1059,7 +1032,6 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
                     }
                 };
 
-                // Call usage tracker if configured
                 if let Some(tracker) = &self.usage_tracker {
                     let user_ref = authenticated_user.as_ref();
                     let tracker_headers =
@@ -1067,7 +1039,6 @@ fn generate_server_code(service_def: &ServiceDefinition) -> proc_macro2::TokenSt
                     tracker(&tracker_headers, user_ref, &request).await;
                 }
 
-                // Dispatch method
                 match request.method.as_str() {
                     #(#method_dispatch)*
                     _ => ras_jsonrpc_types::JsonRpcResponse::error(
@@ -1136,7 +1107,7 @@ fn jsonrpc_auth_check_code(
                     let provider = self.auth_provider.as_ref().expect("auth provider required for WITH_PERMISSIONS methods");
                     if let Err(error) = ras_jsonrpc_core::check_permission_groups(provider.as_ref(), user, &required_permission_groups) {
                         // Only `required` is surfaced to the client; the caller's
-                        // full grant set (`has`) stays server-side (M1).
+                        // full grant set (`has`) stays server-side.
                         let required = match error {
                             ras_jsonrpc_core::AuthError::InsufficientPermissions { required, .. } => required,
                             _ => Vec::new(),

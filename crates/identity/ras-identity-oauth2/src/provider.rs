@@ -140,7 +140,7 @@ impl OAuth2Provider {
     ) -> OAuth2Result<OAuth2Response> {
         // Always bind by default: an unbound flow lets an attacker start a flow
         // and trick a victim into completing it, joining the attacker's app
-        // session to the victim's IdP identity (M2).
+        // session to the victim's IdP identity.
         let binding = uuid::Uuid::new_v4().to_string();
         self.start_flow_bound(provider_id, additional_params, Some(binding))
             .await
@@ -212,7 +212,7 @@ impl OAuth2Provider {
 
         // Bind the userinfo response to the id_token: identity is derived from
         // userinfo, so a wrong/confused userinfo endpoint must not be able to
-        // change the account when an id_token established the subject (M6).
+        // change the account when an id_token established the subject.
         // Fail closed if the id_token carries no `sub` (validate_id_token_claims
         // already requires it, but this must never silently pass). When a custom
         // `subject_field` is configured the resolved identity subject is a
@@ -417,13 +417,13 @@ mod tests {
                 assert!(url.contains("response_type=code"));
                 assert!(url.contains("client_id=test_client_id"));
                 assert!(!state.is_empty());
-                // Default start_flow always binds (M2).
+                // Default start_flow always binds.
                 assert!(binding.is_some_and(|b| !b.is_empty()));
             }
             _ => panic!("Expected AuthorizationUrl response"),
         }
 
-        // StartFlow payloads are no longer routed through verify()
+        // Flow initiation returns a URL, so it cannot satisfy identity verification.
         let payload = serde_json::json!({
             "type": "StartFlow",
             "provider_id": "google",

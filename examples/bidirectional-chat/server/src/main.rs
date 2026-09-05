@@ -2350,10 +2350,7 @@ mod tests {
             response_by_id(&messages, "send-before-join").expect("send_message error response");
         let error = error_response.error.as_ref().expect("send_message error");
         assert_eq!(error.code, ras_jsonrpc_types::error_codes::INTERNAL_ERROR);
-        // Handler error detail is no longer forwarded to the client (H3); the
-        // wire message is generic and the real reason is logged server-side.
-        // (A production app should return client-facing errors in an Ok response
-        // rather than via a handler `Err`.)
+        // Handler errors expose a generic message; details stay in server logs.
         assert_eq!(error.message, "Internal error");
 
         let join_response =
@@ -2408,8 +2405,7 @@ mod tests {
         let second_send = response_by_id(&messages, "send-2").expect("second send response");
         let error = second_send.error.as_ref().expect("rate limit error");
         assert_eq!(error.code, ras_jsonrpc_types::error_codes::INTERNAL_ERROR);
-        // Handler error detail (the rate-limit reason) is sanitized on the wire
-        // (H3) and logged server-side instead.
+        // The rate-limit reason stays in server logs.
         assert_eq!(error.message, "Internal error");
 
         let after_limit =

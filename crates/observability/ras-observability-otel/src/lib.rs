@@ -105,7 +105,6 @@ impl UsageTracker for OtelUsageTracker {
     ) {
         let user_agent = user_agent(headers);
 
-        // Log the request
         match user {
             Some(u) => {
                 info!(
@@ -128,7 +127,6 @@ impl UsageTracker for OtelUsageTracker {
             }
         }
 
-        // Record metrics
         self.metrics.increment_requests_started(context);
     }
 }
@@ -192,26 +190,20 @@ impl OtelSetupBuilder {
 
     /// Build and initialize OpenTelemetry
     pub fn build(self) -> Result<OtelSetup, Box<dyn std::error::Error>> {
-        // Create or use existing Prometheus registry
         let prometheus_registry = self.prometheus_registry.unwrap_or_default();
 
-        // Create Prometheus exporter
         let prometheus_exporter = opentelemetry_prometheus::exporter()
             .with_registry(prometheus_registry.clone())
             .build()?;
 
-        // Build meter provider
         let meter_provider = SdkMeterProvider::builder()
             .with_reader(prometheus_exporter)
             .build();
 
-        // Set as global provider
         global::set_meter_provider(meter_provider.clone());
 
-        // Create meter
         let meter = global::meter(self.service_name);
 
-        // Create metrics
         let metrics = Arc::new(OtelMetrics::new(&meter));
 
         Ok(OtelSetup {

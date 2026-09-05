@@ -100,7 +100,7 @@ pub struct CallbackQuery {
 ///
 /// Deliberately carries no client-controlled parameter map: forwarding an
 /// arbitrary map into the authorize URL let a caller inject reserved OAuth
-/// parameters (H1/H4). Any extra IdP parameters are hardcoded server-side in
+/// parameters. Any extra IdP parameters are hardcoded server-side in
 /// `create_oauth2_provider`.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StartOAuth2Request {
@@ -192,7 +192,7 @@ fn create_session_service(config: &AppConfig) -> Result<SessionService> {
     let session_config = SessionConfig {
         jwt_secret: config.jwt_secret.clone(),
         jwt_ttl: chrono::Duration::hours(24),
-        // Enabled so logout/revocation actually invalidates a session (H4).
+        // Enabled so logout/revocation actually invalidates a session.
         enforce_active_sessions: true,
         algorithm: JwtAlgorithm::HS256,
         iss: Some("oauth2-demo".to_string()),
@@ -217,7 +217,7 @@ async fn index_handler() -> Html<&'static str> {
 /// Handler to start the OAuth2 flow.
 ///
 /// `start_flow` generates a login-CSRF binding; we store it in an HttpOnly
-/// cookie that the browser returns on the same-site callback (M2/H4).
+/// cookie that the browser returns on the same-site callback.
 async fn start_oauth2_handler(
     State(state): State<AppState>,
     Json(request): Json<StartOAuth2Request>,
@@ -285,7 +285,7 @@ async fn oauth2_callback_handler(
         .state
         .ok_or_else(|| "Missing state parameter in callback".to_string())?;
 
-    // Echo the login-CSRF binding read back from the cookie (M2/H4).
+    // Echo the login-CSRF binding read back from the cookie.
     let binding = read_binding_cookie(&headers);
 
     // Complete the OAuth2 flow
@@ -315,7 +315,7 @@ async fn oauth2_callback_handler(
     // never sent to the server (no access-log entry) and are not included in the
     // `Referer` header. success.html moves it into sessionStorage and clears the
     // fragment immediately. A production app should prefer a Set-Cookie session
-    // (which the library now pairs with CSRF) over any URL-based delivery.
+    // with CSRF protection over any URL-based delivery.
     Ok((
         response_headers,
         Redirect::to(&format!("/success#token={}", token)),
@@ -404,7 +404,7 @@ async fn main() -> Result<()> {
         .route("/api-docs", get(api_docs_handler))
         .nest_service("/static", ServeDir::new("../static"))
         .layer(
-            // Restrict CORS to the demo's own origin rather than `Any` (H4).
+            // Restrict CORS to the demo's own origin rather than `Any`.
             CorsLayer::new()
                 .allow_origin(HeaderValue::from_static(DEMO_ORIGIN))
                 .allow_methods([Method::GET, Method::POST])
@@ -467,7 +467,7 @@ mod static_page_tests {
     #[test]
     fn success_page_reads_token_from_fragment_and_clears_url() {
         // Token is read from the URL fragment (never sent to the server) and the
-        // URL is scrubbed immediately (H4).
+        // URL is scrubbed immediately.
         assert!(SUCCESS_HTML.contains("window.location.hash"));
         assert!(SUCCESS_HTML.contains("history.replaceState"));
         // It must NOT read the token from the query string anymore.

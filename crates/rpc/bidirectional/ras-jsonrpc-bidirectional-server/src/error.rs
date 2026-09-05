@@ -59,7 +59,7 @@ impl ServerError {
     /// The [`Display`](std::fmt::Display) impl keeps full detail for server logs;
     /// this is what goes on the wire (JSON-RPC error message / upgrade HTTP body)
     /// so handler internals, DSNs, auth specifics, or `AuthError` fields never
-    /// leak to clients (H3). Mirrors `FileError::client_message`.
+    /// leak to clients. Mirrors `FileError::client_message`.
     pub fn client_message(&self) -> &'static str {
         match self {
             ServerError::AuthenticationFailed(_) => "Authentication failed",
@@ -161,7 +161,7 @@ mod tests {
 
     #[test]
     fn client_message_never_leaks_internal_detail() {
-        // Handler internals must not reach the client (H3).
+        // Handler internals must not reach the client.
         let internal = ServerError::Internal("database password is hunter2".into());
         assert_eq!(internal.client_message(), "Internal error");
         assert!(!internal.client_message().contains("hunter2"));

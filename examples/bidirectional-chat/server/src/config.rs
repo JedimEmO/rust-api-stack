@@ -419,7 +419,7 @@ impl Config {
 
     /// Apply direct environment variable overrides
     fn apply_env_overrides(&mut self) -> Result<()> {
-        // Handle legacy environment variables for backward compatibility
+        // Deployment variables override the structured configuration.
         if let Ok(host) = std::env::var("HOST") {
             info!("Using HOST environment variable");
             self.server.host = host.parse().context("Invalid HOST value")?;

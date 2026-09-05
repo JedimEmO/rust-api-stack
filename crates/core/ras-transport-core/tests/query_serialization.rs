@@ -58,10 +58,7 @@ fn pairs_are_percent_encoded() {
 
 #[test]
 fn encoding_matches_reqwests_urlencoded_unreserved_set() {
-    // reqwest's `.query()` delegates to serde_urlencoded, whose unreserved set
-    // is `[A-Za-z0-9*-._]` (space -> `+`). Regression coverage for the two
-    // characters where the previous hand-rolled encoder diverged:
-    //   `~` must be percent-encoded (`%7E`), and `*` must stay raw (`*`).
+    // Form encoding escapes `~` as `%7E` and leaves `*` raw.
     let pairs = serialize_query_value("q", &"~").unwrap();
     assert_eq!(serialize_query_pairs(&pairs).unwrap(), "q=%7E");
 

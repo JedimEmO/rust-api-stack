@@ -348,12 +348,8 @@ fn generate_client_method_with_timeout(
         };
     }
 
-    // Build query-string handling. Required params are always serialized;
-    // `Option<T>` params are skipped when `None`. Values are run through
-    // `ras_transport_core::serialize_query_value`, which mirrors reqwest's old
-    // serde-backed `.query()` behavior: `Vec<T>` produces repeated keys and
-    // enum serde renames are honored. The collected (decoded) pairs are
-    // percent-encoded and appended to the URL via `serialize_query_pairs`.
+    // Preserve repeated keys and serde renames; absent optional parameters
+    // must not add a query pair.
     let query_handling = if query_params.is_empty() {
         quote! {}
     } else {
@@ -440,10 +436,8 @@ fn generate_client_method_with_timeout(
             let __response = self.transport.execute(__request).await?;
             let __response = __response.error_for_status().await?;
             let __bytes = __response.bytes().await?;
-            // A 204/304 (or otherwise empty) success body deserializes as JSON
-            // `null` so `Option<T>` / `serde_json::Value` responses resolve to
-            // `None` / `Null` instead of failing with an EOF error. (The server
-            // now emits an empty body for 204/304 per RFC 9110.)
+            // Treat an empty successful response as JSON null so optional
+            // responses resolve to None rather than a deserialization error.
             let __result = if __bytes.is_empty() {
                 ::ras_transport_core::deserialize_json(b"null")?
             } else {

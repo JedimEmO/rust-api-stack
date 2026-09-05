@@ -315,24 +315,20 @@ fn parse_doc_comment_attr(attr: syn::Attribute, entry_kind: &str) -> syn::Result
 
 impl Parse for ServiceDefinition {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        // Parse the opening brace
         let content;
         syn::braced!(content in input);
 
-        // Parse service_name: Ident
         let _ = content.parse::<Ident>()?; // "service_name"
         let _ = content.parse::<Token![:]>()?;
         let service_name = content.parse::<Ident>()?;
         let _ = content.parse::<Token![,]>()?;
 
-        // Parse base_path: "string"
         let _ = content.parse::<Ident>()?; // "base_path"
         let _ = content.parse::<Token![:]>()?;
         let base_path_lit = content.parse::<LitStr>()?;
         let base_path = base_path_lit.value();
         let _ = content.parse::<Token![,]>()?;
 
-        // Parse optional fields (openapi, serve_docs, docs_path, ui_theme, body_limit)
         let mut openapi = None;
         let mut static_hosting = static_hosting::StaticHostingConfig::default();
         let mut body_limit = None;
@@ -340,7 +336,6 @@ impl Parse for ServiceDefinition {
         let mut require_json_content_type = true;
         let mut docs_require_auth = false;
 
-        // Parse optional fields
         while content.peek(Ident) {
             let field_name = content.fork().parse::<Ident>()?;
 
@@ -348,7 +343,6 @@ impl Parse for ServiceDefinition {
                 let _ = content.parse::<Ident>()?; // "openapi"
                 let _ = content.parse::<Token![:]>()?;
 
-                // Parse openapi value - can be true/false or { output: "path" }
                 if content.peek(syn::LitBool) {
                     let enabled = content.parse::<syn::LitBool>()?;
                     if enabled.value() {
@@ -358,7 +352,6 @@ impl Parse for ServiceDefinition {
                     let openapi_content;
                     syn::braced!(openapi_content in content);
 
-                    // Parse output: "path"
                     let _ = openapi_content.parse::<Ident>()?; // "output"
                     let _ = openapi_content.parse::<Token![:]>()?;
                     let path = openapi_content.parse::<LitStr>()?;
@@ -418,7 +411,6 @@ impl Parse for ServiceDefinition {
             }
         }
 
-        // Parse endpoints: [...]
         let _ = content.parse::<Ident>()?; // "endpoints"
         let _ = content.parse::<Token![:]>()?;
 
@@ -430,7 +422,6 @@ impl Parse for ServiceDefinition {
             let endpoint = endpoints_content.parse::<EndpointDefinition>()?;
             endpoints.push(endpoint);
 
-            // Handle optional trailing comma
             if endpoints_content.peek(Token![,]) {
                 let _ = endpoints_content.parse::<Token![,]>()?;
             }
@@ -534,7 +525,6 @@ impl Parse for EndpointDefinition {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let docs = parse_doc_comment_attrs(input.call(syn::Attribute::parse_outer)?, "endpoint")?;
 
-        // Parse HTTP method (GET, POST, PUT, DELETE, PATCH)
         let method_ident = input.parse::<Ident>()?;
         let method = match method_ident.to_string().as_str() {
             "GET" => HttpMethod::Get,
@@ -550,20 +540,17 @@ impl Parse for EndpointDefinition {
             }
         };
 
-        // Parse auth requirement (UNAUTHORIZED, OPTIONAL_AUTH, or WITH_PERMISSIONS([...]))
         let auth = if input.peek(syn::Ident) {
             let auth_ident = input.parse::<Ident>()?;
             match auth_ident.to_string().as_str() {
                 "UNAUTHORIZED" => AuthRequirement::Unauthorized,
                 "OPTIONAL_AUTH" => AuthRequirement::OptionalAuth,
                 "WITH_PERMISSIONS" => {
-                    // Parse ([...] | [...] | ...)
                     let perms_content;
                     syn::parenthesized!(perms_content in input);
 
                     let mut permission_groups = Vec::new();
 
-                    // Parse first permission group
                     let first_group_content;
                     syn::bracketed!(first_group_content in perms_content);
 
@@ -578,7 +565,6 @@ impl Parse for EndpointDefinition {
                     }
                     permission_groups.push(first_group);
 
-                    // Parse additional permission groups separated by |
                     while perms_content.peek(Token![|]) {
                         let _ = perms_content.parse::<Token![|]>()?;
 
@@ -625,22 +611,18 @@ impl Parse for EndpointDefinition {
             ));
         };
 
-        // Parse path with potential path parameters (e.g., users/{id: String}/posts/{post_id: i32})
         let (path, path_params, handler_name_parts) = parse_endpoint_path(input)?;
 
-        // Parse query parameters if present (? param1:Type & param2:Type)
         let mut query_params = Vec::new();
         if input.peek(Token![?]) {
             let _ = input.parse::<Token![?]>()?;
             query_params = parse_query_params(input)?;
         }
 
-        // Generate handler name based on method and path
         let method_str = method.as_str().to_lowercase();
         let path_str = handler_name_parts.join("_");
         let handler_name = syn::parse_str::<Ident>(&format!("{}_{}", method_str, path_str))?;
 
-        // Parse (RequestType) - optional for GET/DELETE
         let request_type = if input.peek(syn::token::Paren) {
             let request_content;
             syn::parenthesized!(request_content in input);
@@ -653,7 +635,6 @@ impl Parse for EndpointDefinition {
             None
         };
 
-        // Parse -> ResponseType
         let _ = input.parse::<Token![->]>()?;
         let response_type = input.parse::<Type>()?;
 
@@ -805,7 +786,6 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
     let server_mod = format_ident!("__ras_rest_{}_server", service_name_lower);
     let client_mod = format_ident!("__ras_rest_{}_client", service_name_lower);
 
-    // Generate OpenAPI code if enabled in the macro input
     let (openapi_code, schema_checks) = if let Some(openapi_config) = &service_def.openapi {
         (
             openapi::generate_openapi_code(&service_def, openapi_config),
@@ -815,14 +795,12 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
         (quote! {}, quote! {})
     };
 
-    // Generate static hosting code if enabled
     let static_hosting_code = if service_def.static_hosting.serve_docs {
         static_hosting::generate_static_hosting_code(&service_def, &service_def.static_hosting)
     } else {
         quote! {}
     };
 
-    // Generate client code
     let client_impl = crate::client::generate_client_code(&service_def);
     let permissions_code = if cfg!(feature = "permissions") {
         permissions::generate_permissions_code(&service_def)
@@ -830,14 +808,11 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
         quote! {}
     };
 
-    // Generate trait methods
     let trait_methods = service_def.endpoints.iter().map(|endpoint| {
         let handler_name = &endpoint.handler_name;
         let response_type = &endpoint.response_type;
 
-        // Build parameter list based on auth requirements and path params
         let mut params = Vec::new();
-        // Add authenticated user parameter if needed
         match &endpoint.auth {
             AuthRequirement::Unauthorized => {}
             AuthRequirement::OptionalAuth => {
@@ -853,21 +828,18 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
             params.push(quote! { headers: axum::http::HeaderMap });
         }
 
-        // Add path parameters
         for path_param in &endpoint.path_params {
             let param_name = &path_param.name;
             let param_type = &path_param.param_type;
             params.push(quote! { #param_name: #param_type });
         }
 
-        // Add query parameters
         for query_param in &endpoint.query_params {
             let param_name = &query_param.name;
             let param_type = &query_param.param_type;
             params.push(quote! { #param_name: #param_type });
         }
 
-        // Add request body parameter if present
         if let Some(request_type) = &endpoint.request_type {
             params.push(quote! { request: #request_type });
         }
@@ -913,7 +885,6 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
         }
     }
 
-    // Generate static hosting route registration - only if docs are enabled
     let static_routes = if service_def.static_hosting.serve_docs {
         static_hosting::generate_static_routes(&service_def, &service_def.static_hosting)
     } else {
@@ -1055,12 +1026,10 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
             #schema_checks
         };
 
-        // Generate OpenAPI function at module level if serve_docs is enabled
         #openapi_code
 
         #static_hosting_code
 
-        // Define query parameter structs
         use self::query_params::*;
 
         mod query_params {
@@ -1153,10 +1122,8 @@ fn generate_service_code(service_def: ServiceDefinition) -> syn::Result<proc_mac
 
                 #(#route_registrations)*
 
-                // Add static hosting routes if enabled
                 #static_routes
 
-                // Handle empty or root base path
                 if #base_path.is_empty() || #base_path == "/" {
                     router
                 } else {
@@ -1849,10 +1816,8 @@ fn generate_axum_handler(
     let mut extractors = Vec::new();
     let mut prelude = Vec::new();
 
-    // Always add headers extraction for tracking purposes
     extractors.push(quote! { headers: axum::http::HeaderMap });
 
-    // Add path parameter extractors
     if !path_params.is_empty() {
         let path_param_types = path_params.iter().map(|param| &param.param_type);
         let path_ty = if path_params.len() == 1 {
@@ -1884,7 +1849,6 @@ fn generate_axum_handler(
         });
     }
 
-    // Add query parameter extractors
     if !query_params.is_empty() {
         extractors.push(quote! {
             __ras_query: Result<
@@ -2026,9 +1990,7 @@ fn generate_body_extraction(
                     // stream read error. axum wraps http_body_util's
                     // `LengthLimitError` (Display: "length limit exceeded") for
                     // the former; classify on it so a read failure is a 400 and
-                    // only a real overflow is a 413 — the two are no longer
-                    // conflated. (A body carrying a declared `Content-Length` over
-                    // the limit is already rejected above without being read.)
+                    // only a real overflow is a 413.
                     let (__ras_status, __ras_client_msg) =
                         if __ras_body_err.to_string().contains("length limit exceeded") {
                             (
@@ -2097,10 +2059,8 @@ fn generate_handler_body(
     require_json: bool,
 ) -> proc_macro2::TokenStream {
     let body_limit_tokens = effective_body_limit_tokens(endpoint);
-    // Handle authentication if required
     match &endpoint.auth {
         AuthRequirement::Unauthorized => {
-            // Build argument list for unauthorized endpoint
             let mut args = Vec::new();
 
             // Opt-in request headers (before path params)
@@ -2108,7 +2068,6 @@ fn generate_handler_body(
                 args.push(quote! { headers.clone() });
             }
 
-            // Add path parameters
             if endpoint.path_params.len() == 1 {
                 args.push(quote! { path_params });
             } else {
@@ -2118,13 +2077,11 @@ fn generate_handler_body(
                 }
             }
 
-            // Add query parameters
             for query_param in &endpoint.query_params {
                 let param_name = &query_param.name;
                 args.push(quote! { query_params.#param_name });
             }
 
-            // Handle JSON body extraction with error handling
             let json_handling = if endpoint.request_type.is_some() {
                 args.push(quote! { body });
                 generate_body_extraction(require_json, &body_limit_tokens, method, path)
@@ -2135,14 +2092,12 @@ fn generate_handler_body(
             quote! {
                 #json_handling
 
-                // Call usage tracker if configured (for unauthorized endpoints, headers come from handler params)
                 if let Some(tracker) = &with_usage_tracker {
                     let tracker_headers =
                         ras_auth_core::redact_sensitive_headers_for_auth_transport(&headers, &auth_transport);
                     tracker(&tracker_headers, None, #method, #path).await;
                 }
 
-                // Track duration
                 let start_time = std::time::Instant::now();
 
                 let result = match service.#handler_name(#(#args),*).await {
@@ -2154,7 +2109,6 @@ fn generate_handler_body(
                     Err(rest_error) => {
                         use axum::response::IntoResponse;
 
-                        // Log internal error if present
                         if let Some(internal) = &rest_error.internal_error {
                             ras_rest_core::tracing::error!(error = ?internal, "Request failed with status {}", rest_error.status);
                         }
@@ -2171,7 +2125,6 @@ fn generate_handler_body(
                     },
                 };
 
-                // Call duration tracker if configured
                 let duration = start_time.elapsed();
                 if let Some(tracker) = &with_method_duration_tracker {
                     tracker(#method, #path, None, duration).await;
@@ -2189,7 +2142,6 @@ fn generate_handler_body(
                 args.push(quote! { headers.clone() });
             }
 
-            // Add path parameters
             if endpoint.path_params.len() == 1 {
                 args.push(quote! { path_params });
             } else {
@@ -2199,13 +2151,11 @@ fn generate_handler_body(
                 }
             }
 
-            // Add query parameters
             for query_param in &endpoint.query_params {
                 let param_name = &query_param.name;
                 args.push(quote! { query_params.#param_name });
             }
 
-            // Handle JSON body extraction with error handling
             let json_handling = if endpoint.request_type.is_some() {
                 args.push(quote! { body });
                 generate_body_extraction(require_json, &body_limit_tokens, method, path)
@@ -2228,14 +2178,12 @@ fn generate_handler_body(
 
                 #json_handling
 
-                // Call usage tracker if configured
                 if let Some(tracker) = &with_usage_tracker {
                     let tracker_headers =
                         ras_auth_core::redact_sensitive_headers_for_auth_transport(&headers, &auth_transport);
                     tracker(&tracker_headers, __ras_caller_user.as_ref(), #method, #path).await;
                 }
 
-                // Track duration
                 let start_time = std::time::Instant::now();
 
                 let result = match service.#handler_name(#(#args),*).await {
@@ -2263,7 +2211,6 @@ fn generate_handler_body(
                     },
                 };
 
-                // Call duration tracker if configured
                 let duration = start_time.elapsed();
                 if let Some(tracker) = &with_method_duration_tracker {
                     tracker(#method, #path, __ras_caller_user.as_ref(), duration).await;
@@ -2273,7 +2220,6 @@ fn generate_handler_body(
             }
         }
         AuthRequirement::WithPermissions(_) => {
-            // Build argument list for authenticated endpoint
             let mut args = vec![quote! { &user }];
 
             // Opt-in request headers (after the user, before path params)
@@ -2281,7 +2227,6 @@ fn generate_handler_body(
                 args.push(quote! { headers.clone() });
             }
 
-            // Add path parameters
             if endpoint.path_params.len() == 1 {
                 args.push(quote! { path_params });
             } else {
@@ -2291,13 +2236,11 @@ fn generate_handler_body(
                 }
             }
 
-            // Add query parameters
             for query_param in &endpoint.query_params {
                 let param_name = &query_param.name;
                 args.push(quote! { query_params.#param_name });
             }
 
-            // Handle JSON body extraction with error handling
             let json_handling = if endpoint.request_type.is_some() {
                 args.push(quote! { body });
                 generate_body_extraction(require_json, &body_limit_tokens, method, path)
@@ -2322,14 +2265,12 @@ fn generate_handler_body(
                 // Read and parse the body only after auth has succeeded
                 #json_handling
 
-                // Call usage tracker if configured
                 if let Some(tracker) = &with_usage_tracker {
                     let tracker_headers =
                         ras_auth_core::redact_sensitive_headers_for_auth_transport(&headers, &auth_transport);
                     tracker(&tracker_headers, Some(&user), #method, #path).await;
                 }
 
-                // Track duration
                 let start_time = std::time::Instant::now();
 
                 let result = match service.#handler_name(#(#args),*).await {
@@ -2341,7 +2282,6 @@ fn generate_handler_body(
                     Err(rest_error) => {
                         use axum::response::IntoResponse;
 
-                        // Log internal error if present
                         if let Some(internal) = &rest_error.internal_error {
                             ras_rest_core::tracing::error!(error = ?internal, "Request failed with status {}", rest_error.status);
                         }
@@ -2358,7 +2298,6 @@ fn generate_handler_body(
                     },
                 };
 
-                // Call duration tracker if configured
                 let duration = start_time.elapsed();
                 if let Some(tracker) = &with_method_duration_tracker {
                     tracker(#method, #path, Some(&user), duration).await;

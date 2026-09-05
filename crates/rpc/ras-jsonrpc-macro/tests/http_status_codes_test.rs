@@ -190,7 +190,7 @@ async fn test_403_does_not_leak_callers_permission_set() {
     let app = test_app();
 
     // A user holding an internal permission probes an admin method. The 403 must
-    // not echo back the caller's grant set (M1) — `hidden:internal` must not
+    // not echo back the caller's grant set — `hidden:internal` must not
     // appear anywhere in the response body.
     let response = make_jsonrpc_request(
         app.clone(),

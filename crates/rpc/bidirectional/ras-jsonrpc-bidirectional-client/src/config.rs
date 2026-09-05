@@ -292,7 +292,7 @@ mod tests {
         // Second delay should be larger due to backoff
         assert!(delay2 > delay1);
 
-        // Should not exceed max delay (now properly capped)
+        // Jitter must not exceed the maximum delay.
         let delay_large = config.calculate_delay(100);
         assert!(
             delay_large <= config.max_delay,

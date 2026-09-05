@@ -263,8 +263,7 @@ fn create_test_server() -> axum_test::TestServer {
         .unwrap()
 }
 
-// `auth_cookie` now always installs a default double-submit CSRF config (H2),
-// so there is no cookie-without-CSRF server to construct.
+// Cookie auth installs double-submit CSRF protection by default.
 fn create_cookie_test_server() -> axum_test::TestServer {
     let builder = TestServiceBuilder::new(TestServiceImpl)
         .base_url("/rpc")
@@ -432,7 +431,7 @@ async fn test_cookie_auth_coexists_with_bearer_tokens() {
         "id": 1
     });
 
-    // Cookie auth on a POST now requires the double-submit CSRF header (H2).
+    // Cookie auth on a POST requires the double-submit CSRF header.
     let response: Value = server
         .post("/rpc")
         .add_header(

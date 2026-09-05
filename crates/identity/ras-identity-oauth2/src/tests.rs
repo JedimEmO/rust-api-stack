@@ -235,14 +235,14 @@ mod integration_tests {
                 assert!(url.contains("/authorize"));
                 assert!(url.contains("response_type=code"));
                 assert!(url.contains("code_challenge"));
-                // start_flow binds by default (M2).
+                // start_flow binds by default.
                 assert!(binding.is_some());
                 (state, binding)
             }
             _ => panic!("Expected authorization URL"),
         };
 
-        // StartFlow payloads are no longer routed through verify()
+        // Flow initiation returns a URL, so it cannot satisfy identity verification.
         let start_payload = serde_json::json!({
             "type": "StartFlow",
             "provider_id": "mock_provider"
@@ -252,7 +252,7 @@ mod integration_tests {
             Err(ras_identity_core::IdentityError::UnsupportedMethod)
         ));
 
-        // Simulate callback — echo the binding captured at start (M2).
+        // Simulate callback — echo the binding captured at start.
         let callback_payload = serde_json::json!({
             "type": "Callback",
             "provider_id": "mock_provider",

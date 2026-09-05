@@ -24,7 +24,6 @@ pub fn generate_openrpc_code(
     );
     let method_info_struct_name = quote::format_ident!("{}OpenRpcMethodInfo", service_name);
 
-    // Generate the output path based on config
     let output_path_code = match config {
         OpenRpcConfig::Enabled => {
             let service_name_lower = service_name.to_string().to_lowercase();
@@ -39,7 +38,6 @@ pub fn generate_openrpc_code(
         }
     };
 
-    // Generate unique function names for each service
     let flatten_fn_name = quote::format_ident!(
         "_flatten_schema_defs_{}",
         service_name.to_string().to_lowercase()
@@ -53,7 +51,6 @@ pub fn generate_openrpc_code(
         service_name.to_string().to_lowercase()
     );
 
-    // Collect unique types for schema generation
     let mut unique_types = std::collections::HashMap::new();
     for method in &service_def.methods {
         let request_type = &method.request_type;
@@ -76,7 +73,6 @@ pub fn generate_openrpc_code(
         }
     }
 
-    // Generate schema generation functions
     let schema_fns: Vec<TokenStream> = unique_types
         .iter()
         .map(|(type_name, type_tokens)| {
@@ -102,7 +98,6 @@ pub fn generate_openrpc_code(
                             })
                         });
 
-                        // Extract $defs and flatten them
                         let mut extracted_defs = std::collections::HashMap::new();
                         let flattened_schema = #flatten_fn_name(schema_value, &mut extracted_defs);
                         (flattened_schema, extracted_defs)
@@ -112,7 +107,6 @@ pub fn generate_openrpc_code(
         })
         .collect();
 
-    // Generate schema collection code
     let schema_insertions: Vec<TokenStream> = unique_types
         .keys()
         .map(|type_name| {
@@ -135,12 +129,9 @@ pub fn generate_openrpc_code(
                 );
                 quote! {
                     let (schema, defs) = #fn_name();
-                    // Sanitize the type name by removing spaces
                     let sanitized_name = #type_name.to_string().replace(" ", "");
                     schemas.insert(sanitized_name, schema);
-                    // Merge extracted defs into the main schemas collection
                     for (def_name, def_schema) in defs {
-                        // Also sanitize def names
                         let sanitized_def_name = def_name.replace(" ", "");
                         schemas.insert(sanitized_def_name, def_schema);
                     }
@@ -149,7 +140,6 @@ pub fn generate_openrpc_code(
         })
         .collect();
 
-    // Generate method info structs
     let method_infos: Vec<TokenStream> = service_def
         .methods
         .iter()
@@ -165,11 +155,9 @@ pub fn generate_openrpc_code(
             };
             let auth_required = matches!(method.auth, AuthRequirement::WithPermissions(_));
             let auth_optional = matches!(method.auth, AuthRequirement::OptionalAuth);
-            // Flatten permission groups for OpenRPC documentation
             let permissions = match &method.auth {
                 AuthRequirement::Unauthorized | AuthRequirement::OptionalAuth => vec![],
                 AuthRequirement::WithPermissions(groups) => {
-                    // For OpenRPC docs, flatten all permission groups into a single list
                     groups.iter().flatten().cloned().collect()
                 }
             };
@@ -266,18 +254,15 @@ pub fn generate_openrpc_code(
             extracted_defs: &mut std::collections::HashMap<String, serde_json::Value>
         ) -> serde_json::Value {
             if let Some(obj) = schema.as_object_mut() {
-                // If this schema has $defs, extract them
                 if let Some(defs) = obj.remove("$defs") {
                     if let Some(defs_obj) = defs.as_object() {
                         for (def_name, def_schema) in defs_obj {
-                            // Recursively flatten nested $defs in the extracted definitions
                             let flattened_def = #flatten_fn_name(def_schema.clone(), extracted_defs);
                             extracted_defs.insert(def_name.clone(), flattened_def);
                         }
                     }
                 }
 
-                // Update all $ref paths to point to components/schemas
                 #update_refs_fn_name(&mut schema);
             }
 
@@ -313,7 +298,6 @@ pub fn generate_openrpc_code(
 
         /// Generate example value from schema
         fn #generate_example_fn_name(schema: &serde_json::Value, schemas: &std::collections::HashMap<String, serde_json::Value>) -> serde_json::Value {
-            // Check if schema has examples field
             if let Some(examples) = schema.get("examples") {
                 if let Some(arr) = examples.as_array() {
                     if let Some(first) = arr.first() {
@@ -322,12 +306,10 @@ pub fn generate_openrpc_code(
                 }
             }
 
-            // Check if schema has example field (singular)
             if let Some(example) = schema.get("example") {
                 return example.clone();
             }
 
-            // Check for $ref
             if let Some(ref_str) = schema.get("$ref").and_then(|v| v.as_str()) {
                 if let Some(ref_name) = ref_str.strip_prefix("#/components/schemas/") {
                     if let Some(ref_schema) = schemas.get(ref_name) {
@@ -348,7 +330,6 @@ pub fn generate_openrpc_code(
                 }
             }
 
-            // Generate based on type
             match schema.get("type").and_then(|v| v.as_str()) {
                 Some("string") => serde_json::json!("example_string"),
                 Some("number") | Some("integer") => serde_json::json!(42),
@@ -376,7 +357,6 @@ pub fn generate_openrpc_code(
             }
         }
 
-        // Generate schema functions for each type
         #(#schema_fns)*
 
         /// Generate OpenRPC document for this service
@@ -389,20 +369,15 @@ pub fn generate_openrpc_code(
                 #(#method_infos),*
             ];
 
-            // Generate schemas for all unique types
             let mut schemas = HashMap::new();
 
-            // Insert all the generated schemas
             #(#schema_insertions)*
 
             let openrpc_methods: Vec<serde_json::Value> = methods.iter().map(|method| {
                 let mut params = vec![];
 
-                // Add request parameter only if not unit type
                 if method.request_type_name != "()" {
-                    // Sanitize the type name for schema reference
                     let sanitized_request_type = method.request_type_name.replace(" ", "");
-                    // Get the schema for the request type to generate an example
                     let example = if let Some(schema) = schemas.get(&sanitized_request_type) {
                         #generate_example_fn_name(schema, &schemas)
                     } else {
@@ -451,14 +426,11 @@ pub fn generate_openrpc_code(
                     extensions.insert("x-ras-canonical-method".to_string(), json!(method.canonical_method));
                 }
 
-                // Generate example pairing for the method
                 let mut examples = vec![];
                 if method.request_type_name != "()" {
-                    // Sanitize type names for schema lookups
                     let sanitized_request_type = method.request_type_name.replace(" ", "");
                     let sanitized_response_type = method.response_type_name.replace(" ", "");
 
-                    // Get the schema for the request type to generate an example
                     let request_example = if let Some(schema) = schemas.get(&sanitized_request_type) {
                         #generate_example_fn_name(schema, &schemas)
                     } else {
@@ -483,7 +455,6 @@ pub fn generate_openrpc_code(
                     }));
                 }
 
-                // Sanitize the response type name for schema reference
                 let sanitized_response_type = method.response_type_name.replace(" ", "");
                 let method_summary = method
                     .summary
@@ -506,7 +477,6 @@ pub fn generate_openrpc_code(
                 // Note: Examples are intentionally omitted as they're optional in OpenRPC
                 // and can cause validation issues with some validators
 
-                // Add extensions to the method object
                 if let Some(obj) = method_obj.as_object_mut() {
                     if let Some(description) = &method.description {
                         obj.insert("description".to_string(), json!(description));
@@ -573,7 +543,6 @@ pub fn generate_openrpc_code(
             let doc = #openrpc_fn_name();
             let output_path = #output_path_code;
 
-            // Create parent directories if they don't exist
             if let Some(parent) = std::path::Path::new(&output_path).parent() {
                 std::fs::create_dir_all(parent)?;
             }
@@ -606,7 +575,6 @@ fn permission_groups_tokens(groups: &[Vec<String>]) -> TokenStream {
 pub fn generate_schema_impl_checks(service_def: &ServiceDefinition) -> TokenStream {
     let mut unique_types = HashMap::new();
 
-    // Collect unique request and response types
     for method in &service_def.methods {
         let request_type = &method.request_type;
         let response_type = &method.response_type;

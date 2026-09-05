@@ -1,5 +1,4 @@
-//! Regression tests for the `jsonrpc_service!` hardening that brings it to parity
-//! with the `rest_service!` changes prompted by the XM device-integration feedback:
+//! HTTP request and service-configuration contracts for `jsonrpc_service!`:
 //!
 //! * Content-Type enforcement (strict `application/json`, opt-out).
 //! * Service-level `body_limit`.

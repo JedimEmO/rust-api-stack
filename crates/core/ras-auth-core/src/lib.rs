@@ -1,4 +1,4 @@
-//! Authentication and authorization traits for JSON-RPC services.
+//! Authentication, authorization, and HTTP credential handling for RAS services.
 
 mod authorize;
 mod transport;
@@ -101,12 +101,8 @@ pub struct AuthenticatedUser {
 ///   an unsafe method all resolve to anonymous).
 /// * [`Caller::Authenticated`] — a valid credential was presented.
 ///
-/// Deliberately **not** `Serialize`/`Deserialize`: a `Caller` represents a
-/// *resolved* identity and must only be produced by [`resolve_caller`], never
-/// reconstructed from request input. The `#[must_use]` attribute flags a
-/// discarded [`resolve_caller`] result; note it cannot catch a handler that
-/// receives `caller` as a parameter and never reads it (Rust applies `must_use`
-/// to discarded expression results, not to unused bindings).
+/// A `Caller` represents a resolved identity, so it cannot be deserialized from
+/// request input. Construct it from trusted authentication results.
 #[must_use]
 #[derive(Debug, Clone)]
 pub enum Caller {
@@ -160,8 +156,7 @@ pub type AuthFuture<'a, T = AuthenticatedUser> =
 
 /// Trait for implementing authentication providers.
 ///
-/// This trait allows for flexible authentication mechanisms while providing
-/// a consistent interface for the JSON-RPC service layer.
+/// Services use this interface to validate tokens and check permissions.
 pub trait AuthProvider: Send + Sync + 'static {
     /// Validates a token and returns the authenticated user.
     ///

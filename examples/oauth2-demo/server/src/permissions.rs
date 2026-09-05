@@ -31,7 +31,7 @@ impl GoogleOAuth2Permissions {
 
         // Only an IdP-verified email may drive privilege decisions. An
         // unverified email address is attacker-controllable (the IdP never
-        // confirmed the user owns it), so it must never grant admin (H4/M6).
+        // confirmed the user owns it), so it must never grant admin.
         let email_verified = identity
             .metadata
             .as_ref()
@@ -238,7 +238,7 @@ mod tests {
 
     #[tokio::test]
     async fn unverified_admin_email_is_not_granted_admin() {
-        // The security fix (H4/M6): an UNVERIFIED @example.com address must not
+        // An unverified @example.com address must not
         // receive admin, since the IdP never confirmed the user owns it.
         let provider = GoogleOAuth2Permissions::new();
         let identity = create_test_identity("42", Some("attacker@example.com"), Some(false));
