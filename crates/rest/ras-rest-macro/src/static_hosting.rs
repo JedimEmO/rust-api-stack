@@ -34,7 +34,7 @@ pub fn generate_static_hosting_code(
         return quote! {};
     }
 
-    const TEMPLATE_CONTENT: &str = include_str!("api_explorer_template.html");
+    const TEMPLATE_CONTENT: &str = ras_api_explorer_assets::TEMPLATE;
 
     let service_name = &service_def.service_name;
     let base_path = service_def.base_path.trim_end_matches('/').to_string();

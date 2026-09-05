@@ -18,3 +18,4 @@ REST baseline: 61/61 passed.
 | 2 | REST expansion, routing, request extraction, canonical/versioned handlers | 61 tests, 1 doctest; Clippy; all three macro feature modes; server native and client WASM consumer builds. |
 | 3 | JSON-RPC model and parser | 59 tests; doctests (1 pre-existing ignored example); Clippy; all macro feature modes and no-default/server/client-WASM `basic-jsonrpc-api` builds. |
 | 4 | JSON-RPC builder, HTTP envelope/auth policy, method/version dispatch | 59 tests; doctests; Clippy; all macro feature modes; native-server and WASM-client consumer builds. |
+| 5 | Shared explorer assets crate | Original template SHA-256 preserved; 120 macro tests; docs/Clippy/features; 11/11 browser tests (baseline also 11/11); asset and macro packages created offline, unpacked macro builds pass using local dependency patches. |

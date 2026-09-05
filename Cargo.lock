@@ -2686,6 +2686,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ras-api-explorer-assets"
+version = "0.1.0"
+
+[[package]]
 name = "ras-auth-core"
 version = "0.3.0"
 dependencies = [
@@ -2929,6 +2933,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rand 0.8.6",
+ "ras-api-explorer-assets",
  "ras-auth-core",
  "ras-identity-session",
  "ras-jsonrpc-core",
@@ -3027,6 +3032,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rand 0.8.6",
+ "ras-api-explorer-assets",
  "ras-auth-core",
  "ras-identity-session",
  "ras-jsonrpc-core",

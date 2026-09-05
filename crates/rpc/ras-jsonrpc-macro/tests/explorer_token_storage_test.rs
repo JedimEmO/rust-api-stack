@@ -1,6 +1,6 @@
 #[test]
 fn test_generated_explorer_does_not_store_bearer_token_in_local_storage() {
-    let template = include_str!("../../../rest/ras-rest-macro/src/api_explorer_template.html");
+    let template = ras_api_explorer_assets::TEMPLATE;
     assert!(!template.contains("localStorage.getItem('bearer-token')"));
     assert!(!template.contains("localStorage.setItem('bearer-token'"));
     assert!(!template.contains("localStorage.removeItem('bearer-token'"));

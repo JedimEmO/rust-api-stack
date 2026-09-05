@@ -29,8 +29,7 @@ pub fn generate_static_hosting_code(
         return TokenStream::new();
     }
 
-    const TEMPLATE_CONTENT: &str =
-        include_str!("../../../rest/ras-rest-macro/src/api_explorer_template.html");
+    const TEMPLATE_CONTENT: &str = ras_api_explorer_assets::TEMPLATE;
 
     let explorer_path_suffix = normalize_explorer_path(&config.explorer_path);
     let service_name_str = service_name.to_string();
