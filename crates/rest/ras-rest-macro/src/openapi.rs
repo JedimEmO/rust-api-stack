@@ -24,7 +24,6 @@ pub fn generate_openapi_code(
     );
     let endpoint_info_struct_name = quote::format_ident!("{}OpenApiEndpointInfo", service_name);
 
-    // Generate the output path based on config
     let output_path_code = match config {
         OpenApiConfig::Enabled => {
             let service_name_lower = service_name.to_string().to_lowercase();
@@ -39,7 +38,6 @@ pub fn generate_openapi_code(
         }
     };
 
-    // Collect unique types for schema generation
     let mut unique_types = std::collections::HashMap::new();
     for endpoint in &service_def.endpoints {
         if let Some(request_type) = &endpoint.request_type {
@@ -51,14 +49,12 @@ pub fn generate_openapi_code(
         let response_type_str = quote!(#response_type).to_string();
         unique_types.insert(response_type_str, quote!(#response_type));
 
-        // Add path parameter types
         for path_param in &endpoint.path_params {
             let param_type = &path_param.param_type;
             let param_type_str = quote!(#param_type).to_string();
             unique_types.insert(param_type_str, quote!(#param_type));
         }
 
-        // Add query parameter types
         for query_param in &endpoint.query_params {
             let param_type = &query_param.param_type;
             let param_type_str = quote!(#param_type).to_string();
@@ -89,7 +85,6 @@ pub fn generate_openapi_code(
         }
     }
 
-    // Helper function to sanitize type names for OpenAPI component names
     let sanitize_type_name = |type_name: &str| -> String {
         if type_name == "()" {
             "Unit".to_string()
@@ -105,7 +100,6 @@ pub fn generate_openapi_code(
         }
     };
 
-    // Generate schema generation functions
     let schema_fns: Vec<TokenStream> = unique_types
         .iter()
         .map(|(type_name, type_tokens)| {
@@ -138,7 +132,6 @@ pub fn generate_openapi_code(
         })
         .collect();
 
-    // Generate schema collection code
     let schema_insertions: Vec<TokenStream> = unique_types
         .keys()
         .map(|type_name| {
@@ -163,7 +156,6 @@ pub fn generate_openapi_code(
         })
         .collect();
 
-    // Generate endpoint info structs
     let endpoint_infos: Vec<TokenStream> = service_def
         .endpoints
         .iter()
@@ -189,11 +181,9 @@ pub fn generate_openapi_code(
             let auth_required = matches!(endpoint.auth, AuthRequirement::WithPermissions(_));
             // OPTIONAL_AUTH advertises an *optional* security requirement.
             let auth_optional = matches!(endpoint.auth, AuthRequirement::OptionalAuth);
-            // Flatten permission groups for OpenAPI documentation
             let permissions = match &endpoint.auth {
                 AuthRequirement::Unauthorized | AuthRequirement::OptionalAuth => vec![],
                 AuthRequirement::WithPermissions(groups) => {
-                    // For OpenAPI docs, flatten all permission groups into a single list
                     groups.iter().flatten().cloned().collect()
                 }
             };
@@ -354,11 +344,9 @@ pub fn generate_openapi_code(
         fn fix_schema_refs(value: &mut serde_json::Value, schemas: &mut serde_json::Map<String, serde_json::Value>) {
             match value {
                 serde_json::Value::Object(obj) => {
-                    // Extract nested definitions and move them to top-level schemas
                     if let Some(defs) = obj.remove("definitions") {
                         if let serde_json::Value::Object(defs_obj) = defs {
                             for (name, schema) in defs_obj {
-                                // Recursively fix the definition before adding it
                                 let mut schema_copy = schema.clone();
                                 fix_schema_refs(&mut schema_copy, schemas);
                                 schemas.insert(name, schema_copy);
@@ -366,11 +354,9 @@ pub fn generate_openapi_code(
                         }
                     }
 
-                    // Extract $defs and move them to top-level schemas
                     if let Some(defs) = obj.remove("$defs") {
                         if let serde_json::Value::Object(defs_obj) = defs {
                             for (name, schema) in defs_obj {
-                                // Recursively fix the definition before adding it
                                 let mut schema_copy = schema.clone();
                                 fix_schema_refs(&mut schema_copy, schemas);
                                 schemas.insert(name, schema_copy);
@@ -378,10 +364,8 @@ pub fn generate_openapi_code(
                         }
                     }
 
-                    // Fix $ref strings to point to components/schemas
                     if let Some(ref_val) = obj.get_mut("$ref") {
                         if let serde_json::Value::String(ref_str) = ref_val {
-                            // Replace any reference to definitions or $defs with components/schemas
                             if ref_str.starts_with("#/definitions/") {
                                 let name = ref_str.trim_start_matches("#/definitions/");
                                 *ref_str = format!("#/components/schemas/{}", name);
@@ -395,7 +379,6 @@ pub fn generate_openapi_code(
                     // Remove $schema field as it's not needed in OpenAPI
                     obj.remove("$schema");
 
-                    // Recursively process all values
                     for (_, v) in obj.iter_mut() {
                         fix_schema_refs(v, schemas);
                     }
@@ -413,24 +396,20 @@ pub fn generate_openapi_code(
         fn normalize_nullable_properties(value: &mut serde_json::Value) {
             match value {
                 serde_json::Value::Object(obj) => {
-                    // Process properties object if it exists
                     if let Some(properties) = obj.get_mut("properties") {
                         if let serde_json::Value::Object(props) = properties {
                             for (_, prop_value) in props.iter_mut() {
                                 if let serde_json::Value::Object(prop_obj) = prop_value {
-                                    // Check if this property has type: ["string", "null"] pattern
                                     if let Some(type_val) = prop_obj.get("type") {
                                         if let serde_json::Value::Array(type_array) = type_val {
                                             if type_array.len() == 2 {
                                                 let null_value = serde_json::Value::String("null".to_string());
                                                 if type_array.contains(&null_value) {
-                                                    // Find the non-null type
                                                     let non_null_type = type_array.iter()
                                                         .find(|t| **t != null_value)
                                                         .cloned();
 
                                                     if let Some(actual_type) = non_null_type {
-                                                        // Replace with the non-null type and add nullable: true
                                                         prop_obj.insert("type".to_string(), actual_type);
                                                         prop_obj.insert("nullable".to_string(), serde_json::Value::Bool(true));
                                                     }
@@ -439,18 +418,15 @@ pub fn generate_openapi_code(
                                         }
                                     }
                                 }
-                                // Recursively process nested objects
                                 normalize_nullable_properties(prop_value);
                             }
                         }
                     }
 
-                    // Process definitions object if it exists
                     if let Some(definitions) = obj.get_mut("definitions") {
                         normalize_nullable_properties(definitions);
                     }
 
-                    // Process any other nested objects
                     for (_, v) in obj.iter_mut() {
                         normalize_nullable_properties(v);
                     }
@@ -468,19 +444,16 @@ pub fn generate_openapi_code(
         fn fix_option_types(value: &mut serde_json::Value) {
             match value {
                 serde_json::Value::Object(obj) => {
-                    // Fix type: ["string", "null"] pattern
                     if let Some(type_val) = obj.get("type") {
                         if let serde_json::Value::Array(type_array) = type_val {
                             if type_array.len() == 2 {
                                 let null_value = serde_json::Value::String("null".to_string());
                                 if type_array.contains(&null_value) {
-                                    // Find the non-null type
                                     let non_null_type = type_array.iter()
                                         .find(|t| **t != null_value)
                                         .cloned();
 
                                     if let Some(actual_type) = non_null_type {
-                                        // Replace with the non-null type and add nullable: true
                                         obj.insert("type".to_string(), actual_type);
                                         obj.insert("nullable".to_string(), serde_json::Value::Bool(true));
                                     }
@@ -489,10 +462,8 @@ pub fn generate_openapi_code(
                         }
                     }
 
-                    // Fix anyOf that includes {"type": "null"}
                     if let Some(any_of) = obj.get_mut("anyOf") {
                         if let serde_json::Value::Array(any_of_array) = any_of {
-                            // Check if this is an Option type pattern (one real type + null)
                             if any_of_array.len() == 2 {
                                 let has_null = any_of_array.iter().any(|item| {
                                     if let serde_json::Value::Object(item_obj) = item {
@@ -506,7 +477,6 @@ pub fn generate_openapi_code(
                                 });
 
                                 if has_null {
-                                    // Find the non-null schema
                                     let non_null_schema = any_of_array.iter().find(|item| {
                                         if let serde_json::Value::Object(item_obj) = item {
                                             if let Some(type_val) = item_obj.get("type") {
@@ -521,7 +491,6 @@ pub fn generate_openapi_code(
                                     }).cloned();
 
                                     if let Some(schema) = non_null_schema {
-                                        // Replace anyOf with the non-null schema and add nullable
                                         obj.remove("anyOf");
                                         if let serde_json::Value::Object(schema_obj) = schema {
                                             for (key, val) in schema_obj {
@@ -535,7 +504,6 @@ pub fn generate_openapi_code(
                         }
                     }
 
-                    // Recursively process all nested objects
                     for (_, v) in obj.iter_mut() {
                         fix_option_types(v);
                     }
@@ -549,7 +517,6 @@ pub fn generate_openapi_code(
             }
         }
 
-        // Generate schema functions for each type
         #(#schema_fns)*
 
         /// Generate OpenAPI 3.0 document for this service
@@ -562,13 +529,10 @@ pub fn generate_openapi_code(
                 #(#endpoint_infos),*
             ];
 
-            // Generate schemas for all unique types
             let mut schemas = HashMap::new();
 
-            // Insert all the generated schemas
             #(#schema_insertions)*
 
-            // Fix all schema references and flatten nested definitions
             let mut final_schemas = serde_json::Map::new();
             for (name, mut schema) in schemas {
                 fix_schema_refs(&mut schema, &mut final_schemas);
@@ -576,7 +540,6 @@ pub fn generate_openapi_code(
                 final_schemas.insert(name, schema);
             }
 
-            // Group endpoints by path to create OpenAPI paths
             let mut paths = serde_json::Map::new();
 
             for endpoint in &endpoints {
@@ -621,10 +584,8 @@ pub fn generate_openapi_code(
                     }
                 });
 
-                // Add parameters (path and query parameters)
                 let mut parameters = vec![];
 
-                // Add path parameters
                 for (param_name, param_type) in &endpoint.path_params {
                     parameters.push(json!({
                         "name": param_name,
@@ -637,9 +598,7 @@ pub fn generate_openapi_code(
                     }));
                 }
 
-                // Add query parameters
                 for (param_name, param_type) in &endpoint.query_params {
-                    // Check if the type is Option<T> to determine if it's required
                     let is_optional = param_type.starts_with("Option_") || param_type.starts_with("Option<") || param_type.starts_with("Option <");
                     parameters.push(json!({
                         "name": param_name,
@@ -665,7 +624,6 @@ pub fn generate_openapi_code(
                     operation["x-ras-canonical-path"] = json!(endpoint.canonical_path);
                 }
 
-                // Add request body for non-GET methods
                 if endpoint.method != "GET" && endpoint.request_type_name != "Unit" {
                     operation["requestBody"] = json!({
                         "description": "Request body",
@@ -680,7 +638,6 @@ pub fn generate_openapi_code(
                     });
                 }
 
-                // Add security requirements if auth is required
                 if endpoint.auth_required {
                     operation["security"] = json!([{
                         "bearerAuth": []
@@ -698,7 +655,6 @@ pub fn generate_openapi_code(
                     operation["security"] = json!([{}, { "bearerAuth": [] }]);
                 }
 
-                // Add the operation to the path item
                 path_item[method_lower] = operation;
             }
 
@@ -728,7 +684,6 @@ pub fn generate_openapi_code(
             let doc = #openapi_fn_name();
             let output_path = #output_path_code;
 
-            // Create parent directories if they don't exist
             if let Some(parent) = std::path::Path::new(&output_path).parent() {
                 std::fs::create_dir_all(parent)?;
             }
@@ -762,7 +717,6 @@ fn permission_groups_tokens(groups: &[Vec<String>]) -> TokenStream {
 pub fn generate_schema_impl_checks(service_def: &ServiceDefinition) -> TokenStream {
     let mut unique_types = HashMap::new();
 
-    // Collect unique request and response types
     for endpoint in &service_def.endpoints {
         if let Some(request_type) = &endpoint.request_type {
             unique_types.insert(quote!(#request_type).to_string(), quote!(#request_type));
@@ -771,13 +725,11 @@ pub fn generate_schema_impl_checks(service_def: &ServiceDefinition) -> TokenStre
         let response_type = &endpoint.response_type;
         unique_types.insert(quote!(#response_type).to_string(), quote!(#response_type));
 
-        // Add path parameter types
         for path_param in &endpoint.path_params {
             let param_type = &path_param.param_type;
             unique_types.insert(quote!(#param_type).to_string(), quote!(#param_type));
         }
 
-        // Add query parameter types
         for query_param in &endpoint.query_params {
             let param_type = &query_param.param_type;
             unique_types.insert(quote!(#param_type).to_string(), quote!(#param_type));

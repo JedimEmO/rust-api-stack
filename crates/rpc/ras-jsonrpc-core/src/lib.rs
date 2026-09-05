@@ -1,8 +1,7 @@
-//! Core authentication and authorization traits for JSON-RPC services.
+//! Runtime facade for generated JSON-RPC services.
 //!
-//! This crate provides the authentication and authorization traits used by the
-//! `ras-jsonrpc-macro` procedural macro to generate type-safe JSON-RPC services
-//! with axum integration.
+//! Re-exports authentication, protocol, version-migration, and tracing APIs so
+//! generated server code can use a single runtime dependency.
 
 // Re-export authentication types from ras-auth-core
 pub use ras_auth_core::*;
@@ -128,7 +127,7 @@ mod tests {
 
         assert_eq!(error.code, error_codes::INSUFFICIENT_PERMISSIONS);
         assert_eq!(error.message, "Insufficient permissions");
-        // `required` is advertised; the caller's grant set is never echoed (M1).
+        // `required` is advertised; the caller's grant set is never echoed.
         assert_eq!(
             error.data,
             Some(json!({

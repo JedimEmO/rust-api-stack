@@ -61,7 +61,6 @@ impl WasmWebSocketTransport {
         let connection_state = Arc::clone(&self.connection_state);
         let connect_tx = Arc::new(Mutex::new(Some(connect_tx)));
 
-        // Handle connection open
         {
             let connection_state = Arc::clone(&connection_state);
             let connect_tx = Arc::clone(&connect_tx);
@@ -75,7 +74,6 @@ impl WasmWebSocketTransport {
             onopen_callback.forget();
         }
 
-        // Handle messages
         {
             let message_queue = Arc::clone(&message_queue);
             let onmessage_callback = Closure::wrap(Box::new(move |event: MessageEvent| {
@@ -87,7 +85,6 @@ impl WasmWebSocketTransport {
             onmessage_callback.forget();
         }
 
-        // Handle errors
         {
             let connection_state = Arc::clone(&connection_state);
             let connect_tx = Arc::clone(&connect_tx);
@@ -102,7 +99,6 @@ impl WasmWebSocketTransport {
             onerror_callback.forget();
         }
 
-        // Handle connection close
         {
             let connection_state = Arc::clone(&connection_state);
             let connect_tx = Arc::clone(&connect_tx);
@@ -125,14 +121,12 @@ impl WasmWebSocketTransport {
     fn parse_message_event(event: &MessageEvent) -> ClientResult<BidirectionalMessage> {
         let data = event.data();
 
-        // Handle text messages
         if let Some(text) = data.as_string() {
             let message: BidirectionalMessage =
                 serde_json::from_str(&text).map_err(ClientError::Json)?;
             return Ok(message);
         }
 
-        // Handle binary messages (ArrayBuffer or Blob)
         if let Ok(array_buffer) = data.dyn_into::<js_sys::ArrayBuffer>() {
             let uint8_array = Uint8Array::new(&array_buffer);
             let bytes = uint8_array.to_vec();
@@ -166,7 +160,6 @@ impl WasmWebSocketTransport {
 #[async_trait(?Send)]
 impl WebSocketTransport for WasmWebSocketTransport {
     async fn connect(&mut self) -> ClientResult<()> {
-        // Check if already connected
         {
             let state = self.connection_state.lock().unwrap();
             if matches!(
@@ -191,16 +184,12 @@ impl WebSocketTransport for WasmWebSocketTransport {
         // Set binary type to arraybuffer for better binary message handling
         websocket.set_binary_type(BinaryType::Arraybuffer);
 
-        // Set up connection completion channel
         let (connect_tx, connect_rx) = oneshot::channel();
 
-        // Set up event handlers
         self.setup_event_handlers(&websocket, connect_tx)?;
 
-        // Store the WebSocket
         *self.websocket.lock().unwrap() = Some(websocket);
 
-        // Wait for connection to complete or fail
         connect_rx
             .await
             .map_err(|_| ClientError::internal("Connection channel closed"))?
@@ -212,7 +201,6 @@ impl WebSocketTransport for WasmWebSocketTransport {
         if let Some(websocket) = websocket {
             *self.connection_state.lock().unwrap() = WasmConnectionState::Closing;
 
-            // Close the WebSocket connection
             websocket.close().map_err(|e| {
                 ClientError::javascript(format!("Failed to close WebSocket: {:?}", e))
             })?;
@@ -231,7 +219,6 @@ impl WebSocketTransport for WasmWebSocketTransport {
     }
 
     async fn receive(&mut self) -> ClientResult<Option<BidirectionalMessage>> {
-        // Check connection state
         {
             let state = self.connection_state.lock().unwrap();
             match *state {
@@ -248,7 +235,6 @@ impl WebSocketTransport for WasmWebSocketTransport {
             }
         }
 
-        // Try to get a message from the queue
         let message = self.message_queue.lock().unwrap().pop_front();
         Ok(message)
     }
@@ -273,7 +259,6 @@ impl std::fmt::Debug for WasmWebSocketTransport {
     }
 }
 
-// Utility functions for WASM environment
 pub mod utils {
     use wasm_bindgen::prelude::*;
 

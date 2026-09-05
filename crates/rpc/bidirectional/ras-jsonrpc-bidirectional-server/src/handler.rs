@@ -77,7 +77,6 @@ pub trait MessageHandler: Send + Sync + 'static {
         topics: Vec<String>,
         context: Arc<ConnectionContext>,
     ) -> ServerResult<()> {
-        // Default implementation unsubscribes the connection from each requested topic.
         for topic in topics {
             context.unsubscribe(&topic).await;
         }
@@ -102,14 +101,12 @@ pub trait MessageHandler: Send + Sync + 'static {
 
     /// Handle ping message
     async fn on_ping(&self, _context: Arc<ConnectionContext>) -> ServerResult<()> {
-        // Default implementation records the ping at debug level.
         debug!("Received ping");
         Ok(())
     }
 
     /// Handle pong message
     async fn on_pong(&self, _context: Arc<ConnectionContext>) -> ServerResult<()> {
-        // Default implementation records the pong at debug level.
         debug!("Received pong");
         Ok(())
     }
@@ -455,12 +452,10 @@ impl<H: MessageHandler> WebSocketHandler<H> {
             self.context.id
         );
 
-        // Notify handler of connection
         if let Err(e) = self.handler.on_connect(self.context.clone()).await {
             error!("Error in on_connect handler: {}", e);
         }
 
-        // Send connection established message
         let established_msg = BidirectionalMessage::ConnectionEstablished {
             connection_id: self.context.id,
         };
@@ -516,7 +511,6 @@ impl<H: MessageHandler> WebSocketHandler<H> {
         let idle_deadline = tokio::time::sleep(idle_timeout.unwrap_or(Duration::from_secs(0)));
         tokio::pin!(idle_deadline);
 
-        // Main message handling loop
         loop {
             tokio::select! {
                 // Re-validate credentials so revoked/expired tokens are
@@ -564,7 +558,6 @@ impl<H: MessageHandler> WebSocketHandler<H> {
                     break;
                 }
 
-                // Handle incoming WebSocket messages
                 msg = socket.recv() => {
                     if let Some(timeout) = idle_timeout {
                         idle_deadline
@@ -589,7 +582,6 @@ impl<H: MessageHandler> WebSocketHandler<H> {
                     }
                 }
 
-                // Handle outgoing messages
                 msg = self.message_rx.recv() => {
                     match msg {
                         Some(OutboundMessage { message, topic }) => {
@@ -624,12 +616,10 @@ impl<H: MessageHandler> WebSocketHandler<H> {
         // Return this connection's subscription slots to the service pool
         self.context.release_all_subscriptions().await;
 
-        // Notify handler of disconnection
         if let Err(e) = self.handler.on_disconnect(self.context.clone(), None).await {
             error!("Error in on_disconnect handler: {}", e);
         }
 
-        // Send connection closed message
         let closed_msg = BidirectionalMessage::ConnectionClosed {
             connection_id: self.context.id,
             reason: None,
@@ -672,7 +662,6 @@ impl<H: MessageHandler> WebSocketHandler<H> {
                     ));
                 }
                 debug!("Received binary message ({} bytes)", data.len());
-                // Try to parse as UTF-8 text
                 match String::from_utf8(data) {
                     Ok(text) => self.handle_text_message(text, socket).await,
                     Err(_) => {
@@ -706,12 +695,10 @@ impl<H: MessageHandler> WebSocketHandler<H> {
         text: String,
         socket: &mut S,
     ) -> ServerResult<()> {
-        // Try to parse as BidirectionalMessage first
         if let Ok(msg) = serde_json::from_str::<BidirectionalMessage>(&text) {
             return self.handle_bidirectional_message(msg, socket).await;
         }
 
-        // Try to parse as JSON-RPC request
         if let Ok(request) = serde_json::from_str::<JsonRpcRequest>(&text) {
             return self.handle_jsonrpc_request(request, socket).await;
         }
@@ -736,7 +723,6 @@ impl<H: MessageHandler> WebSocketHandler<H> {
     ) -> ServerResult<()> {
         match msg {
             BidirectionalMessage::Request(request) => {
-                // Handle as JSON-RPC request
                 self.handle_jsonrpc_request(request, _socket).await
             }
             BidirectionalMessage::Subscribe { topics } => {
@@ -807,7 +793,6 @@ impl<H: MessageHandler> WebSocketHandler<H> {
             .await
         {
             Ok(Some(response)) => {
-                // Send response back to client
                 let response_msg = BidirectionalMessage::Response(response);
                 self.send_message(socket, response_msg).await
             }
@@ -852,7 +837,7 @@ fn jsonrpc_error_from_server_error(error: &ServerError) -> JsonRpcError {
     };
 
     // Send only a generic per-class message; the full error was already logged
-    // server-side by the caller. Never interpolate handler/AuthError Display (H3).
+    // server-side by the caller. Never interpolate handler/AuthError Display.
     JsonRpcError::new(code, error.client_message().to_string(), None)
 }
 
@@ -867,7 +852,7 @@ mod tests {
     #[test]
     fn jsonrpc_error_from_server_error_sends_generic_message_not_handler_detail() {
         // Handler error carrying a secret -> client sees only a generic message,
-        // stable code preserved, no data field (H3).
+        // stable code preserved, no data field.
         let err = ServerError::Internal("database password is hunter2".into());
         let jsonrpc = jsonrpc_error_from_server_error(&err);
         assert_eq!(jsonrpc.code, error_codes::INTERNAL_ERROR);
@@ -1216,7 +1201,7 @@ mod tests {
         let error = error_response.error.as_ref().expect("JSON-RPC error");
         assert_eq!(error.code, ras_jsonrpc_types::error_codes::INVALID_REQUEST);
         // Message is the generic per-class string; the handler's detail
-        // ("bad request") stays server-side (H3).
+        // ("bad request") stays server-side.
         assert_eq!(error.message, "Invalid request");
 
         let success_response = match &messages[2] {

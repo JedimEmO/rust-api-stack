@@ -52,7 +52,7 @@ impl OAuth2HttpTransport for ReqwestOAuth2HttpTransport {
 
         if !response.status().is_success() {
             // Never log or propagate the raw provider response body — it can
-            // contain tokens or other sensitive material (L1). Status only.
+            // contain tokens or other sensitive material. Status only.
             let status = response.status();
             error!("Token exchange failed with status {}", status);
             return Err(OAuth2Error::TokenExchangeFailed(format!(
@@ -84,7 +84,7 @@ impl OAuth2HttpTransport for ReqwestOAuth2HttpTransport {
             .map_err(log_upstream_error)?;
 
         if !response.status().is_success() {
-            // Status only; the raw body may echo the bearer token (L1).
+            // Status only; the raw body may echo the bearer token.
             let status = response.status();
             error!("User info request failed with status {}", status);
             return Err(OAuth2Error::UserInfoFailed(format!(
@@ -150,7 +150,7 @@ impl PkceChallenge {
 /// `provider_config.auth_params` nor caller-supplied `additional_params` may
 /// override them — many providers honour the last occurrence of a duplicated
 /// query parameter, so an injected second `redirect_uri` / `state` / PKCE value
-/// would be an authorization-code-theft or CSRF vector (H1).
+/// would be an authorization-code-theft or CSRF vector.
 const RESERVED_AUTH_PARAMS: &[&str] = &[
     "response_type",
     "client_id",
@@ -204,12 +204,11 @@ pub struct OAuth2Client {
 }
 
 impl OAuth2Client {
-    /// Infallible constructor.
+    /// Create a client with bounded HTTP timeouts.
     ///
-    /// Panics if the HTTP client cannot be built. It never silently falls back
-    /// to an unbounded (timeout-less) client — a hung token/userinfo endpoint
-    /// would otherwise stall the flow indefinitely (M6). Use [`Self::try_new`]
-    /// to handle the (near-impossible) build error yourself.
+    /// # Panics
+    /// Panics if the HTTP client cannot be built. Use [`Self::try_new`] to
+    /// handle construction errors.
     pub fn new(
         state_store: Arc<dyn OAuth2StateStore>,
         state_ttl_seconds: u64,
@@ -277,7 +276,7 @@ impl OAuth2Client {
         additional_params: HashMap<String, String>,
         binding: Option<String>,
     ) -> OAuth2Result<(String, String)> {
-        // Reject reserved-parameter overrides before doing any work (H1).
+        // Reject reserved-parameter overrides before doing any work.
         reject_reserved_params(provider_config.auth_params.keys(), "provider auth_params")?;
         reject_reserved_params(additional_params.keys(), "additional_params")?;
 
@@ -463,7 +462,7 @@ struct IdTokenClaims {
 }
 
 /// Subject (`sub`) claim of an id_token, used to bind it to the userinfo
-/// response so a confused-deputy userinfo cannot change the account (M6).
+/// response so a confused-deputy userinfo cannot change the account.
 pub(crate) fn id_token_subject(id_token: &str) -> OAuth2Result<Option<String>> {
     Ok(decode_id_token_claims(id_token)?.sub)
 }
@@ -480,8 +479,8 @@ fn decode_id_token_claims(id_token: &str) -> OAuth2Result<IdTokenClaims> {
         .map_err(|_| OAuth2Error::InvalidIdToken("invalid JSON payload".to_string()))
 }
 
-/// Validate the mandatory id_token claims: issuer (when configured),
-/// audience, expiry, and the nonce echoed from the authorization request.
+/// Validate the id_token issuer, audience, expiry, subject, and expected nonce.
+/// Accepting an id_token requires a configured provider issuer.
 ///
 /// The signature is not verified: the token was received directly from the
 /// token endpoint over TLS, which OIDC Core §3.1.3.7 permits as a substitute
@@ -515,7 +514,7 @@ pub(crate) fn validate_id_token_claims(
 
     // Issuer is fail-closed: an id_token whose issuer is unverified cannot be
     // trusted to identify the account, so accepting one without a configured
-    // `issuer` is refused rather than silently skipped (M6).
+    // `issuer` is refused rather than silently skipped.
     let Some(expected_issuer) = &provider_config.issuer else {
         return Err(OAuth2Error::InvalidIdToken(
             "provider `issuer` must be configured to accept id_tokens".to_string(),
@@ -566,7 +565,7 @@ pub(crate) fn validate_id_token_claims(
     }
 
     // `sub` is REQUIRED by OIDC Core §2. Refuse an id_token without it so the
-    // userinfo <-> id_token subject binding (M6) cannot silently no-op on a
+    // userinfo <-> id_token subject binding cannot silently no-op on a
     // token that carries no subject.
     match claims.sub.as_deref() {
         Some(sub) if !sub.trim().is_empty() => {}
@@ -1006,7 +1005,7 @@ mod tests {
         }));
         assert!(validate_id_token_claims(&config, &good, Some("nonce-1")).is_ok());
 
-        // An otherwise-valid id_token with no `sub` is rejected (M6): the
+        // An otherwise-valid id_token with no `sub` is rejected: the
         // userinfo binding must never run against an absent subject.
         let no_sub = fake_id_token(serde_json::json!({
             "iss": "https://issuer.test",
@@ -1025,7 +1024,7 @@ mod tests {
         }));
         assert!(validate_id_token_claims(&config, &aud_single_array, None).is_ok());
 
-        // Multi-audience token requires azp == client_id (M6).
+        // Multi-audience token requires azp == client_id.
         let aud_array_with_azp = fake_id_token(serde_json::json!({
             "iss": "https://issuer.test",
             "sub": "subject-1",
@@ -1076,7 +1075,7 @@ mod tests {
 
     #[test]
     fn id_token_without_configured_issuer_is_rejected() {
-        // issuer is None on provider_config() -> fail closed (M6).
+        // issuer is None on provider_config() -> fail closed.
         let config = provider_config();
         assert!(config.issuer.is_none());
         let exp = chrono::Utc::now().timestamp() + 600;

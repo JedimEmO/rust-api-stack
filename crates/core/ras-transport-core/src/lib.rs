@@ -1,27 +1,17 @@
 //! HTTP transport abstraction for generated Rust Agent Stack clients.
 //!
-//! Generated REST / JSON-RPC / File clients dispatch through the
-//! [`HttpTransport`] trait instead of hard-coding `reqwest::Client`. Two impls
-//! ship here: [`ReqwestTransport`] (production, `reqwest` feature) and
-//! [`AxumTestTransport`] (in-process, wraps `axum_test::TestServer`, native +
-//! `axum-test` feature) so clients can be exercised end-to-end against a server
-//! with no sockets.
+//! Generated REST, JSON-RPC, and file clients use [`HttpTransport`]. The
+//! `reqwest` feature provides a network adapter; the native `axum-test` feature
+//! provides an in-process adapter for exercising clients without sockets.
 //!
 //! # Relationship to `WebSocketTransport`
 //!
-//! This trait is the HTTP sibling of the `WebSocketTransport` abstraction in
-//! `ras-jsonrpc-bidirectional-client`
-//! (`crates/rpc/bidirectional/ras-jsonrpc-bidirectional-client/src/lib.rs`).
-//! Both follow the same dyn-dispatch + conditional-`Send` pattern:
-//! `#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]` together with the
-//! [`TransportThreadBounds`] marker, so a single `Arc<dyn _>` works on both
-//! native and wasm targets. They are intentionally separate: bidirectional RPC
-//! is WebSocket (full-duplex frames), not request/response HTTP, and must not
-//! be routed through `HttpTransport`.
+//! `ras-jsonrpc-bidirectional-client` owns the separate `WebSocketTransport`
+//! abstraction because full-duplex frames have a different lifecycle from HTTP
+//! requests. Both transport traits support native and WASM implementations.
 //!
-//! On wasm, request bodies cannot be streamed (the fetch API has no streaming
-//! request body), so [`RequestBody::Stream`] is collected before sending;
-//! response bodies still stream.
+//! `ReqwestTransport` streams request and response bodies on native targets
+//! and buffers both on WASM. `AxumTestTransport` buffers both bodies.
 
 use std::pin::Pin;
 
@@ -56,8 +46,6 @@ pub use axum_test_transport::AxumTestTransport;
 /// `::ras_transport_core::http::Method` etc. without a direct dependency.
 pub use http;
 
-// --- Thread-bound marker, mirroring the bidirectional-client precedent. ---
-
 /// Marker for the thread bounds a transport (and its streams) must satisfy.
 ///
 /// `Send + Sync` on native; unconstrained on wasm (single-threaded).
@@ -73,8 +61,6 @@ pub trait TransportThreadBounds {}
 
 #[cfg(target_arch = "wasm32")]
 impl<T> TransportThreadBounds for T {}
-
-// --- Byte stream alias, conditionally `Send`. ---
 
 /// A streaming sequence of body chunks. `Send` on native, not on wasm.
 #[cfg(not(target_arch = "wasm32"))]
@@ -102,8 +88,6 @@ where
     Box::pin(stream)
 }
 
-// --- The transport trait. ---
-
 /// Abstraction over the wire transport used by a generated HTTP client.
 ///
 /// See the [crate-level docs](crate) for the relationship with
@@ -120,24 +104,14 @@ pub trait HttpTransport: TransportThreadBounds {
     -> Result<TransportResponse, TransportError>;
 }
 
-// --- Query / JSON helpers. ---
-
-/// Serialize a single query value to its `application/x-www-form-urlencoded`
-/// form for one `key`, returning zero or more `(key, value)` pairs.
+/// Convert a query value into decoded `(key, value)` pairs for form encoding.
 ///
-/// Serializing one key/value at a time (rather than a whole struct) means a
-/// `Vec<T>` produces repeated keys and `#[serde(rename = ...)]` enum variants
-/// encode by their rename — matching reqwest's old `.query()` behavior exactly.
-/// `Option::None` produces no pairs.
+/// Sequences produce repeated keys, enum variants honor `#[serde(rename)]`,
+/// and `Option::None` produces no pairs. Encode with [`serialize_query_pairs`].
 pub fn serialize_query_value<T: Serialize>(
     key: &str,
     value: &T,
 ) -> Result<Vec<(String, String)>, TransportError> {
-    // We collect each scalar value into its own `(key, encoded_value)` entry so
-    // that scalars produce one pair, sequences produce repeated keys, and
-    // `None` produces nothing. Each scalar is rendered through
-    // `serde_urlencoded` (one key=value pair) so enum `#[serde(rename)]`s and
-    // numeric/bool formatting match reqwest's old `.query()` byte-for-byte.
     let mut collector = QueryValueCollector { values: Vec::new() };
     value
         .serialize(&mut collector)
@@ -152,12 +126,9 @@ pub fn serialize_query_value<T: Serialize>(
 /// Serialize several `(key, value)` query parameters and join them into a
 /// single query string (without a leading `?`). Empty result if no pairs.
 ///
-/// The final byte-level encoding is delegated to `serde_urlencoded` (the same
-/// crate reqwest's `.query()` uses internally), so the produced wire query
-/// string matches the pre-transport reqwest client exactly — including its
-/// `application/x-www-form-urlencoded` unreserved set (`*` stays raw, `~`
-/// becomes `%7E`, space becomes `+`). Keys are emitted in order, so repeated
-/// keys (from `Vec<T>`) preserve their sequence.
+/// Uses `application/x-www-form-urlencoded` encoding: `*` stays raw, `~`
+/// becomes `%7E`, and space becomes `+`. Pair order, including repeated keys,
+/// is preserved.
 ///
 /// Returns [`TransportError::Serialize`] on encoding failure rather than
 /// silently yielding an empty string — generated clients append the result
@@ -210,11 +181,8 @@ fn hex_digit(nibble: u8) -> char {
     }
 }
 
-// --- internal helpers ---
-
-/// Render one scalar value through `serde_urlencoded` and return the decoded
-/// value string (the part after `=` of a single `k=v` pair), so enum renames
-/// and scalar formatting match reqwest's old `.query()` exactly.
+/// Preserve form-serializer scalar formatting and enum renames while returning
+/// a decoded value for [`serialize_query_pairs`].
 fn encode_scalar<T: Serialize>(value: &T) -> Result<String, serde_json::Error> {
     use serde::ser::Error as _;
     // serde_urlencoded serializes a sequence of (key, value) tuples.

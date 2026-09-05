@@ -83,7 +83,7 @@ impl WebSocketUpgrade {
             Err(e) => {
                 // Log the real error server-side; the HTTP body gets only a
                 // generic per-class message so AuthError internals (required/has
-                // permission lists, Internal(...) strings) never leak (H3).
+                // permission lists, Internal(...) strings) never leak.
                 error!("Authentication failed during WebSocket upgrade: {}", e);
                 Err((e.to_status_code(), e.client_message().to_string()))
             }
@@ -133,7 +133,7 @@ fn extract_auth_token_from_headers(headers: &HeaderMap) -> Option<String> {
     // Only `Authorization: Bearer <token>` is a bearer token, matching the HTTP
     // transport (`ras_auth_core::extract_auth_credential`). A raw value or any
     // other scheme (`Basic ...`) is NOT a token, and a present-but-malformed
-    // Authorization header does not fall through to a weaker transport (M5).
+    // Authorization header does not fall through to a weaker transport.
     if let Some(auth_header) = headers.get("authorization") {
         let Ok(auth_str) = auth_header.to_str() else {
             return None;
@@ -211,7 +211,7 @@ fn get_header_value(headers: &HeaderMap, name: &str) -> Option<String> {
 /// These headers are entirely client-controllable and there is no trusted-proxy
 /// allowlist here, so the result is a *claim*, not a verified address. It is
 /// exposed as connection metadata only and must never drive an authorization,
-/// rate-limit, or audit decision as-is (M5).
+/// rate-limit, or audit decision as-is.
 fn extract_client_ip_from_headers(headers: &HeaderMap) -> Option<String> {
     let ip_headers = [
         "x-forwarded-for",
@@ -319,7 +319,7 @@ mod tests {
 
     #[test]
     fn rejects_raw_authorization_value_as_token() {
-        // A bare value with no `Bearer ` scheme is not a token (M5).
+        // A bare value with no `Bearer ` scheme is not a token.
         let mut headers = HeaderMap::new();
         headers.insert("authorization", HeaderValue::from_static("raw-token"));
 
@@ -511,7 +511,7 @@ mod tests {
             .expect_err("auth failure is propagated");
 
         assert_eq!(error.to_status_code(), StatusCode::UNAUTHORIZED);
-        // Display keeps detail for logs; client_message stays generic (H3).
+        // Display keeps detail for logs; client_message stays generic.
         assert_eq!(error.to_string(), "Authentication failed: Token expired");
         assert_eq!(error.client_message(), "Authentication failed");
         assert_eq!(provider.tokens(), vec!["expired-token".to_string()]);

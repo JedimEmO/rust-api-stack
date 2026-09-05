@@ -122,7 +122,7 @@ pub struct SessionConfig {
     pub iss: Option<String>,
     /// Expected token audience. Encoded into new tokens and verified on
     /// `verify_session`; a token for a different `aud` is rejected. This is the
-    /// cross-service confused-deputy guard (M3). Required unless
+    /// cross-service confused-deputy guard. Required unless
     /// `require_iss_aud` is false.
     pub aud: Option<String>,
     /// When true (default), validation fails if `iss` or `aud` is `None`.
@@ -135,7 +135,7 @@ pub struct SessionConfig {
     pub max_sessions_per_user: usize,
 }
 
-/// Redacting `Debug` so `jwt_secret` never lands in logs (L1).
+/// Redacting `Debug` so `jwt_secret` never lands in logs.
 impl std::fmt::Debug for SessionConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SessionConfig")
@@ -615,7 +615,7 @@ impl SessionService {
         }
 
         // Cross-service confused-deputy guard: reject tokens minted for a
-        // different issuer/audience when this service configures them (M3).
+        // different issuer/audience when this service configures them.
         if let Some(expected_iss) = &self.config.iss
             && claims.iss.as_deref() != Some(expected_iss.as_str())
         {
@@ -841,7 +841,7 @@ mod tests {
 
     #[tokio::test]
     async fn token_for_one_audience_is_rejected_by_another_service() {
-        // Two services share a secret but configure different audiences (M3).
+        // Two services share a secret but configure different audiences.
         let service_a = SessionService::new(test_config().with_audience("svc-a")).unwrap();
         let local = LocalUserProvider::new();
         local
@@ -872,9 +872,7 @@ mod tests {
 
     #[tokio::test]
     async fn permissions_are_frozen_into_the_token_snapshot() {
-        // Names the documented freeze behavior (M3): the permission set is
-        // copied into the JWT at begin_session and returned verbatim on verify;
-        // it is not reloaded. If a reload is ever added, this test must change.
+        // Verification returns the permissions captured at session creation.
         let permissions_provider = Arc::new(StaticPermissions::new(vec!["read".to_string()]));
         let service = SessionService::new(test_config())
             .unwrap()

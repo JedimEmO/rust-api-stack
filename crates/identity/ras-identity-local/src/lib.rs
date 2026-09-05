@@ -29,7 +29,7 @@ pub struct LocalUser {
     pub metadata: Option<serde_json::Value>,
 }
 
-/// Redacting `Debug` so the Argon2 `password_hash` never lands in logs (L1).
+/// Redacting `Debug` so the Argon2 `password_hash` never lands in logs.
 impl fmt::Debug for LocalUser {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalUser")

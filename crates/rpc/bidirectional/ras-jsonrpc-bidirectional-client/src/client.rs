@@ -96,7 +96,6 @@ impl Client {
         *state = ClientState::Connecting;
         drop(state);
 
-        // Connect transport
         let mut transport = self.transport.write().await;
         transport
             .connect()
@@ -104,14 +103,12 @@ impl Client {
             .map_err(|e| ClientError::connection(format!("Failed to connect: {}", e)))?;
         drop(transport);
 
-        // Set up message handling
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let (message_tx, message_rx) = mpsc::channel(self.config.message_buffer_size);
 
         *self.shutdown_tx.write().await = Some(shutdown_tx);
         *self.message_tx.write().await = Some(message_tx);
 
-        // Start message handling task
         self.start_message_handler(message_rx, shutdown_rx).await?;
 
         // Wait for the server's ConnectionEstablished message before
@@ -158,23 +155,19 @@ impl Client {
         *state = ClientState::Disconnected;
         drop(state);
 
-        // Send shutdown signal
         if let Some(shutdown_tx) = self.shutdown_tx.write().await.take() {
             let _ = shutdown_tx.send(());
         }
 
-        // Disconnect transport
         let mut transport = self.transport.write().await;
         transport
             .disconnect()
             .await
             .map_err(|e| ClientError::connection(format!("Failed to disconnect: {}", e)))?;
 
-        // Clear connection state
         *self.connection_id.write().await = None;
         *self.message_tx.write().await = None;
 
-        // Fail all pending requests
         let pending_ids: Vec<Value> = self
             .pending_requests
             .iter()
@@ -220,7 +213,6 @@ impl Client {
             created_at: Instant::now(),
         };
 
-        // Check if we're over the pending request limit
         if self.pending_requests.len() >= self.config.max_pending_requests {
             return Err(ClientError::internal("Too many pending requests"));
         }
@@ -280,7 +272,6 @@ impl Client {
 
         self.subscriptions.insert(topic.to_string(), subscription);
 
-        // Send subscription message
         let message = BidirectionalMessage::Subscribe {
             topics: vec![topic.to_string()],
         };
@@ -300,7 +291,6 @@ impl Client {
 
         self.subscriptions.remove(topic);
 
-        // Send unsubscription message
         let message = BidirectionalMessage::Unsubscribe {
             topics: vec![topic.to_string()],
         };
@@ -364,8 +354,6 @@ impl Client {
             .collect()
     }
 
-    // Internal helper methods
-
     async fn send_message(&self, message: BidirectionalMessage) -> ClientResult<()> {
         if let Some(tx) = self.message_tx.read().await.as_ref() {
             tx.send(message)
@@ -398,13 +386,11 @@ impl Client {
 
             loop {
                 tokio::select! {
-                    // Handle shutdown signal
                     _ = &mut shutdown_rx => {
                         debug!("Message handler received shutdown signal");
                         break;
                     }
 
-                    // Handle outgoing messages
                     message = message_rx.recv() => {
                         if let Some(message) = message {
                             let mut transport = transport.write().await;
@@ -417,7 +403,6 @@ impl Client {
                         }
                     }
 
-                    // Handle incoming messages
                     _ = receive_interval.tick() => {
                         let transport_clone = Arc::clone(&transport);
                         let mut transport = transport_clone.write().await;
@@ -439,7 +424,6 @@ impl Client {
                                 ).await;
                             }
                             Ok(None) => {
-                                // No message available, continue
                             }
                             Err(e) => {
                                 error!("Failed to receive message: {}", e);
@@ -470,13 +454,11 @@ impl Client {
                 }
             }
             BidirectionalMessage::ServerNotification(notification) => {
-                // Handle notification with registered handlers
                 if let Some(handler) = context.notification_handlers.get(&notification.method) {
                     handler(&notification.method, &notification.params);
                 }
             }
             BidirectionalMessage::Broadcast(broadcast) => {
-                // Handle broadcast to subscribed topics
                 if let Some(subscription) = context.subscriptions.get(&broadcast.topic) {
                     (subscription.value().handler)(&broadcast.method, &broadcast.params);
                 }
@@ -506,13 +488,11 @@ impl Client {
                 .await;
             }
             BidirectionalMessage::Request(request) => {
-                // Handle incoming RPC request from server
                 if let Some(_id) = &request.id {
                     if let Some(handler) = context.rpc_request_handlers.get(&request.method) {
                         debug!("Handling RPC request: {}", request.method);
                         let response = handler(request).await;
 
-                        // Send response back to server
                         let response_message = BidirectionalMessage::Response(response);
                         let tx = context.message_tx.read().await.clone();
                         if let Some(tx) = tx
@@ -522,7 +502,6 @@ impl Client {
                         }
                     } else {
                         warn!("No handler registered for RPC method: {}", request.method);
-                        // Send method not found error
                         let error_response = JsonRpcResponse::error(
                             ras_jsonrpc_types::JsonRpcError::new(
                                 -32601,
@@ -837,9 +816,7 @@ mod tests {
 
     #[tokio::test]
     async fn builder_jwt_in_query_params_and_full_setters() {
-        // Exercise every with_* setter so each path is colored. We don't
-        // auto-connect (no server), but the resulting config must reflect
-        // each option.
+        // Builder options must survive construction without a connection.
         let custom = ReconnectConfig::default();
         let client = ClientBuilder::new("ws://localhost:8080")
             .with_jwt_token("tok".into())

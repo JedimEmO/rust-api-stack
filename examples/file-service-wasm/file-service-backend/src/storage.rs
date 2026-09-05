@@ -285,7 +285,7 @@ mod tests {
             .await
             .expect("save file");
 
-        // A truncated id must not match by prefix (the old behavior).
+        // A truncated id must not match by prefix.
         let prefix = &saved.id[..8];
         assert!(storage.get_file(prefix, None).await.is_err());
 

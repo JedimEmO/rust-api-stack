@@ -1,9 +1,6 @@
-//! Integration tests for the bidirectional chat server
+//! Chat configuration, persistence, and health-router fixture tests.
 //!
-//! These tests cover:
-//! - Server startup and health checks
-//! - Configuration validation
-//! - Persistence behavior
+//! The health fixture does not construct the application server.
 
 use anyhow::Result;
 use axum::Router;
@@ -22,7 +19,7 @@ struct TestServer {
 }
 
 impl TestServer {
-    /// Start a test server with the given configuration
+    /// Start the isolated health router; application configuration is unused.
     async fn start(_config: Config) -> Result<Self> {
         let health_router = Router::new().route("/health", axum::routing::get(|| async { "OK" }));
 

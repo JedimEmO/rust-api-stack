@@ -189,7 +189,7 @@ impl JsonRpcError {
     /// Only `required` is included in the error data so clients know what to
     /// request. The caller's actual grant set is deliberately never echoed back
     /// — surfacing it would let any authenticated user enumerate their own (and
-    /// internal) permission names by probing privileged methods (M1).
+    /// internal) permission names by probing privileged methods.
     pub fn insufficient_permissions(required: Vec<String>) -> Self {
         Self::new(
             error_codes::INSUFFICIENT_PERMISSIONS,
@@ -284,7 +284,7 @@ mod tests {
         assert_eq!(err.code, error_codes::INSUFFICIENT_PERMISSIONS);
         let data = err.data.unwrap();
         assert_eq!(data["required"], serde_json::json!(["admin"]));
-        // The caller's grant set must never be surfaced (M1).
+        // The caller's grant set must never be surfaced.
         assert!(data.get("has").is_none());
     }
 

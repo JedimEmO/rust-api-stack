@@ -1,9 +1,7 @@
 //! Typed transport error.
 //!
-//! Generated clients return `Result<T, TransportError>` instead of the old
-//! `Box<dyn std::error::Error + Send + Sync>`, so callers can match on the
-//! failure mode (connection vs. HTTP status vs. (de)serialization vs. a
-//! JSON-RPC application error).
+//! Generated clients expose distinct connection, HTTP status, serialization,
+//! body, and JSON-RPC errors so callers can handle each failure separately.
 
 use thiserror::Error;
 

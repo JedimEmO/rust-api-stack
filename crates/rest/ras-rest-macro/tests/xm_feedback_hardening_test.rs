@@ -1,15 +1,12 @@
-//! Regression tests for the `rest_service!` hardening prompted by the XM
-//! device-integration feedback:
+//! HTTP request, response, and service-configuration contracts for `rest_service!`:
 //!
 //! * Content-Type enforcement (strict `application/json`, opt-out).
 //! * `413` vs `400` split for over-limit vs unreadable bodies.
-//! * `204 No Content` no longer carries a serialized body.
+//! * `204 No Content` responses have an empty body.
 //! * Per-endpoint `body_limit` override.
 //! * Opt-in request-header parameter for handlers.
 //! * Startup assertion when a permissioned service has no auth provider.
 //! * `docs_require_auth` gate on the docs / openapi routes.
-//!
-//! Each of these fails against the pre-hardening macro.
 
 use axum_test::TestServer;
 use ras_auth_core::{AuthError, AuthProvider, AuthenticatedUser};

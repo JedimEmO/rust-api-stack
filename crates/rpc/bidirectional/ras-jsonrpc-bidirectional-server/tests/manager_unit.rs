@@ -261,7 +261,7 @@ async fn default_impl_is_equivalent_to_new() {
 #[tokio::test]
 async fn broadcast_to_full_channel_does_not_block_map_access() {
     // A slow consumer with a full bounded channel must not wedge the manager:
-    // if shard guards were held across the send await (the old behavior),
+    // if shard guards were held across the send await,
     // the concurrent remove_connection below would deadlock and trip the
     // timeout.
     tokio::time::timeout(std::time::Duration::from_secs(5), async {

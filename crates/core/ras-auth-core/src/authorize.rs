@@ -1,10 +1,8 @@
 //! Shared request-authorization pipeline for generated services.
 //!
-//! Every service macro (REST, file, JSON-RPC, bidirectional WebSocket) used
-//! to inline its own copy of the credential → CSRF → authenticate →
-//! permission-group sequence. These helpers are the single implementation;
-//! generated code maps the returned [`AuthorizeError`] to its own protocol's
-//! response shape.
+//! REST and file services share credential, CSRF, authentication, and permission
+//! checks here. Generated code maps [`AuthorizeError`] to protocol responses.
+//! JSON-RPC and WebSocket services also use the permission-group helpers.
 
 use crate::{
     AuthError, AuthProvider, AuthTransportConfig, AuthenticatedUser, Caller,
@@ -17,7 +15,7 @@ use http::HeaderMap;
 pub enum AuthorizeError {
     /// No usable credential was found in the request
     MissingCredential,
-    /// Double-submit CSRF validation failed for a cookie credential
+    /// CSRF validation failed for a cookie credential
     CsrfValidationFailed,
     /// The credential did not authenticate
     AuthenticationFailed(AuthError),
@@ -37,7 +35,7 @@ pub enum AuthorizeError {
 /// requirement — `WITH_PERMISSIONS([])`, i.e. no groups or only empty groups.
 /// An empty group mixed with non-empty siblings (`["admin"] | []`) is ignored
 /// here rather than treated as a blanket grant; the service macros reject that
-/// shape at compile time, and this runtime guard is the belt-and-suspenders.
+/// shape at compile time; direct callers receive the same protection.
 pub fn check_permission_groups<P>(
     provider: &P,
     user: &AuthenticatedUser,
@@ -83,8 +81,8 @@ pub fn user_satisfies_permission_groups(user: &AuthenticatedUser, groups: &[Vec<
 /// generated REST and file-service servers.
 ///
 /// `method` is the HTTP method, used to scope CSRF validation to unsafe
-/// requests. Errors are ordered so no work happens for unauthenticated
-/// callers: the request body has not been touched when this returns `Err`.
+/// requests. This helper does not read the body; callers should authorize before
+/// buffering or parsing it.
 pub async fn authorize_request<P>(
     method: &str,
     headers: &HeaderMap,

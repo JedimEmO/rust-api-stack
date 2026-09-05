@@ -37,14 +37,13 @@ impl<T> ValidateUnique<T> for Vec<T> {
     }
 }
 
-/// Validate URL format
+/// Check for a nonempty URL-like value with a scheme separator, `/`, or `localhost` prefix.
+/// This is a shape check, not a full URL parser.
 pub fn validate_url(url: &str) -> OpenRpcResult<()> {
-    // Basic URL validation - checks for scheme presence
     if url.is_empty() {
         return Err(OpenRpcError::invalid_url("URL cannot be empty"));
     }
 
-    // Check if it looks like a URL (has scheme or is relative)
     if !url.contains("://") && !url.starts_with('/') && !url.starts_with("localhost") {
         return Err(OpenRpcError::invalid_url(format!(
             "Invalid URL format: {}",
@@ -55,13 +54,13 @@ pub fn validate_url(url: &str) -> OpenRpcResult<()> {
     Ok(())
 }
 
-/// Validate email format
+/// Check for nonempty local/domain parts and a dot in the domain.
+/// This does not validate the full email address grammar.
 pub fn validate_email(email: &str) -> OpenRpcResult<()> {
     if email.is_empty() {
         return Err(OpenRpcError::invalid_email("Email cannot be empty"));
     }
 
-    // Basic email validation - must contain @ and domain part
     if !email.contains('@') || email.starts_with('@') || email.ends_with('@') {
         return Err(OpenRpcError::invalid_email(format!(
             "Invalid email format: {}",
@@ -77,7 +76,6 @@ pub fn validate_email(email: &str) -> OpenRpcResult<()> {
         )));
     }
 
-    // Domain must contain at least one dot
     if !parts[1].contains('.') {
         return Err(OpenRpcError::invalid_email(format!(
             "Invalid email domain: {}",
@@ -88,13 +86,13 @@ pub fn validate_email(email: &str) -> OpenRpcResult<()> {
     Ok(())
 }
 
-/// Validate semver version format
+/// Check that the first two dot-separated version components are `u32` values.
+/// Remaining components are unchecked; this is not full SemVer validation.
 pub fn validate_semver(version: &str) -> OpenRpcResult<()> {
     if version.is_empty() {
         return Err(OpenRpcError::validation("Version cannot be empty"));
     }
 
-    // Basic semver pattern check: major.minor.patch
     let parts: Vec<&str> = version.split('.').collect();
     if parts.len() < 2 {
         return Err(OpenRpcError::validation(format!(
@@ -103,7 +101,6 @@ pub fn validate_semver(version: &str) -> OpenRpcResult<()> {
         )));
     }
 
-    // Check that major and minor are numeric
     for (i, part) in parts.iter().take(2).enumerate() {
         if part.parse::<u32>().is_err() {
             let component = if i == 0 { "major" } else { "minor" };
@@ -147,9 +144,8 @@ pub fn validate_component_key(key: &str) -> OpenRpcResult<()> {
     Ok(())
 }
 
-/// Validate JSON-RPC error code (must be integer, certain ranges reserved)
+/// Reject application error codes in the reserved range `-32768..=-32000`.
 pub fn validate_error_code(code: i64) -> OpenRpcResult<()> {
-    // Pre-defined error codes are reserved: -32768 to -32000
     if (-32768..=-32000).contains(&code) {
         return Err(OpenRpcError::validation(format!(
             "Error code {} is in reserved range (-32768 to -32000)",
@@ -171,14 +167,13 @@ pub fn validate_param_structure(param_structure: &str) -> OpenRpcResult<()> {
     }
 }
 
-/// Validate method name (must be unique within methods array)
+/// Reject empty names, spaces, and the reserved `rpc.` prefix except `rpc.discover`.
+/// Collection-level validation handles uniqueness.
 pub fn validate_method_name(name: &str) -> OpenRpcResult<()> {
     if name.is_empty() {
         return Err(OpenRpcError::validation("Method name cannot be empty"));
     }
 
-    // Method names should be valid JSON-RPC method names
-    // Basic validation - no spaces, not starting with rpc. unless it's rpc.discover
     if name.contains(' ') {
         return Err(OpenRpcError::validation(format!(
             "Method name '{}' cannot contain spaces",
@@ -196,7 +191,8 @@ pub fn validate_method_name(name: &str) -> OpenRpcResult<()> {
     Ok(())
 }
 
-/// Validate content descriptor name (must be unique within params array when by-name)
+/// Reject empty content descriptor names and names containing spaces.
+/// This helper does not check uniqueness within a parameter collection.
 pub fn validate_content_descriptor_name(name: &str) -> OpenRpcResult<()> {
     if name.is_empty() {
         return Err(OpenRpcError::validation(
@@ -204,7 +200,6 @@ pub fn validate_content_descriptor_name(name: &str) -> OpenRpcResult<()> {
         ));
     }
 
-    // Names should be valid parameter names (no spaces, valid identifier-like)
     if name.contains(' ') {
         return Err(OpenRpcError::validation(format!(
             "Content descriptor name '{}' cannot contain spaces",

@@ -1,7 +1,7 @@
-//! Chat server auth and lifecycle integration tests
+//! Auth and lifecycle tests for a locally wired chat service fixture.
 //!
 //! These tests cover:
-//! - In-memory server startup and health checks
+//! - In-memory fixture startup and health checks
 //! - Login and registration flows
 //! - Permission-bearing session creation
 //! - Concurrent login handling

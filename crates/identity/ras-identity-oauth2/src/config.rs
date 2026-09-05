@@ -17,8 +17,8 @@ pub struct OAuth2ProviderConfig {
     pub token_endpoint: String,
     pub userinfo_endpoint: Option<String>,
     /// Expected `iss` claim of id_tokens returned by this provider
-    /// (e.g. `https://accounts.google.com`). When set, callbacks carrying
-    /// an id_token with a different issuer are rejected.
+    /// (e.g. `https://accounts.google.com`). Required when a callback returns
+    /// an id_token; missing or mismatched issuers are rejected.
     #[serde(default)]
     pub issuer: Option<String>,
     pub redirect_uri: String,
@@ -74,7 +74,7 @@ fn is_https(url: &str) -> bool {
         .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"))
 }
 
-/// Manual `Debug` that redacts `client_secret` so it never lands in logs (L1).
+/// Manual `Debug` that redacts `client_secret` so it never lands in logs.
 impl fmt::Debug for OAuth2ProviderConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("OAuth2ProviderConfig")
