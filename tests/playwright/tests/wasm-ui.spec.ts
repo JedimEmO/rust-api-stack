@@ -63,6 +63,18 @@ test('login, task actions, and failures preserve reactive UI state', async ({ pa
   await page.getByRole('button', { name: 'Create Task', exact: true }).click();
   await expect(page.getByText('Review module boundaries', { exact: true })).toBeVisible();
   await expect(page.getByPlaceholder('What needs to be done?')).toHaveValue('');
+
+  // Selecting a task renders the detail panel, which once panicked on a
+  // space-separated class token. Open it explicitly rather than relying on
+  // the checkbox click bubbling up to the card.
+  await page.getByText('Review module boundaries', { exact: true }).click();
+  await expect(page.getByText('Task Details', { exact: true })).toBeVisible();
+  // The description is shown in both the card and the detail panel.
+  await expect(page.getByText('Verify browser interactions', { exact: true })).toHaveCount(2);
+  await page.getByRole('button', { name: '×', exact: true }).click();
+  await expect(page.getByText('Task Details', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Verify browser interactions', { exact: true })).toHaveCount(1);
+
   await page.getByRole('checkbox').check();
   await expect.poll(() => tasks[0]?.completed).toBe(true);
   await expect(page.getByRole('checkbox')).toBeChecked();

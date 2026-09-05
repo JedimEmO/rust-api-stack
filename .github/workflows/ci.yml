@@ -333,6 +333,27 @@ jobs:
           npm ci
           npm run build
 
+      - name: Install Playwright package
+        working-directory: tests/playwright
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: tests/playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: Run WASM UI browser tests
+        working-directory: tests/playwright
+        run: npm test -- --config wasm-ui.config.ts
+
+      - name: Upload WASM UI test results
+        if: failure()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: wasm-ui-test-results
+          path: tests/playwright/test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
   coverage:
     name: Coverage report
     runs-on: ubuntu-latest
