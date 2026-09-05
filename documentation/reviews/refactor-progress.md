@@ -41,3 +41,4 @@ REST baseline: 61/61 passed.
 | 24 | JSON-RPC integration/e2e scenarios | All 59 discovered names/counts retained, including conditional client cases; 27 moved cases; 59 tests, docs/Clippy/features pass. |
 | 25 | File-service e2e transfer, validation, limit, and schema/client scenarios | All 49 discovered names/counts retained; 23 moved cases; 49 tests, docs/Clippy/features pass. |
 | 26 | Local-identity companion tests | All 20 discovered local-identity cases retained (one existing ignored); 40 local/session tests pass, docs/Clippy pass. Provider implementation unchanged. |
+| 27 | Rename history-based macro test targets to `http_service_contracts` | 120 REST/JSON-RPC tests, docs/Clippy/features pass; source files renamed without changing their cases. No external target-name references found. |
