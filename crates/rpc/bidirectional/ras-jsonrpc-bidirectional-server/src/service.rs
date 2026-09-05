@@ -6,7 +6,8 @@ use crate::{
     connection::ChannelMessageSender,
     handler::{
         AuthRevalidation, AxumWebSocketIo, DEFAULT_AUTH_REVALIDATION_INTERVAL, KeepaliveConfig,
-        PermissionChangePolicy, SubscriptionLimits, WebSocketIo, WebSocketIoMessage,
+        PermissionChangePolicy, SubscriptionAccounting, SubscriptionLimits, WebSocketIo,
+        WebSocketIoMessage,
     },
 };
 use axum::{
@@ -85,6 +86,10 @@ pub trait WebSocketService: Clone + Send + Sync + 'static {
     fn subscription_limits(&self) -> SubscriptionLimits {
         SubscriptionLimits::default()
     }
+
+    /// Service-wide subscription counter shared by every connection, so the
+    /// global cap holds whatever manager or handler is in use.
+    fn subscription_accounting(&self) -> Arc<SubscriptionAccounting>;
 
     /// Server-side ping interval and idle timeout.
     fn keepalive(&self) -> KeepaliveConfig {
@@ -265,6 +270,7 @@ where
     )
     .with_connection_manager(manager)
     .with_subscription_limits(service.subscription_limits())
+    .with_subscription_accounting(service.subscription_accounting())
     .with_keepalive(service.keepalive());
 
     // Authenticated connections re-validate their token periodically so
@@ -350,6 +356,7 @@ where
                 .max_connections
                 .map(|limit| Arc::new(tokio::sync::Semaphore::new(limit))),
             subscription_limits: self.subscription_limits,
+            subscription_accounting: Arc::new(SubscriptionAccounting::default()),
             keepalive: self.keepalive,
             on_permission_change: self.on_permission_change,
         }
@@ -377,6 +384,7 @@ where
                 .max_connections
                 .map(|limit| Arc::new(tokio::sync::Semaphore::new(limit))),
             subscription_limits: self.subscription_limits,
+            subscription_accounting: Arc::new(SubscriptionAccounting::default()),
             keepalive: self.keepalive,
             on_permission_change: self.on_permission_change,
         }
@@ -395,6 +403,7 @@ pub struct BuiltWebSocketService<H, A, M> {
     max_connections: Option<usize>,
     connection_permits: Option<Arc<tokio::sync::Semaphore>>,
     subscription_limits: SubscriptionLimits,
+    subscription_accounting: Arc<SubscriptionAccounting>,
     keepalive: KeepaliveConfig,
     on_permission_change: PermissionChangePolicy,
 }
@@ -413,6 +422,7 @@ impl<H, A, M> Clone for BuiltWebSocketService<H, A, M> {
             // Shared, not rebuilt: every clone must draw from the same pool.
             connection_permits: self.connection_permits.clone(),
             subscription_limits: self.subscription_limits,
+            subscription_accounting: self.subscription_accounting.clone(),
             keepalive: self.keepalive,
             on_permission_change: self.on_permission_change,
         }
@@ -467,6 +477,10 @@ where
 
     fn subscription_limits(&self) -> SubscriptionLimits {
         self.subscription_limits
+    }
+
+    fn subscription_accounting(&self) -> Arc<SubscriptionAccounting> {
+        self.subscription_accounting.clone()
     }
 
     fn keepalive(&self) -> KeepaliveConfig {

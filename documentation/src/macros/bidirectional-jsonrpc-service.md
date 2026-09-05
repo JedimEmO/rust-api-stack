@@ -145,7 +145,9 @@ the corresponding `WebSocketService` method:
 All of these are also settable on the generated `<Service>Builder`.
 
 Topic subscriptions are default-deny: override `authorize_subscribe` on the
-handler to allow the topics a connection is entitled to. `WITH_PERMISSIONS`
+handler to allow the topics a connection is entitled to. The limits above are
+enforced by the server after every `handle_subscribe`, so they hold even with
+a custom `ConnectionManager` or a handler that subscribes the context directly. `WITH_PERMISSIONS`
 checks go through your provider's `check_permissions`, so wildcard or
 hierarchical permission schemes behave the same over WebSocket as over REST.
 

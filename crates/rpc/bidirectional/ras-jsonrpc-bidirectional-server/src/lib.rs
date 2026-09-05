@@ -14,8 +14,8 @@ pub mod upgrade;
 pub use connection::{ChannelMessageSender, ConnectionContext, OutboundMessage};
 pub use error::{ServerError, ServerResult};
 pub use handler::{
-    AuthRevalidation, KeepaliveConfig, MessageHandler, PermissionChangePolicy, SubscriptionLimits,
-    WebSocketHandler,
+    AuthRevalidation, KeepaliveConfig, MessageHandler, PermissionChangePolicy,
+    SubscriptionAccounting, SubscriptionLimits, WebSocketHandler,
 };
 pub use manager::DefaultConnectionManager;
 pub use router::MessageRouter;

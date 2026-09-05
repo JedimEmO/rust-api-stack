@@ -246,6 +246,37 @@ impl Default for SubscriptionLimits {
     }
 }
 
+/// Service-wide count of held subscriptions, shared by every connection of a
+/// service so the global cap is enforced by the server itself, independently
+/// of which `ConnectionManager` or `MessageHandler` is plugged in.
+#[derive(Debug, Default)]
+pub struct SubscriptionAccounting {
+    total: std::sync::atomic::AtomicUsize,
+}
+
+impl SubscriptionAccounting {
+    /// Current number of (connection, topic) pairs held across the service.
+    pub fn total(&self) -> usize {
+        self.total.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Atomically reserve one slot; `false` when `max` (non-zero) is reached.
+    fn reserve(&self, max: usize) -> bool {
+        use std::sync::atomic::Ordering;
+        let previous = self.total.fetch_add(1, Ordering::AcqRel);
+        if max > 0 && previous >= max {
+            self.total.fetch_sub(1, Ordering::AcqRel);
+            return false;
+        }
+        true
+    }
+
+    fn release(&self, count: usize) {
+        self.total
+            .fetch_sub(count, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
 /// Server-side keepalive for a connection (W4).
 ///
 /// The server sends a WebSocket ping every `ping_interval`; browsers and
@@ -285,6 +316,8 @@ pub struct WebSocketHandler<H: MessageHandler> {
     /// subscriptions (None when running without a manager, e.g. unit tests)
     connection_manager: Option<Arc<dyn ConnectionManager>>,
     subscription_limits: SubscriptionLimits,
+    /// Shared across the service's connections; per-handler when not injected
+    subscription_accounting: Arc<SubscriptionAccounting>,
     keepalive: KeepaliveConfig,
 }
 
@@ -304,6 +337,7 @@ impl<H: MessageHandler> WebSocketHandler<H> {
             auth_revalidation: None,
             connection_manager: None,
             subscription_limits: SubscriptionLimits::default(),
+            subscription_accounting: Arc::new(SubscriptionAccounting::default()),
             keepalive: KeepaliveConfig::default(),
         }
     }
@@ -325,6 +359,27 @@ impl<H: MessageHandler> WebSocketHandler<H> {
     pub fn with_subscription_limits(mut self, limits: SubscriptionLimits) -> Self {
         self.subscription_limits = limits;
         self
+    }
+
+    /// Share the service-wide subscription counter so the global cap spans
+    /// every connection of the service.
+    pub fn with_subscription_accounting(mut self, accounting: Arc<SubscriptionAccounting>) -> Self {
+        self.subscription_accounting = accounting;
+        self
+    }
+
+    /// Drop a held subscription from the context, the manager and the
+    /// service-wide count.
+    async fn release_subscription(&self, topic: &str) {
+        // Context first: the egress gate consults it, so from this point no
+        // broadcast on the topic can leave this connection, regardless of
+        // when the manager index catches up.
+        if self.context.unsubscribe(topic).await {
+            self.subscription_accounting.release(1);
+        }
+        if let Some(manager) = &self.connection_manager {
+            let _ = manager.remove_subscription(self.context.id, topic).await;
+        }
     }
 
     /// Override the default keepalive settings.
@@ -388,13 +443,7 @@ impl<H: MessageHandler> WebSocketHandler<H> {
                     "Dropping subscription to '{}' on connection {}: no longer authorized",
                     topic, self.context.id
                 );
-                // Context first: the egress gate consults it, so from this
-                // point no broadcast on the topic can leave this connection,
-                // regardless of when the manager index catches up.
-                self.context.unsubscribe(&topic).await;
-                if let Some(manager) = &self.connection_manager {
-                    let _ = manager.remove_subscription(self.context.id, &topic).await;
-                }
+                self.release_subscription(&topic).await;
             }
         }
         Ok(true)
@@ -416,31 +465,61 @@ impl<H: MessageHandler> WebSocketHandler<H> {
         Ok(())
     }
 
-    /// Push subscription changes made by the handler into the manager's
-    /// topic index so `broadcast_to_topic` sees them.
+    /// Reconcile subscription changes made by the handler with the limits,
+    /// the service-wide count, and the manager's topic index.
     ///
-    /// The manager is the invariant: if it refuses a topic (limit reached,
-    /// invalid name), the subscription is rolled back out of the connection
-    /// context too, so a custom `handle_subscribe` cannot exceed the caps.
+    /// This is the invariant, and it does not depend on the manager: topics
+    /// the handler added to the context that exceed the length, per-connection
+    /// or global caps are rolled back out of the context (the egress gate then
+    /// makes them inert), and only accepted topics reach the manager. A manager
+    /// that refuses a topic also causes a rollback.
     async fn sync_subscriptions(&self, before: &[String]) {
-        let Some(manager) = &self.connection_manager else {
-            return;
-        };
         let after = self.context.get_subscriptions().await;
+        let limits = &self.subscription_limits;
+        let mut held = before.len();
+
         for topic in after.iter().filter(|t| !before.contains(t)) {
-            if let Err(e) = manager
-                .add_subscription(self.context.id, topic.clone())
-                .await
+            let refusal = if topic.is_empty() || topic.len() > limits.max_topic_length {
+                Some("topic name length out of range")
+            } else if held >= limits.max_topics_per_connection {
+                Some("subscription limit for this connection reached")
+            } else if !self
+                .subscription_accounting
+                .reserve(limits.max_total_subscriptions)
+            {
+                Some("global subscription limit reached")
+            } else {
+                None
+            };
+            if let Some(reason) = refusal {
+                warn!(
+                    "Rolling back subscription to '{}' on connection {}: {}",
+                    topic, self.context.id, reason
+                );
+                self.context.unsubscribe(topic).await;
+                continue;
+            }
+            if let Some(manager) = &self.connection_manager
+                && let Err(e) = manager
+                    .add_subscription(self.context.id, topic.clone())
+                    .await
             {
                 warn!(
                     "Rolling back subscription to '{}' on connection {}: {}",
                     topic, self.context.id, e
                 );
                 self.context.unsubscribe(topic).await;
+                self.subscription_accounting.release(1);
+                continue;
             }
+            held += 1;
         }
+
         for topic in before.iter().filter(|t| !after.contains(t)) {
-            let _ = manager.remove_subscription(self.context.id, topic).await;
+            self.subscription_accounting.release(1);
+            if let Some(manager) = &self.connection_manager {
+                let _ = manager.remove_subscription(self.context.id, topic).await;
+            }
         }
     }
 
@@ -626,6 +705,10 @@ impl<H: MessageHandler> WebSocketHandler<H> {
             }
         }
 
+        // Return this connection's subscription slots to the service pool
+        let held = self.context.get_subscriptions().await.len();
+        self.subscription_accounting.release(held);
+
         // Notify handler of disconnection
         if let Err(e) = self.handler.on_disconnect(self.context.clone(), None).await {
             error!("Error in on_disconnect handler: {}", e);
@@ -750,12 +833,10 @@ impl<H: MessageHandler> WebSocketHandler<H> {
                 });
                 if limit_error.is_none()
                     && self.subscription_limits.max_total_subscriptions > 0
-                    && let Some(manager) = &self.connection_manager
+                    && self.subscription_accounting.total() + new
+                        > self.subscription_limits.max_total_subscriptions
                 {
-                    let total = manager.total_subscription_count().await.unwrap_or(0);
-                    if total + new > self.subscription_limits.max_total_subscriptions {
-                        limit_error = Some("global subscription limit reached");
-                    }
+                    limit_error = Some("global subscription limit reached");
                 }
                 if let Some(reason) = limit_error {
                     warn!(
@@ -1832,11 +1913,17 @@ mod tests {
 
     #[tokio::test]
     async fn w3_global_subscription_cap_is_enforced_across_connections() {
-        let manager: Arc<dyn ConnectionManager> = Arc::new(crate::DefaultConnectionManager::new());
+        // The manager's own cap is the second line of defence; the service-level
+        // counter is covered by tests/custom_manager_limits.rs. Connections here
+        // close and release their service-level slots, so the manager (which
+        // keeps the first connection registered) is what refuses the second.
         let limits = SubscriptionLimits {
             max_total_subscriptions: 2,
             ..SubscriptionLimits::default()
         };
+        let manager: Arc<dyn ConnectionManager> = Arc::new(
+            crate::DefaultConnectionManager::with_subscription_limits(limits),
+        );
 
         // Two connections, each subscribing to two topics: the second
         // connection's request exceeds the global cap and is refused.
