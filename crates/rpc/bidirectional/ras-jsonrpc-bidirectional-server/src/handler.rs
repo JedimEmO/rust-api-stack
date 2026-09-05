@@ -55,7 +55,12 @@ pub trait MessageHandler: Send + Sync + 'static {
         // skipped without closing the connection.
         for topic in topics {
             if self.authorize_subscribe(&topic, &context).await? {
-                context.subscribe(topic).await;
+                if let Err(e) = context.subscribe(topic.clone()).await {
+                    warn!(
+                        "Refused subscription to topic '{}' for connection {}: {}",
+                        topic, context.id, e
+                    );
+                }
             } else {
                 warn!(
                     "Denied subscription to topic '{}' for connection {}",
@@ -261,7 +266,7 @@ impl SubscriptionAccounting {
     }
 
     /// Atomically reserve one slot; `false` when `max` (non-zero) is reached.
-    fn reserve(&self, max: usize) -> bool {
+    pub(crate) fn reserve(&self, max: usize) -> bool {
         use std::sync::atomic::Ordering;
         let previous = self.total.fetch_add(1, Ordering::AcqRel);
         if max > 0 && previous >= max {
@@ -271,7 +276,7 @@ impl SubscriptionAccounting {
         true
     }
 
-    fn release(&self, count: usize) {
+    pub(crate) fn release(&self, count: usize) {
         self.total
             .fetch_sub(count, std::sync::atomic::Ordering::AcqRel);
     }
@@ -312,12 +317,10 @@ pub struct WebSocketHandler<H: MessageHandler> {
     max_message_size: usize,
     /// Optional periodic credential re-validation
     auth_revalidation: Option<AuthRevalidation>,
-    /// Connection manager whose topic index mirrors this connection's
-    /// subscriptions (None when running without a manager, e.g. unit tests)
+    /// Connection manager kept in step with the cached user on re-validation
+    /// (None when running without a manager, e.g. unit tests). Subscription
+    /// mirroring goes through the context's `SubscriptionPolicy`.
     connection_manager: Option<Arc<dyn ConnectionManager>>,
-    subscription_limits: SubscriptionLimits,
-    /// Shared across the service's connections; per-handler when not injected
-    subscription_accounting: Arc<SubscriptionAccounting>,
     keepalive: KeepaliveConfig,
 }
 
@@ -336,8 +339,6 @@ impl<H: MessageHandler> WebSocketHandler<H> {
             max_message_size,
             auth_revalidation: None,
             connection_manager: None,
-            subscription_limits: SubscriptionLimits::default(),
-            subscription_accounting: Arc::new(SubscriptionAccounting::default()),
             keepalive: KeepaliveConfig::default(),
         }
     }
@@ -348,38 +349,10 @@ impl<H: MessageHandler> WebSocketHandler<H> {
         self
     }
 
-    /// Mirror this connection's subscriptions and user into the manager so
-    /// topic broadcasts and revocation see the same state.
+    /// Keep the manager's cached user in step on re-validation.
     pub fn with_connection_manager(mut self, manager: Arc<dyn ConnectionManager>) -> Self {
         self.connection_manager = Some(manager);
         self
-    }
-
-    /// Override the default subscription limits.
-    pub fn with_subscription_limits(mut self, limits: SubscriptionLimits) -> Self {
-        self.subscription_limits = limits;
-        self
-    }
-
-    /// Share the service-wide subscription counter so the global cap spans
-    /// every connection of the service.
-    pub fn with_subscription_accounting(mut self, accounting: Arc<SubscriptionAccounting>) -> Self {
-        self.subscription_accounting = accounting;
-        self
-    }
-
-    /// Drop a held subscription from the context, the manager and the
-    /// service-wide count.
-    async fn release_subscription(&self, topic: &str) {
-        // Context first: the egress gate consults it, so from this point no
-        // broadcast on the topic can leave this connection, regardless of
-        // when the manager index catches up.
-        if self.context.unsubscribe(topic).await {
-            self.subscription_accounting.release(1);
-        }
-        if let Some(manager) = &self.connection_manager {
-            let _ = manager.remove_subscription(self.context.id, topic).await;
-        }
     }
 
     /// Override the default keepalive settings.
@@ -443,16 +416,17 @@ impl<H: MessageHandler> WebSocketHandler<H> {
                     "Dropping subscription to '{}' on connection {}: no longer authorized",
                     topic, self.context.id
                 );
-                self.release_subscription(&topic).await;
+                self.context.unsubscribe(&topic).await;
             }
         }
         Ok(true)
     }
 
     /// Fast-path validation of a subscribe/unsubscribe request so the client
-    /// gets an error response. The authoritative check is the manager's.
+    /// gets an error response. The authoritative checks live in
+    /// `ConnectionContext::subscribe`.
     fn check_subscription_limits(&self, topics: &[String]) -> Result<(), &'static str> {
-        let limits = &self.subscription_limits;
+        let limits = &self.context.subscription_policy().limits;
         if topics.len() > limits.max_topics_per_message {
             return Err("too many topics in one message");
         }
@@ -463,64 +437,6 @@ impl<H: MessageHandler> WebSocketHandler<H> {
             return Err("topic name length out of range");
         }
         Ok(())
-    }
-
-    /// Reconcile subscription changes made by the handler with the limits,
-    /// the service-wide count, and the manager's topic index.
-    ///
-    /// This is the invariant, and it does not depend on the manager: topics
-    /// the handler added to the context that exceed the length, per-connection
-    /// or global caps are rolled back out of the context (the egress gate then
-    /// makes them inert), and only accepted topics reach the manager. A manager
-    /// that refuses a topic also causes a rollback.
-    async fn sync_subscriptions(&self, before: &[String]) {
-        let after = self.context.get_subscriptions().await;
-        let limits = &self.subscription_limits;
-        let mut held = before.len();
-
-        for topic in after.iter().filter(|t| !before.contains(t)) {
-            let refusal = if topic.is_empty() || topic.len() > limits.max_topic_length {
-                Some("topic name length out of range")
-            } else if held >= limits.max_topics_per_connection {
-                Some("subscription limit for this connection reached")
-            } else if !self
-                .subscription_accounting
-                .reserve(limits.max_total_subscriptions)
-            {
-                Some("global subscription limit reached")
-            } else {
-                None
-            };
-            if let Some(reason) = refusal {
-                warn!(
-                    "Rolling back subscription to '{}' on connection {}: {}",
-                    topic, self.context.id, reason
-                );
-                self.context.unsubscribe(topic).await;
-                continue;
-            }
-            if let Some(manager) = &self.connection_manager
-                && let Err(e) = manager
-                    .add_subscription(self.context.id, topic.clone())
-                    .await
-            {
-                warn!(
-                    "Rolling back subscription to '{}' on connection {}: {}",
-                    topic, self.context.id, e
-                );
-                self.context.unsubscribe(topic).await;
-                self.subscription_accounting.release(1);
-                continue;
-            }
-            held += 1;
-        }
-
-        for topic in before.iter().filter(|t| !after.contains(t)) {
-            self.subscription_accounting.release(1);
-            if let Some(manager) = &self.connection_manager {
-                let _ = manager.remove_subscription(self.context.id, topic).await;
-            }
-        }
     }
 
     /// Run the WebSocket handler loop
@@ -706,8 +622,7 @@ impl<H: MessageHandler> WebSocketHandler<H> {
         }
 
         // Return this connection's subscription slots to the service pool
-        let held = self.context.get_subscriptions().await.len();
-        self.subscription_accounting.release(held);
+        self.context.release_all_subscriptions().await;
 
         // Notify handler of disconnection
         if let Err(e) = self.handler.on_disconnect(self.context.clone(), None).await {
@@ -827,14 +742,14 @@ impl<H: MessageHandler> WebSocketHandler<H> {
             BidirectionalMessage::Subscribe { topics } => {
                 let before = self.context.get_subscriptions().await;
                 let new = topics.iter().filter(|t| !before.contains(t)).count();
+                let policy = self.context.subscription_policy();
                 let mut limit_error = self.check_subscription_limits(&topics).err().or_else(|| {
-                    (before.len() + new > self.subscription_limits.max_topics_per_connection)
+                    (before.len() + new > policy.limits.max_topics_per_connection)
                         .then_some("subscription limit for this connection reached")
                 });
                 if limit_error.is_none()
-                    && self.subscription_limits.max_total_subscriptions > 0
-                    && self.subscription_accounting.total() + new
-                        > self.subscription_limits.max_total_subscriptions
+                    && policy.limits.max_total_subscriptions > 0
+                    && policy.accounting.total() + new > policy.limits.max_total_subscriptions
                 {
                     limit_error = Some("global subscription limit reached");
                 }
@@ -853,9 +768,7 @@ impl<H: MessageHandler> WebSocketHandler<H> {
                 }
                 self.handler
                     .handle_subscribe(topics, self.context.clone())
-                    .await?;
-                self.sync_subscriptions(&before).await;
-                Ok(())
+                    .await
             }
             BidirectionalMessage::Unsubscribe { topics } => {
                 if let Err(reason) = self.check_subscription_limits(&topics) {
@@ -865,12 +778,9 @@ impl<H: MessageHandler> WebSocketHandler<H> {
                     );
                     return Ok(());
                 }
-                let before = self.context.get_subscriptions().await;
                 self.handler
                     .handle_unsubscribe(topics, self.context.clone())
-                    .await?;
-                self.sync_subscriptions(&before).await;
-                Ok(())
+                    .await
             }
             BidirectionalMessage::Ping => self.handler.on_ping(self.context.clone()).await,
             BidirectionalMessage::Pong => self.handler.on_pong(self.context.clone()).await,
@@ -1138,6 +1048,20 @@ mod tests {
         Arc::new(ConnectionContext::new(id, sender))
     }
 
+    fn ctx_with(policy: crate::connection::SubscriptionPolicy) -> Arc<ConnectionContext> {
+        let id = ConnectionId::new();
+        let (tx, _rx) = mpsc::channel(4);
+        let sender = ChannelMessageSender::new(id, tx);
+        Arc::new(ConnectionContext::new(id, sender).with_subscription_policy(policy))
+    }
+
+    fn limits_policy(limits: SubscriptionLimits) -> crate::connection::SubscriptionPolicy {
+        crate::connection::SubscriptionPolicy {
+            limits,
+            ..Default::default()
+        }
+    }
+
     #[tokio::test]
     async fn default_handle_subscribe_denies_all_topics() {
         let h = PassThrough;
@@ -1192,8 +1116,8 @@ mod tests {
     async fn default_handle_unsubscribe_removes_from_context() {
         let h = PassThrough;
         let c = ctx();
-        c.subscribe("a".into()).await;
-        c.subscribe("b".into()).await;
+        c.subscribe("a".into()).await.unwrap();
+        c.subscribe("b".into()).await.unwrap();
         h.handle_unsubscribe(vec!["a".into()], c.clone())
             .await
             .unwrap();
@@ -1665,23 +1589,34 @@ mod tests {
 
     #[tokio::test]
     async fn w1_subscribe_mirrors_into_manager_index() {
-        let context = ctx();
-        context.set_user(auth_user_with("u", &["room:read"])).await;
-        let manager = manager_with(&context).await;
-        let (_tx, rx) = mpsc::channel(4);
-        let mut socket = InMemorySocket::closing([subscribe_msg(vec!["room:1".into()])]);
-
-        WebSocketHandler::new(Arc::new(PermissionGated), context.clone(), rx, 1024)
-            .with_connection_manager(manager.clone())
-            .run_with_io(&mut socket)
+        let manager: Arc<dyn ConnectionManager> = Arc::new(crate::DefaultConnectionManager::new());
+        let context = ctx_with(crate::connection::SubscriptionPolicy {
+            manager: Some(manager.clone()),
+            ..Default::default()
+        });
+        manager
+            .add_connection(ras_jsonrpc_bidirectional_types::ConnectionInfo::new(
+                context.id,
+            ))
             .await
             .unwrap();
 
+        context.subscribe("room:1".into()).await.unwrap();
         assert!(context.is_subscribed_to("room:1").await);
         assert_eq!(
             manager.get_subscriptions(context.id).await.unwrap(),
             vec!["room:1".to_string()]
         );
+
+        assert!(context.unsubscribe("room:1").await);
+        assert!(
+            manager
+                .get_subscriptions(context.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(context.subscription_policy().accounting.total(), 0);
     }
 
     #[tokio::test(start_paused = true)]
@@ -1716,17 +1651,16 @@ mod tests {
 
     #[tokio::test]
     async fn w3_subscribe_over_per_message_limit_is_rejected() {
-        let context = ctx();
+        let context = ctx_with(limits_policy(SubscriptionLimits {
+            max_topics_per_message: 2,
+            ..SubscriptionLimits::default()
+        }));
         context.set_user(auth_user_with("u", &["room:read"])).await;
         let (_tx, rx) = mpsc::channel(4);
         let topics: Vec<String> = (0..3).map(|i| format!("room:{i}")).collect();
         let mut socket = InMemorySocket::closing([subscribe_msg(topics)]);
 
         WebSocketHandler::new(Arc::new(PermissionGated), context.clone(), rx, 1024)
-            .with_subscription_limits(SubscriptionLimits {
-                max_topics_per_message: 2,
-                ..SubscriptionLimits::default()
-            })
             .run_with_io(&mut socket)
             .await
             .unwrap();
@@ -1740,7 +1674,10 @@ mod tests {
 
     #[tokio::test]
     async fn w3_subscribe_over_per_connection_limit_is_rejected() {
-        let context = ctx();
+        let context = ctx_with(limits_policy(SubscriptionLimits {
+            max_topics_per_connection: 1,
+            ..SubscriptionLimits::default()
+        }));
         context.set_user(auth_user_with("u", &["room:read"])).await;
         let (_tx, rx) = mpsc::channel(4);
         let mut socket = InMemorySocket::closing([
@@ -1749,18 +1686,30 @@ mod tests {
         ]);
 
         WebSocketHandler::new(Arc::new(PermissionGated), context.clone(), rx, 1024)
-            .with_subscription_limits(SubscriptionLimits {
-                max_topics_per_connection: 1,
-                ..SubscriptionLimits::default()
-            })
             .run_with_io(&mut socket)
             .await
             .unwrap();
 
-        assert_eq!(
-            context.get_subscriptions().await,
-            vec!["room:1".to_string()]
-        );
+        // First subscribe accepted silently; second answered with an error.
+        let errors = bidirectional_outgoing(&socket)
+            .iter()
+            .filter(|m| matches!(m, BidirectionalMessage::Response(r) if r.error.is_some()))
+            .count();
+        assert_eq!(errors, 1);
+        // Teardown released the held slot.
+        assert_eq!(context.subscription_policy().accounting.total(), 0);
+        assert!(context.get_subscriptions().await.is_empty());
+
+        // Direct path: the context itself refuses the second topic.
+        let direct = ctx_with(limits_policy(SubscriptionLimits {
+            max_topics_per_connection: 1,
+            ..SubscriptionLimits::default()
+        }));
+        direct.subscribe("room:1".into()).await.unwrap();
+        assert!(matches!(
+            direct.subscribe("room:2".into()).await,
+            Err(ras_jsonrpc_bidirectional_types::BidirectionalError::SubscriptionLimitReached(_))
+        ));
     }
 
     #[tokio::test]
@@ -1913,44 +1862,59 @@ mod tests {
 
     #[tokio::test]
     async fn w3_global_subscription_cap_is_enforced_across_connections() {
-        // The manager's own cap is the second line of defence; the service-level
-        // counter is covered by tests/custom_manager_limits.rs. Connections here
-        // close and release their service-level slots, so the manager (which
-        // keeps the first connection registered) is what refuses the second.
+        // Service-level accounting shared by both contexts. The first
+        // connection stays open (pending socket) so its slots remain held
+        // while the second connection tries to subscribe.
         let limits = SubscriptionLimits {
             max_total_subscriptions: 2,
             ..SubscriptionLimits::default()
         };
-        let manager: Arc<dyn ConnectionManager> = Arc::new(
-            crate::DefaultConnectionManager::with_subscription_limits(limits),
-        );
+        let accounting = Arc::new(SubscriptionAccounting::default());
+        let policy = crate::connection::SubscriptionPolicy {
+            limits,
+            accounting: accounting.clone(),
+            manager: None,
+        };
 
-        // Two connections, each subscribing to two topics: the second
-        // connection's request exceeds the global cap and is refused.
-        let mut contexts = Vec::new();
-        for _ in 0..2 {
-            let context = ctx();
-            context.set_user(auth_user_with("u", &["room:read"])).await;
-            manager
-                .add_connection(ras_jsonrpc_bidirectional_types::ConnectionInfo::new(
-                    context.id,
-                ))
-                .await
-                .unwrap();
-            let (_tx, rx) = mpsc::channel(4);
-            let mut socket = InMemorySocket::closing([subscribe_msg(vec!["a".into(), "b".into()])]);
-            WebSocketHandler::new(Arc::new(PermissionGated), context.clone(), rx, 1024)
-                .with_connection_manager(manager.clone())
-                .with_subscription_limits(limits)
-                .run_with_io(&mut socket)
-                .await
-                .unwrap();
-            contexts.push(context);
+        let first = ctx_with(policy.clone());
+        first.set_user(auth_user_with("u", &["room:read"])).await;
+        let (_tx1, rx1) = mpsc::channel(4);
+        let mut socket1 = InMemorySocket::pending();
+        socket1
+            .incoming
+            .push_back(subscribe_msg(vec!["a".into(), "b".into()]));
+        let first_run = {
+            let first = first.clone();
+            tokio::spawn(async move {
+                WebSocketHandler::new(Arc::new(PermissionGated), first, rx1, 1024)
+                    .with_keepalive(KeepaliveConfig {
+                        ping_interval: None,
+                        idle_timeout: None,
+                    })
+                    .run_with_io(&mut socket1)
+                    .await
+            })
+        };
+        for _ in 0..100 {
+            if accounting.total() == 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
         }
+        assert_eq!(first.get_subscriptions().await.len(), 2);
 
-        assert_eq!(contexts[0].get_subscriptions().await.len(), 2);
-        assert!(contexts[1].get_subscriptions().await.is_empty());
-        assert_eq!(manager.total_subscription_count().await.unwrap(), 2);
+        let second = ctx_with(policy);
+        second.set_user(auth_user_with("u", &["room:read"])).await;
+        let (_tx2, rx2) = mpsc::channel(4);
+        let mut socket2 = InMemorySocket::closing([subscribe_msg(vec!["c".into()])]);
+        WebSocketHandler::new(Arc::new(PermissionGated), second.clone(), rx2, 1024)
+            .run_with_io(&mut socket2)
+            .await
+            .unwrap();
+
+        assert!(second.get_subscriptions().await.is_empty());
+        assert_eq!(accounting.total(), 2, "second connection reserved nothing");
+        first_run.abort();
     }
 
     #[tokio::test(start_paused = true)]
@@ -1987,9 +1951,22 @@ mod tests {
         )));
     }
 
-    /// A custom handler that ignores the request and subscribes to far more
-    /// topics than any limit allows, straight into the context.
+    static GREEDY_ACCEPTED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    /// A custom handler that subscribes to far more topics than any limit
+    /// allows, from `on_connect` as well as `handle_subscribe`, straight on
+    /// the context.
     struct GreedyHandler;
+
+    impl GreedyHandler {
+        async fn grab(context: &ConnectionContext, prefix: &str) {
+            for i in 0..10 {
+                if context.subscribe(format!("{prefix}:{i}")).await.is_ok() {
+                    GREEDY_ACCEPTED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        }
+    }
 
     #[async_trait]
     impl MessageHandler for GreedyHandler {
@@ -2001,20 +1978,23 @@ mod tests {
             Ok(None)
         }
 
+        async fn on_connect(&self, context: Arc<ConnectionContext>) -> ServerResult<()> {
+            Self::grab(&context, "connect").await;
+            Ok(())
+        }
+
         async fn handle_subscribe(
             &self,
             _topics: Vec<String>,
             context: Arc<ConnectionContext>,
         ) -> ServerResult<()> {
-            for i in 0..10 {
-                context.subscribe(format!("greedy:{i}")).await;
-            }
+            Self::grab(&context, "greedy").await;
             Ok(())
         }
     }
 
     #[tokio::test]
-    async fn w3_custom_handler_cannot_exceed_manager_limits() {
+    async fn w3_custom_handler_cannot_exceed_limits_from_any_callback() {
         let limits = SubscriptionLimits {
             max_topics_per_connection: 3,
             ..SubscriptionLimits::default()
@@ -2022,7 +2002,12 @@ mod tests {
         let manager: Arc<dyn ConnectionManager> = Arc::new(
             crate::DefaultConnectionManager::with_subscription_limits(limits),
         );
-        let context = ctx();
+        let accounting = Arc::new(SubscriptionAccounting::default());
+        let context = ctx_with(crate::connection::SubscriptionPolicy {
+            limits,
+            accounting: accounting.clone(),
+            manager: Some(manager.clone()),
+        });
         manager
             .add_connection(ras_jsonrpc_bidirectional_types::ConnectionInfo::new(
                 context.id,
@@ -2034,18 +2019,30 @@ mod tests {
 
         WebSocketHandler::new(Arc::new(GreedyHandler), context.clone(), rx, 1024)
             .with_connection_manager(manager.clone())
-            .with_subscription_limits(limits)
             .run_with_io(&mut socket)
             .await
             .unwrap();
 
-        // The manager admitted three; the rest were rolled back from the context.
-        assert_eq!(context.get_subscriptions().await.len(), 3);
+        // Greedy on_connect (10), handle_request-free, then greedy
+        // handle_subscribe (10 more): the context admitted three in total,
+        // the manager saw exactly those, and disconnect released exactly
+        // those, so the counter is back to zero, not underflowed.
+        assert_eq!(
+            context.get_subscriptions().await.len(),
+            0,
+            "released on disconnect"
+        );
         assert_eq!(
             manager.get_subscriptions(context.id).await.unwrap().len(),
-            3
+            0
         );
-        assert_eq!(manager.total_subscription_count().await.unwrap(), 3);
+        assert_eq!(accounting.total(), 0, "no underflow");
+        assert_eq!(manager.total_subscription_count().await.unwrap(), 0);
+        assert_eq!(
+            GREEDY_ACCEPTED.load(std::sync::atomic::Ordering::SeqCst),
+            3,
+            "exactly the cap accepted across on_connect and handle_subscribe"
+        );
     }
 
     #[tokio::test]

@@ -139,7 +139,7 @@ impl MessageHandler for GreedyHandler {
         context: Arc<ConnectionContext>,
     ) -> ServerResult<()> {
         for i in 0..self.count {
-            context.subscribe(format!("{}:{i}", self.prefix)).await;
+            let _ = context.subscribe(format!("{}:{i}", self.prefix)).await;
         }
         Ok(())
     }

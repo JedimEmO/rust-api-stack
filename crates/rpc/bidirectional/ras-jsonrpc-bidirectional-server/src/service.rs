@@ -250,7 +250,16 @@ where
         info.set_user(user);
     }
 
-    let context = Arc::new(ConnectionContext::new(connection_id, sender.clone()));
+    let manager: Arc<dyn ConnectionManager> = service.connection_manager();
+    let context = Arc::new(
+        ConnectionContext::new(connection_id, sender.clone()).with_subscription_policy(
+            crate::connection::SubscriptionPolicy {
+                limits: service.subscription_limits(),
+                accounting: service.subscription_accounting(),
+                manager: Some(manager.clone()),
+            },
+        ),
+    );
     if let Some(user) = user {
         context.set_user(user).await;
     }
@@ -261,7 +270,6 @@ where
         .await
         .map_err(ServerError::ConnectionError)?;
 
-    let manager: Arc<dyn ConnectionManager> = service.connection_manager();
     let mut handler = WebSocketHandler::new(
         service.handler(),
         context.clone(),
@@ -269,8 +277,6 @@ where
         service.max_message_size(),
     )
     .with_connection_manager(manager)
-    .with_subscription_limits(service.subscription_limits())
-    .with_subscription_accounting(service.subscription_accounting())
     .with_keepalive(service.keepalive());
 
     // Authenticated connections re-validate their token periodically so
