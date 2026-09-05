@@ -333,6 +333,14 @@ jobs:
           npm ci
           npm run build
 
+      - name: Install browser interaction tests
+        run: |
+          npm --prefix tests/playwright ci
+          npm --prefix tests/playwright exec -- playwright install --with-deps chromium
+
+      - name: Verify WASM UI interactions
+        run: npm --prefix tests/playwright test -- --config wasm-ui.config.ts
+
   coverage:
     name: Coverage report
     runs-on: ubuntu-latest

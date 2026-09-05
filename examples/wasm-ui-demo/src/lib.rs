@@ -1131,7 +1131,8 @@ fn render_dashboard(app: Arc<App>) -> Dom {
                                     .child_signal(app.selected_task.signal_cloned().map(clone!(app => move |task| {
                                         task.map(|t| {
                                             html!("div", {
-                                                .class("glass animate-fade-in")
+                                                .class("glass")
+                                                .class("animate-fade-in")
                                                 .apply(|b| dwclass!(b, "rounded-2xl p-8"))
                                                 .children(&mut [
                                                     html!("div", {
