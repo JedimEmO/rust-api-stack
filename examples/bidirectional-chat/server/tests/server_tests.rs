@@ -52,7 +52,7 @@ async fn create_test_config() -> Result<(Config, TempDir)> {
             cors: Default::default(),
         },
         auth: AuthConfig {
-            jwt_secret: "test-secret-key-that-is-long-enough".to_string(),
+            jwt_secret: "af64d581a2e84c58924af06fe77e57bf06352f27be50c16e".to_string(),
             jwt_ttl_seconds: 3600,
             refresh_enabled: true,
             jwt_algorithm: "HS256".to_string(),
@@ -137,8 +137,10 @@ fn config_example_loads_with_session_compatible_secret() -> Result<()> {
         jwt_ttl: chrono::Duration::seconds(config.auth.jwt_ttl_seconds),
         enforce_active_sessions: true,
         algorithm: JwtAlgorithm::HS256,
-        iss: None,
-        aud: None,
+        iss: Some("bidirectional-chat".to_string()),
+        aud: Some("bidirectional-chat".to_string()),
+        require_iss_aud: true,
+        max_sessions_per_user: ras_identity_session::DEFAULT_MAX_SESSIONS_PER_USER,
     };
 
     session_config.validate()?;

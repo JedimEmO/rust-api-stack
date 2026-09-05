@@ -648,9 +648,6 @@ pub struct ClientBuilder {
     /// JWT token for authentication
     jwt_token: Option<String>,
 
-    /// Whether to send JWT token in header (true) or as parameter (false)
-    jwt_in_header: bool,
-
     /// Custom headers
     custom_headers: HashMap<String, String>,
 
@@ -676,7 +673,6 @@ impl ClientBuilder {
         Self {
             url: url.into(),
             jwt_token: None,
-            jwt_in_header: true,
             custom_headers: HashMap::new(),
             request_timeout: Duration::from_secs(30),
             reconnect_config: None,
@@ -692,9 +688,14 @@ impl ClientBuilder {
         self
     }
 
-    /// Set whether to send JWT token in header or as parameter
-    pub fn with_jwt_in_header(mut self, in_header: bool) -> Self {
-        self.jwt_in_header = in_header;
+    /// No-op kept for source compatibility.
+    ///
+    /// Tokens are always sent out-of-URL: in the `Authorization` header on
+    /// native targets and as the `token.<jwt>` subprotocol in browsers. The
+    /// query-string transport was removed because URLs leak into logs and the
+    /// bundled server never accepted it.
+    #[deprecated(note = "tokens are never sent in the URL; this flag has no effect")]
+    pub fn with_jwt_in_header(self, _in_header: bool) -> Self {
         self
     }
 
@@ -737,13 +738,7 @@ impl ClientBuilder {
     /// Build the client
     pub async fn build(self) -> ClientResult<Client> {
         let auth = match self.jwt_token {
-            Some(token) => {
-                if self.jwt_in_header {
-                    AuthConfig::JwtHeader { token }
-                } else {
-                    AuthConfig::JwtParams { token }
-                }
-            }
+            Some(token) => AuthConfig::JwtHeader { token },
             None => AuthConfig::None,
         };
 
@@ -848,7 +843,6 @@ mod tests {
         let custom = ReconnectConfig::default();
         let client = ClientBuilder::new("ws://localhost:8080")
             .with_jwt_token("tok".into())
-            .with_jwt_in_header(false)
             .with_header("X-Custom", "v")
             .with_request_timeout(Duration::from_secs(11))
             .with_reconnect_config(custom)
@@ -859,7 +853,7 @@ mod tests {
             .await
             .expect("build");
 
-        assert!(matches!(client.config().auth, AuthConfig::JwtParams { .. }));
+        assert!(matches!(client.config().auth, AuthConfig::JwtHeader { .. }));
         assert_eq!(client.config().request_timeout, Duration::from_secs(11));
         assert_eq!(client.config().connection_timeout, Duration::from_secs(7));
         assert!(client.config().heartbeat_interval.is_none());

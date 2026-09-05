@@ -287,7 +287,7 @@ async fn upload_and_download_round_trips_declared_multipart_fields() {
     );
     assert_eq!(
         response.headers()["content-disposition"],
-        "attachment; filename=\"file-0.bin\""
+        "attachment; filename=\"file-0.bin\"; filename*=UTF-8''file-0.bin"
     );
     let downloaded = response.bytes().await.expect("download body");
     assert_eq!(downloaded.as_ref(), payload.as_slice());

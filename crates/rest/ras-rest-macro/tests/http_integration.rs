@@ -1375,3 +1375,66 @@ async fn test_body_limit_option_enforced() {
         .await;
     assert_eq!(response.status_code().as_u16(), 413);
 }
+
+/// F2: axum's default `Path` rejection echoes the offending value (e.g.
+/// "Cannot parse `abc` to a `i32`"); the generated handler must return a fixed
+/// JSON message instead and log the detail server-side.
+#[tokio::test]
+async fn f2_invalid_path_parameter_returns_generic_json_error() {
+    let server = create_rest_test_server();
+
+    // UNAUTHORIZED route with an `i32` path param.
+    let response = make_rest_request(
+        &server,
+        Method::GET,
+        "/api/v1/users/not-an-int-9f3c/posts",
+        None,
+        None,
+    )
+    .await;
+
+    assert_eq!(response.status_code().as_u16(), 400);
+    let text = response.text();
+    assert!(
+        !text.contains("not-an-int-9f3c"),
+        "path value echoed to client: {text}"
+    );
+    assert!(
+        !text.contains("i32"),
+        "type detail echoed to client: {text}"
+    );
+    let body: Value = response.json();
+    assert_eq!(body["error"], "Invalid path parameters");
+}
+
+/// F2: same for query-string rejections from `axum_extra::extract::Query`.
+#[tokio::test]
+async fn f2_invalid_query_parameter_returns_generic_json_error() {
+    let server = create_rest_test_server();
+
+    // `page: u32` — a non-numeric value is rejected.
+    let response = make_rest_request(
+        &server,
+        Method::GET,
+        "/api/v1/posts/paginated?page=zz-not-a-page",
+        None,
+        None,
+    )
+    .await;
+
+    assert_eq!(response.status_code().as_u16(), 400);
+    let text = response.text();
+    assert!(
+        !text.contains("zz-not-a-page"),
+        "query value echoed to client: {text}"
+    );
+    let body: Value = response.json();
+    assert_eq!(body["error"], "Invalid query parameters");
+
+    // Missing required query param is also a generic 400.
+    let response =
+        make_rest_request(&server, Method::GET, "/api/v1/posts/paginated", None, None).await;
+    assert_eq!(response.status_code().as_u16(), 400);
+    let body: Value = response.json();
+    assert_eq!(body["error"], "Invalid query parameters");
+}

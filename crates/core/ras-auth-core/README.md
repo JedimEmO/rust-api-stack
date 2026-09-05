@@ -141,8 +141,15 @@ The default cookie is `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, and uses a
 `CsrfConfig::default()` uses a double-submit token: issue a CSRF cookie with
 `csrf_cookie_header_value(...)`, then have browser clients echo the same token in
 the `x-ras-csrf` header on cookie-authenticated `POST`, `PUT`, `PATCH`, and
-`DELETE` requests. Use `header_presence_only(...)` only behind restrictive
-credentialed CORS where a presence-only custom header is an intentional tradeoff.
+`DELETE` requests.
+
+Two weaker modes exist and are named to discourage casual use:
+`CsrfConfig::dangerous_header_presence_only(...)` (only requires the custom
+header to be present; sound only behind restrictive credentialed CORS) and
+`CsrfConfig::dangerous_static_value(...)` (a single process-wide value that is
+not bound to a session). Configuring cookie auth with either logs a
+`tracing::warn!`. The former names `header_presence_only` and
+`with_expected_value` are deprecated aliases and will be removed.
 
 ## Usage
 

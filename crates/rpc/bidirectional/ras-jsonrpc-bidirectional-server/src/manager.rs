@@ -1,6 +1,7 @@
 //! Default connection manager implementation using DashMap
 
 use crate::connection::ChannelMessageSender;
+use crate::handler::SubscriptionLimits;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use ras_auth_core::AuthenticatedUser;
@@ -11,7 +12,13 @@ use std::collections::HashMap;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, info, warn};
 
-/// Thread-safe connection manager using DashMap for concurrent access
+/// Thread-safe connection manager using DashMap for concurrent access.
+///
+/// Subscription limits are enforced here as an invariant: `add_subscription`
+/// checks the per-connection and global caps and updates both the connection
+/// state and the topic index while holding the connection's entry guard, so
+/// concurrent subscribe/unsubscribe calls for one connection serialize and
+/// the index can never hold an entry the connection state lacks.
 #[derive(Debug, Default)]
 pub struct DefaultConnectionManager {
     /// Active connections indexed by ConnectionId
@@ -19,6 +26,10 @@ pub struct DefaultConnectionManager {
 
     /// Topic subscriptions - maps topic to set of connection IDs
     subscriptions: DashMap<String, Vec<ConnectionId>>,
+    /// Exact count of (connection, topic) pairs in `subscriptions`
+    total_subscriptions: std::sync::atomic::AtomicUsize,
+    /// Caps enforced by `add_subscription`
+    limits: SubscriptionLimits,
 
     /// Pending requests for server-to-client RPC calls
     /// Maps connection_id -> request_id -> response_sender
@@ -34,8 +45,34 @@ impl DefaultConnectionManager {
         Self {
             connections: DashMap::new(),
             subscriptions: DashMap::new(),
+            total_subscriptions: std::sync::atomic::AtomicUsize::new(0),
+            limits: SubscriptionLimits::default(),
             pending_requests: DashMap::new(),
         }
+    }
+
+    /// Create a manager that enforces `limits` on every `add_subscription`.
+    pub fn with_subscription_limits(limits: SubscriptionLimits) -> Self {
+        Self {
+            limits,
+            ..Self::new()
+        }
+    }
+
+    /// The limits this manager enforces.
+    pub fn subscription_limits(&self) -> SubscriptionLimits {
+        self.limits
+    }
+
+    fn remove_from_index(&self, id: ConnectionId, topic: &str) {
+        if let Some(mut entry) = self.subscriptions.get_mut(topic) {
+            let before = entry.len();
+            entry.retain(|&connection_id| connection_id != id);
+            self.total_subscriptions
+                .fetch_sub(before - entry.len(), std::sync::atomic::Ordering::Relaxed);
+        }
+        // Drop the topic entry only if it is still empty at removal time.
+        self.subscriptions.remove_if(topic, |_, ids| ids.is_empty());
     }
 
     /// Get the number of active connections
@@ -90,10 +127,17 @@ impl DefaultConnectionManager {
         &self,
         recipients: Vec<(ConnectionId, ChannelMessageSender)>,
         message: BidirectionalMessage,
+        topic: Option<&str>,
     ) -> (usize, Vec<ConnectionId>) {
         let sends = recipients.into_iter().map(|(id, sender)| {
             let message = message.clone();
-            async move { (id, sender.send(message).await) }
+            async move {
+                let result = match topic {
+                    Some(topic) => sender.send_on_topic(topic, message).await,
+                    None => sender.send(message).await,
+                };
+                (id, result)
+            }
         });
 
         let mut sent_count = 0;
@@ -146,7 +190,10 @@ impl ConnectionManager for DefaultConnectionManager {
             // empty-entry cleanup atomic against concurrent subscribes.
             for topic in info.subscriptions.iter() {
                 if let Some(mut entry) = self.subscriptions.get_mut(topic) {
+                    let before = entry.len();
                     entry.retain(|&connection_id| connection_id != id);
+                    self.total_subscriptions
+                        .fetch_sub(before - entry.len(), std::sync::atomic::Ordering::Relaxed);
                 }
                 self.subscriptions.remove_if(topic, |_, ids| ids.is_empty());
             }
@@ -176,6 +223,12 @@ impl ConnectionManager for DefaultConnectionManager {
 
     async fn active_connection_count(&self) -> Result<usize> {
         Ok(self.connections.len())
+    }
+
+    async fn total_subscription_count(&self) -> Result<usize> {
+        Ok(self
+            .total_subscriptions
+            .load(std::sync::atomic::Ordering::Relaxed))
     }
 
     async fn get_subscribed_connections(&self, topic: &str) -> Result<Vec<ConnectionInfo>> {
@@ -215,56 +268,72 @@ impl ConnectionManager for DefaultConnectionManager {
     }
 
     async fn add_subscription(&self, id: ConnectionId, topic: String) -> Result<()> {
-        // Only live connections may enter the topic index, otherwise a
-        // subscribe racing remove_connection leaves dangling ids behind.
-        {
-            let Some(mut entry) = self.connections.get_mut(&id) else {
-                warn!(
-                    "Attempted to subscribe non-existent connection {} to topic {}",
-                    id, topic
-                );
-                return Ok(());
-            };
-            entry.0.subscribe(topic.clone());
+        use ras_jsonrpc_bidirectional_types::BidirectionalError;
+        use std::sync::atomic::Ordering;
+
+        if topic.is_empty() || topic.len() > self.limits.max_topic_length {
+            return Err(BidirectionalError::InvalidTopic(
+                "topic name length out of range".to_string(),
+            ));
         }
 
-        {
-            let mut entry = self.subscriptions.entry(topic.clone()).or_default();
-            if !entry.contains(&id) {
-                entry.push(id);
-            }
-        }
-
-        // The connection may have been removed between the liveness check and
-        // the index insert; undo so no zombie entry survives the race.
-        if !self.connections.contains_key(&id) {
-            if let Some(mut entry) = self.subscriptions.get_mut(&topic) {
-                entry.retain(|&connection_id| connection_id != id);
-            }
-            self.subscriptions
-                .remove_if(&topic, |_, ids| ids.is_empty());
+        // Hold the connection's entry guard for the whole mutation: it
+        // serializes with remove_subscription and remove_connection for this
+        // id, so state and index are updated as one unit.
+        let Some(mut entry) = self.connections.get_mut(&id) else {
+            warn!(
+                "Attempted to subscribe non-existent connection {} to topic {}",
+                id, topic
+            );
+            return Ok(());
+        };
+        if entry.0.is_subscribed_to(&topic) {
             return Ok(());
         }
+        if entry.0.subscriptions.len() >= self.limits.max_topics_per_connection {
+            return Err(BidirectionalError::SubscriptionLimitReached(
+                "subscription limit for this connection reached".to_string(),
+            ));
+        }
+        if self.limits.max_total_subscriptions > 0 {
+            // Atomic reserve: the counter is the invariant, not a snapshot.
+            let previous = self.total_subscriptions.fetch_add(1, Ordering::AcqRel);
+            if previous >= self.limits.max_total_subscriptions {
+                self.total_subscriptions.fetch_sub(1, Ordering::AcqRel);
+                return Err(BidirectionalError::SubscriptionLimitReached(
+                    "global subscription limit reached".to_string(),
+                ));
+            }
+        } else {
+            self.total_subscriptions.fetch_add(1, Ordering::AcqRel);
+        }
+
+        entry.0.subscribe(topic.clone());
+        self.subscriptions
+            .entry(topic.clone())
+            .or_default()
+            .push(id);
+        drop(entry);
 
         debug!("Connection {} subscribed to topic {}", id, topic);
         Ok(())
     }
 
     async fn remove_subscription(&self, id: ConnectionId, topic: &str) -> Result<()> {
-        // Update topic subscriptions
-        if let Some(mut entry) = self.subscriptions.get_mut(topic) {
-            entry.retain(|&connection_id| connection_id != id);
+        match self.connections.get_mut(&id) {
+            Some(mut entry) => {
+                // Same guard discipline as add_subscription.
+                if entry.0.unsubscribe(topic) {
+                    self.remove_from_index(id, topic);
+                }
+                drop(entry);
+            }
+            None => {
+                // Connection already gone: only a stale index entry can remain
+                // (broadcast failure cleanup path).
+                self.remove_from_index(id, topic);
+            }
         }
-        // Drop the topic entry only if it is still empty at removal time, so
-        // a concurrent subscribe between the retain above and this call is
-        // not thrown away.
-        self.subscriptions.remove_if(topic, |_, ids| ids.is_empty());
-
-        // Update connection subscriptions
-        if let Some(mut entry) = self.connections.get_mut(&id) {
-            entry.0.unsubscribe(topic);
-        }
-
         debug!("Connection {} unsubscribed from topic {}", id, topic);
         Ok(())
     }
@@ -318,7 +387,7 @@ impl ConnectionManager for DefaultConnectionManager {
             }
         }
 
-        let (sent_count, send_failures) = self.fan_out(recipients, message).await;
+        let (sent_count, send_failures) = self.fan_out(recipients, message, Some(topic)).await;
         failed_connections.extend(send_failures);
 
         // Clean up failed connections from topic subscriptions
@@ -341,7 +410,7 @@ impl ConnectionManager for DefaultConnectionManager {
             .map(|entry| (*entry.key(), entry.value().1.clone()))
             .collect();
 
-        let (sent_count, _) = self.fan_out(recipients, message).await;
+        let (sent_count, _) = self.fan_out(recipients, message, None).await;
 
         debug!("Broadcasted to {} authenticated connections", sent_count);
         Ok(sent_count)
@@ -359,7 +428,7 @@ impl ConnectionManager for DefaultConnectionManager {
             .map(|entry| (*entry.key(), entry.value().1.clone()))
             .collect();
 
-        let (sent_count, _) = self.fan_out(recipients, message).await;
+        let (sent_count, _) = self.fan_out(recipients, message, None).await;
 
         debug!(
             "Broadcasted to {} connections with permission: {}",

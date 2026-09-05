@@ -11,13 +11,18 @@ pub mod router;
 pub mod service;
 pub mod upgrade;
 
-pub use connection::ConnectionContext;
+pub use connection::{
+    ChannelMessageSender, ConnectionContext, OutboundMessage, SubscriptionPolicy,
+};
 pub use error::{ServerError, ServerResult};
-pub use handler::{MessageHandler, WebSocketHandler};
+pub use handler::{
+    AuthRevalidation, KeepaliveConfig, MessageHandler, PermissionChangePolicy,
+    SubscriptionAccounting, SubscriptionLimits, WebSocketHandler,
+};
 pub use manager::DefaultConnectionManager;
 pub use router::MessageRouter;
 pub use service::{WebSocketService, WebSocketServiceBuilder};
-pub use upgrade::WebSocketUpgrade;
+pub use upgrade::{WS_SUBPROTOCOL, WS_TOKEN_SUBPROTOCOL_PREFIX, WebSocketUpgrade};
 
 // Re-export types from bidirectional-types for convenience
 pub use ras_jsonrpc_bidirectional_types::{

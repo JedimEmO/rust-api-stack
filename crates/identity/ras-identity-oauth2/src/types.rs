@@ -17,7 +17,10 @@ pub struct AuthorizationRequest {
 /// Response from OAuth2 authorization callback
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthorizationResponse {
-    pub code: String,
+    /// Authorization code; absent when the provider redirected back with an
+    /// `error` (e.g. `access_denied`) instead (I5).
+    #[serde(default)]
+    pub code: Option<String>,
     pub state: String,
     pub error: Option<String>,
     pub error_description: Option<String>,

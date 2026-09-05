@@ -148,21 +148,18 @@ mod tests {
     }
 
     #[test]
-    fn reexported_auth_error_serializes_structured_permission_details() {
+    fn a2_reexported_auth_error_display_does_not_echo_caller_grants() {
+        // `AuthError` is intentionally not `Serialize` (A2); its `Display`
+        // names the required set and only the count of held permissions.
         let error = AuthError::InsufficientPermissions {
             required: vec!["widgets:write".to_string()],
             has: vec!["widgets:read".to_string()],
         };
 
-        assert_eq!(
-            serde_json::to_value(error).unwrap(),
-            json!({
-                "InsufficientPermissions": {
-                    "required": ["widgets:write"],
-                    "has": ["widgets:read"]
-                }
-            })
-        );
+        let display = error.to_string();
+        assert!(display.contains("widgets:write"), "{display}");
+        assert!(!display.contains("widgets:read"), "{display}");
+        assert!(display.contains("holds 1 permission(s)"), "{display}");
     }
 
     #[test]

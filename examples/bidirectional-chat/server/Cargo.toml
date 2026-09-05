@@ -13,15 +13,15 @@ readme = "README.md"
 [dependencies]
 # Local dependencies
 bidirectional-chat-api = { path = "../api", version = "0.1.0", features = ["server"] }
-ras-auth-core = { path = "../../../crates/core/ras-auth-core", version = "0.2.0" }
+ras-auth-core = { path = "../../../crates/core/ras-auth-core", version = "0.3.0" }
 ras-jsonrpc-types = { path = "../../../crates/rpc/ras-jsonrpc-types", version = "0.2.0" }
-ras-jsonrpc-bidirectional-server = { path = "../../../crates/rpc/bidirectional/ras-jsonrpc-bidirectional-server", version = "0.2.0" }
+ras-jsonrpc-bidirectional-server = { path = "../../../crates/rpc/bidirectional/ras-jsonrpc-bidirectional-server", version = "0.3.0" }
 ras-jsonrpc-bidirectional-types = { path = "../../../crates/rpc/bidirectional/ras-jsonrpc-bidirectional-types", version = "0.2.0" }
-ras-rest-macro = { path = "../../../crates/rest/ras-rest-macro", version = "0.3.0", default-features = false, features = ["server"] }
+ras-rest-macro = { path = "../../../crates/rest/ras-rest-macro", version = "0.3.1", default-features = false, features = ["server"] }
 ras-rest-core = { path = "../../../crates/rest/ras-rest-core", version = "0.2.0" }
 ras-identity-core = { path = "../../../crates/core/ras-identity-core", version = "0.1.1" }
-ras-identity-local = { path = "../../../crates/identity/ras-identity-local", version = "0.2.1" }
-ras-identity-session = { path = "../../../crates/identity/ras-identity-session", version = "0.3.0" }
+ras-identity-local = { path = "../../../crates/identity/ras-identity-local", version = "0.3.0" }
+ras-identity-session = { path = "../../../crates/identity/ras-identity-session", version = "0.4.0" }
 
 # Workspace dependencies
 axum = { workspace = true }

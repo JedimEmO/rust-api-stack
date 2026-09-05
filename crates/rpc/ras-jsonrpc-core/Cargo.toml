@@ -14,6 +14,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 ras-jsonrpc-types = { path = "../ras-jsonrpc-types", version = "0.2.0" }
-ras-auth-core = { path = "../../core/ras-auth-core", version = "0.2.0" }
+ras-auth-core = { path = "../../core/ras-auth-core", version = "0.3.0" }
 ras-version-core = { path = "../../core/ras-version-core", version = "0.1.0" }
 tracing = { workspace = true }

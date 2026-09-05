@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use ras_auth_core::AuthenticatedUser;
 use ras_jsonrpc_bidirectional_server::DefaultConnectionManager;
-use ras_jsonrpc_bidirectional_server::connection::ChannelMessageSender;
+use ras_jsonrpc_bidirectional_server::connection::{ChannelMessageSender, OutboundMessage};
 use ras_jsonrpc_bidirectional_types::{
     BidirectionalMessage, ConnectionId, ConnectionInfo, ConnectionManager,
 };
@@ -27,9 +27,7 @@ fn user(id: &str, perms: &[&str]) -> AuthenticatedUser {
 }
 
 /// Build a connection paired with a real receiver so we can observe sends.
-async fn join(
-    mgr: &DefaultConnectionManager,
-) -> (ConnectionId, mpsc::Receiver<BidirectionalMessage>) {
+async fn join(mgr: &DefaultConnectionManager) -> (ConnectionId, mpsc::Receiver<OutboundMessage>) {
     let id = ConnectionId::new();
     let (tx, rx) = mpsc::channel(16);
     let sender = ChannelMessageSender::new(id, tx);
@@ -272,7 +270,9 @@ async fn broadcast_to_full_channel_does_not_block_map_access() {
         // Connection with a capacity-1 channel, pre-filled so sends park.
         let id = ConnectionId::new();
         let (tx, mut rx) = mpsc::channel(1);
-        tx.send(BidirectionalMessage::Ping).await.unwrap();
+        tx.send(OutboundMessage::from(BidirectionalMessage::Ping))
+            .await
+            .unwrap();
         let sender = ChannelMessageSender::new(id, tx);
         mgr.add_connection_with_sender_direct(ConnectionInfo::new(id), sender)
             .await
@@ -320,4 +320,146 @@ async fn duplicate_subscription_is_tracked_once() {
     mgr.add_subscription(a, "t".into()).await.unwrap();
     mgr.add_subscription(a, "t".into()).await.unwrap();
     assert_eq!(mgr.get_topic_connections("t"), vec![a]);
+}
+
+// ---------------------------------------------------------------------------
+// Subscription limits as a manager invariant (second review pass)
+// ---------------------------------------------------------------------------
+
+use ras_jsonrpc_bidirectional_server::SubscriptionLimits;
+use ras_jsonrpc_bidirectional_types::BidirectionalError;
+
+/// Sum of index entries must equal the sum of per-connection state and the
+/// reported total, or accounting has drifted.
+async fn assert_consistent(mgr: &DefaultConnectionManager) {
+    let state_total: usize = mgr
+        .get_all_connections()
+        .await
+        .unwrap()
+        .iter()
+        .map(|c| c.subscriptions.len())
+        .sum();
+    let index_total: usize = mgr
+        .get_active_topics()
+        .iter()
+        .map(|t| mgr.get_topic_connections(t).len())
+        .sum();
+    let reported = mgr.total_subscription_count().await.unwrap();
+    assert_eq!(state_total, index_total, "state vs index drift");
+    assert_eq!(reported, index_total, "counter vs index drift");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn global_subscription_cap_is_atomic_under_concurrent_adds() {
+    const CAP: usize = 50;
+    const CONNS: usize = 20;
+    const TOPICS_EACH: usize = 10; // 200 attempts against a cap of 50
+    let mgr = Arc::new(DefaultConnectionManager::with_subscription_limits(
+        SubscriptionLimits {
+            max_total_subscriptions: CAP,
+            ..SubscriptionLimits::default()
+        },
+    ));
+    let mut ids = Vec::new();
+    for _ in 0..CONNS {
+        let (id, _rx) = join(&mgr).await;
+        ids.push(id);
+        std::mem::forget(_rx);
+    }
+
+    let barrier = Arc::new(tokio::sync::Barrier::new(CONNS));
+    let mut tasks = Vec::new();
+    for id in ids {
+        let mgr = mgr.clone();
+        let barrier = barrier.clone();
+        tasks.push(tokio::spawn(async move {
+            barrier.wait().await;
+            let mut ok = 0;
+            for t in 0..TOPICS_EACH {
+                if mgr.add_subscription(id, format!("topic:{t}")).await.is_ok() {
+                    ok += 1;
+                }
+            }
+            ok
+        }));
+    }
+    let admitted: usize = futures::future::join_all(tasks)
+        .await
+        .into_iter()
+        .map(|r| r.unwrap())
+        .sum();
+
+    assert_eq!(admitted, CAP, "exactly the cap admitted, never more");
+    assert_eq!(mgr.total_subscription_count().await.unwrap(), CAP);
+    assert_consistent(&mgr).await;
+}
+
+#[tokio::test]
+async fn per_connection_cap_and_topic_length_are_manager_invariants() {
+    let mgr = DefaultConnectionManager::with_subscription_limits(SubscriptionLimits {
+        max_topics_per_connection: 2,
+        max_topic_length: 8,
+        ..SubscriptionLimits::default()
+    });
+    let (id, _rx) = join(&mgr).await;
+
+    mgr.add_subscription(id, "a".into()).await.unwrap();
+    mgr.add_subscription(id, "b".into()).await.unwrap();
+    assert!(matches!(
+        mgr.add_subscription(id, "c".into()).await,
+        Err(BidirectionalError::SubscriptionLimitReached(_))
+    ));
+    assert!(matches!(
+        mgr.add_subscription(id, "way-too-long".into()).await,
+        Err(BidirectionalError::InvalidTopic(_))
+    ));
+    // Re-subscribing an existing topic is idempotent, not a limit hit.
+    mgr.add_subscription(id, "a".into()).await.unwrap();
+    assert_eq!(mgr.get_subscriptions(id).await.unwrap().len(), 2);
+    assert_consistent(&mgr).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_add_remove_never_leaves_stale_index_entries() {
+    let mgr = Arc::new(DefaultConnectionManager::new());
+    let (id, _rx) = join(&mgr).await;
+    let (other, _rx2) = join(&mgr).await;
+    mgr.add_subscription(other, "t".into()).await.unwrap();
+
+    // Each round races one add against one remove for the same
+    // (connection, topic) pair and checks the invariant right after, so a
+    // single bad interleaving is caught rather than averaged away.
+    for round in 0..500 {
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let adder = {
+            let (mgr, barrier) = (mgr.clone(), barrier.clone());
+            tokio::spawn(async move {
+                barrier.wait().await;
+                let _ = mgr.add_subscription(id, "t".into()).await;
+            })
+        };
+        let remover = {
+            let (mgr, barrier) = (mgr.clone(), barrier.clone());
+            tokio::spawn(async move {
+                barrier.wait().await;
+                let _ = mgr.remove_subscription(id, "t").await;
+            })
+        };
+        adder.await.unwrap();
+        remover.await.unwrap();
+
+        let in_state = mgr
+            .get_subscriptions(id)
+            .await
+            .unwrap()
+            .contains(&"t".to_string());
+        let in_index = mgr.get_topic_connections("t").contains(&id);
+        assert_eq!(in_state, in_index, "round {round}: state/index drift");
+        assert_consistent(&mgr).await;
+    }
+
+    mgr.remove_connection(id).await.unwrap();
+    assert!(!mgr.get_topic_connections("t").contains(&id));
+    assert_eq!(mgr.total_subscription_count().await.unwrap(), 1);
+    assert_consistent(&mgr).await;
 }

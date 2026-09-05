@@ -1,6 +1,6 @@
 [package]
 name = "ras-identity-session"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.88"
 description = "JWT session management and authentication provider implementation"
@@ -11,7 +11,7 @@ readme = "README.md"
 
 [dependencies]
 ras-identity-core = { path = "../../core/ras-identity-core", version = "0.1.1" }
-ras-auth-core = { path = "../../core/ras-auth-core", version = "0.2.0" }
+ras-auth-core = { path = "../../core/ras-auth-core", version = "0.3.0" }
 
 async-trait = { workspace = true }
 base64 = { workspace = true }
@@ -25,4 +25,4 @@ tokio = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
-ras-identity-local = { path = "../ras-identity-local", version = "0.2.1" }
+ras-identity-local = { path = "../ras-identity-local", version = "0.3.0" }

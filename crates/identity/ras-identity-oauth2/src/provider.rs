@@ -24,7 +24,9 @@ pub enum OAuth2AuthPayload {
     /// Complete the OAuth2 flow with callback data
     Callback {
         provider_id: String,
-        code: String,
+        /// Absent when the provider redirected back with `error` instead (I5).
+        #[serde(default)]
+        code: Option<String>,
         state: String,
         error: Option<String>,
         error_description: Option<String>,
@@ -62,24 +64,25 @@ pub struct OAuth2Provider {
 }
 
 impl OAuth2Provider {
+    /// Build a provider from `config`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the HTTP client cannot be built or a provider configuration
+    /// fails [`OAuth2ProviderConfig::validate`] (e.g. a non-`https://`
+    /// endpoint without `allow_insecure_endpoints`). Use [`Self::try_new`] to
+    /// get an error instead.
     pub fn new(config: OAuth2Config, state_store: Arc<dyn OAuth2StateStore>) -> Self {
-        let provider_configs = config.providers.clone();
-        let client = OAuth2Client::new(
-            state_store,
-            config.state_ttl_seconds,
-            config.http_timeout_seconds,
-        );
-
-        Self {
-            client,
-            provider_configs,
-        }
+        Self::try_new(config, state_store).expect("invalid OAuth2 configuration")
     }
 
     pub fn try_new(
         config: OAuth2Config,
         state_store: Arc<dyn OAuth2StateStore>,
     ) -> OAuth2Result<Self> {
+        for provider_config in config.providers.values() {
+            provider_config.validate()?;
+        }
         let provider_configs = config.providers.clone();
         let client = OAuth2Client::try_new(
             state_store,
@@ -104,10 +107,13 @@ impl OAuth2Provider {
         }
     }
 
-    /// Add a provider configuration
-    pub fn add_provider(&mut self, provider_config: OAuth2ProviderConfig) {
+    /// Add a provider configuration. Fails if the configuration does not pass
+    /// [`OAuth2ProviderConfig::validate`] (I9).
+    pub fn add_provider(&mut self, provider_config: OAuth2ProviderConfig) -> OAuth2Result<()> {
+        provider_config.validate()?;
         self.provider_configs
             .insert(provider_config.provider_id.clone(), provider_config);
+        Ok(())
     }
 
     /// Get a provider configuration
@@ -176,7 +182,7 @@ impl OAuth2Provider {
     async fn handle_callback(
         &self,
         provider_id: &str,
-        code: String,
+        code: Option<String>,
         state: String,
         error: Option<String>,
         error_description: Option<String>,
@@ -300,9 +306,13 @@ impl OAuth2Provider {
             );
         }
 
-        // Add all additional claims to metadata
-        for (key, value) in user_info.additional_claims {
-            metadata.insert(key, value);
+        // Only allow-listed additional claims reach metadata (and thus the
+        // session JWT); everything else the IdP returns is dropped (I8).
+        let mut additional_claims = user_info.additional_claims;
+        for claim in &provider_config.metadata_claims {
+            if let Some(value) = additional_claims.remove(claim) {
+                metadata.insert(claim.clone(), value);
+            }
         }
 
         Ok(VerifiedIdentity {
@@ -378,6 +388,8 @@ mod tests {
             auth_params: HashMap::new(),
             use_pkce: true,
             user_info_mapping: None,
+            metadata_claims: Vec::new(),
+            allow_insecure_endpoints: false,
         }
     }
 
@@ -457,7 +469,7 @@ mod tests {
     async fn add_provider_makes_start_flow_available() {
         let state_store = Arc::new(InMemoryStateStore::new());
         let mut provider = OAuth2Provider::new(OAuth2Config::default(), state_store);
-        provider.add_provider(google_config());
+        provider.add_provider(google_config()).unwrap();
 
         let mut params = HashMap::new();
         params.insert("prompt".to_string(), "consent".to_string());
@@ -566,7 +578,7 @@ mod tests {
         let result = provider
             .handle_callback(
                 "google",
-                "code".to_string(),
+                Some("code".to_string()),
                 state_param,
                 None,
                 None,
@@ -615,6 +627,7 @@ mod tests {
     fn custom_user_info_mapping_prefers_additional_claims_and_preserves_metadata() {
         let provider = create_test_provider();
         let mut provider_config = google_config();
+        provider_config.metadata_claims = vec!["tenant".to_string()];
         provider_config.user_info_mapping = Some(UserInfoMapping {
             subject_field: Some("external_id".to_string()),
             email_field: Some("mail".to_string()),
@@ -670,6 +683,85 @@ mod tests {
         assert_eq!(metadata["picture"], "https://example.com/avatar.png");
         assert_eq!(metadata["email_verified"].as_bool(), Some(false));
         assert_eq!(metadata["tenant"], "engineering");
+        // Claims consumed by the mapping are not re-exported unless allow-listed.
+        assert!(metadata.get("external_id").is_none());
+        assert!(metadata.get("mail").is_none());
+    }
+
+    #[test]
+    fn i8_only_allow_listed_additional_claims_reach_metadata() {
+        let provider = create_test_provider();
+        let mut provider_config = google_config();
+        provider_config.metadata_claims = vec!["hd".to_string(), "absent".to_string()];
+
+        let mut additional_claims = HashMap::new();
+        additional_claims.insert("hd".to_string(), serde_json::json!("example.com"));
+        additional_claims.insert("groups".to_string(), serde_json::json!(["admins"]));
+        additional_claims.insert("is_admin".to_string(), serde_json::json!(true));
+
+        let user_info = crate::types::UserInfoResponse {
+            sub: "subject".to_string(),
+            email: None,
+            email_verified: None,
+            name: None,
+            given_name: None,
+            family_name: None,
+            picture: None,
+            locale: None,
+            additional_claims,
+        };
+
+        let identity = provider
+            .map_user_info_to_identity("google", user_info.clone(), &provider_config)
+            .unwrap();
+        let metadata = identity.metadata.unwrap();
+        assert_eq!(metadata["hd"], "example.com");
+        assert!(metadata.get("groups").is_none());
+        assert!(metadata.get("is_admin").is_none());
+        assert!(metadata.get("absent").is_none());
+
+        // Default (empty allow-list): nothing extra is propagated.
+        let identity = provider
+            .map_user_info_to_identity("google", user_info, &google_config())
+            .unwrap();
+        assert!(identity.metadata.is_none());
+    }
+
+    #[test]
+    fn i9_provider_construction_rejects_insecure_endpoints() {
+        let mut insecure = google_config();
+        insecure.token_endpoint = "http://oauth.test/token".to_string();
+
+        let config = OAuth2Config::new().add_provider(insecure.clone());
+        let state_store: Arc<dyn OAuth2StateStore> = Arc::new(InMemoryStateStore::new());
+        assert!(matches!(
+            OAuth2Provider::try_new(config, state_store.clone()),
+            Err(OAuth2Error::ConfigError(_))
+        ));
+
+        let mut provider = OAuth2Provider::new(OAuth2Config::default(), state_store.clone());
+        assert!(matches!(
+            provider.add_provider(insecure.clone()),
+            Err(OAuth2Error::ConfigError(_))
+        ));
+        assert!(provider.get_provider_config("google").is_err());
+
+        insecure.allow_insecure_endpoints = true;
+        provider.add_provider(insecure.clone()).unwrap();
+        assert!(provider.get_provider_config("google").is_ok());
+        assert!(
+            OAuth2Provider::try_new(OAuth2Config::new().add_provider(insecure), state_store)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid OAuth2 configuration")]
+    fn i9_provider_new_panics_on_insecure_endpoints() {
+        let mut insecure = google_config();
+        insecure.authorization_endpoint = "http://oauth.test/authorize".to_string();
+        let state_store = Arc::new(InMemoryStateStore::new());
+        let _ = OAuth2Provider::new(OAuth2Config::new().add_provider(insecure), state_store);
     }
 
     #[test]

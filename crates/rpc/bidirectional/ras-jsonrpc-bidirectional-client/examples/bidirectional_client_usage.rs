@@ -23,7 +23,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a client with configuration
     let client = ClientBuilder::new(url.clone())
         .with_jwt_token(token)
-        .with_jwt_in_header(true) // Send JWT in Authorization header
         .with_header("User-Agent", "RasClient/1.0")
         .with_request_timeout(Duration::from_secs(30))
         .with_connection_timeout(Duration::from_secs(10))

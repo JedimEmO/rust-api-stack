@@ -17,7 +17,7 @@ futures = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }
-ras-auth-core = { path = "../../../core/ras-auth-core", version = "0.2.0" }
+ras-auth-core = { path = "../../../core/ras-auth-core", version = "0.3.0" }
 ras-jsonrpc-types = { path = "../../ras-jsonrpc-types", version = "0.2.0" }
 uuid = { version = "1.11", features = ["v4", "serde", "js"] }
 chrono = { workspace = true }

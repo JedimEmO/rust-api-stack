@@ -91,6 +91,9 @@ mod integration_tests {
             auth_params: HashMap::new(),
             use_pkce: true,
             user_info_mapping: None,
+            metadata_claims: Vec::new(),
+            // Mock IdP served over plain HTTP by the axum-test transport.
+            allow_insecure_endpoints: true,
         };
 
         (Arc::new(server), provider_config)
@@ -329,6 +332,8 @@ mod integration_tests {
             auth_params: HashMap::new(),
             use_pkce: false,
             user_info_mapping: None,
+            metadata_claims: Vec::new(),
+            allow_insecure_endpoints: false,
         };
 
         config.providers.insert("test".to_string(), provider_config);
@@ -373,6 +378,8 @@ mod integration_tests {
             auth_params: HashMap::new(),
             use_pkce: true,
             user_info_mapping: None,
+            metadata_claims: Vec::new(),
+            allow_insecure_endpoints: false,
         };
 
         // Spawn multiple concurrent authorization requests
@@ -417,7 +424,7 @@ mod integration_tests {
         client.state_store().store(state.clone()).await.unwrap();
 
         let callback = crate::types::AuthorizationResponse {
-            code: "invalid_code".to_string(),
+            code: Some("invalid_code".to_string()),
             state: state.state,
             error: None,
             error_description: None,
@@ -445,7 +452,7 @@ mod integration_tests {
         client.state_store().store(state2.clone()).await.unwrap();
 
         let callback2 = crate::types::AuthorizationResponse {
-            code: "test_code".to_string(),
+            code: Some("test_code".to_string()),
             state: state2.state,
             error: None,
             error_description: None,

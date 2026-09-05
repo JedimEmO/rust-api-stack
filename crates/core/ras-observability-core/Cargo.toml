@@ -10,7 +10,7 @@ homepage = "https://github.com/JedimEmO/rust-api-stack"
 readme = "README.md"
 
 [dependencies]
-ras-auth-core = { path = "../ras-auth-core", version = "0.2.0" }
+ras-auth-core = { path = "../ras-auth-core", version = "0.3.0" }
 async-trait = { workspace = true }
 serde = { workspace = true }
 axum = { workspace = true }

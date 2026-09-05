@@ -118,11 +118,19 @@ pub fn generate_server(definition: &FileServiceDefinition) -> TokenStream {
             ).into_response()
         }
 
+        /// Map a multipart parse error to a `FileError`. The axum detail
+        /// (which can echo field names and parser state) is logged at `warn`
+        /// server-side; the client receives a fixed generic message.
         fn __ras_file_multipart_error(error: ::axum::extract::multipart::MultipartError) -> ::ras_file_core::FileError {
             if error.status() == ::axum::http::StatusCode::PAYLOAD_TOO_LARGE {
                 ::ras_file_core::FileError::PayloadTooLarge
             } else {
-                ::ras_file_core::FileError::bad_request(error.body_text())
+                ::ras_file_core::tracing::warn!(
+                    status = error.status().as_u16(),
+                    detail = %::ras_file_core::sanitize_log_detail(&error.body_text()),
+                    "rejected request: invalid multipart body"
+                );
+                ::ras_file_core::FileError::bad_request("invalid multipart body")
             }
         }
 
@@ -460,7 +468,18 @@ fn generate_upload_handler(
             let req = ::axum::http::Request::from_parts(parts, body);
             let mut multipart = match <::axum::extract::Multipart as FromRequest<_>>::from_request(req, &state).await {
                 Ok(multipart) => multipart,
-                Err(rejection) => return rejection.into_response(),
+                Err(rejection) => {
+                    // Never echo the axum rejection body (it can include the
+                    // offending header value); log it and send a fixed message.
+                    ::ras_file_core::tracing::warn!(
+                        status = rejection.status().as_u16(),
+                        detail = %::ras_file_core::sanitize_log_detail(&rejection.body_text()),
+                        "rejected request: invalid multipart request"
+                    );
+                    return __ras_file_error_response(
+                        ::ras_file_core::FileError::bad_request("invalid multipart request"),
+                    );
+                }
             };
 
             let service = &state.0.0;
@@ -639,7 +658,9 @@ fn generate_part_arm(
                         .map(|max| max.saturating_sub(total_bytes))
                         .unwrap_or(u64::MAX);
                     let part_limit = std::cmp::min(#max_bytes as u64, remaining_total);
-                    let file_name = field.file_name().map(ToString::to_string);
+                    // Reduce the client-supplied name to a single safe path
+                    // component before the handler ever sees it.
+                    let file_name = field.file_name().map(::ras_file_core::sanitize_filename);
                     let content_type = field.content_type().map(ToString::to_string);
                     let headers = field.headers().clone();
                     let stream = ::ras_file_core::futures_util::StreamExt::map(field, |chunk| {
@@ -869,7 +890,14 @@ fn generate_path_extraction(path_params: &[PathParam], path_struct: &Ident) -> T
                 match <::axum::extract::Path<#ty> as ::axum::extract::FromRequestParts<_>>::from_request_parts(&mut parts, &state).await {
                     Ok(path) => path,
                     Err(error) => {
-                        return __ras_file_error_response(::ras_file_core::FileError::bad_request(format!("invalid path parameters: {}", error)));
+                        // The axum rejection echoes the offending path value;
+                        // log it server-side and send a fixed message.
+                        ::ras_file_core::tracing::warn!(
+                            status = error.status().as_u16(),
+                            detail = %::ras_file_core::sanitize_log_detail(&error.body_text()),
+                            "rejected request: invalid path parameters"
+                        );
+                        return __ras_file_error_response(::ras_file_core::FileError::bad_request("invalid path parameters"));
                     }
                 };
         }
@@ -880,7 +908,14 @@ fn generate_path_extraction(path_params: &[PathParam], path_struct: &Ident) -> T
                 match <::axum::extract::Path<(#(#tys),*)> as ::axum::extract::FromRequestParts<_>>::from_request_parts(&mut parts, &state).await {
                     Ok(path) => path,
                     Err(error) => {
-                        return __ras_file_error_response(::ras_file_core::FileError::bad_request(format!("invalid path parameters: {}", error)));
+                        // The axum rejection echoes the offending path value;
+                        // log it server-side and send a fixed message.
+                        ::ras_file_core::tracing::warn!(
+                            status = error.status().as_u16(),
+                            detail = %::ras_file_core::sanitize_log_detail(&error.body_text()),
+                            "rejected request: invalid path parameters"
+                        );
+                        return __ras_file_error_response(::ras_file_core::FileError::bad_request("invalid path parameters"));
                     }
                 };
         }

@@ -457,9 +457,9 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "chacha20"
-version = "0.10.1"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d524456ba66e72eb8b115ff89e01e497f8e6d11d78b70b1aa13c0fbd97540a81"
+checksum = "65c35e4b699c7e15ccbe7ee35c005e4fc0a278d22238a2857e6ce2dadeda1b06"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
@@ -2687,7 +2687,7 @@ dependencies = [
 
 [[package]]
 name = "ras-auth-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "cookie",
  "http",
@@ -2696,11 +2696,12 @@ dependencies = [
  "subtle",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
 name = "ras-file-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bytes",
  "futures-core",
@@ -2708,11 +2709,12 @@ dependencies = [
  "http",
  "ras-auth-core",
  "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
 name = "ras-file-macro"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -2748,7 +2750,7 @@ dependencies = [
 
 [[package]]
 name = "ras-identity-local"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "argon2",
  "async-trait",
@@ -2761,7 +2763,7 @@ dependencies = [
 
 [[package]]
 name = "ras-identity-oauth2"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -2775,6 +2777,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "subtle",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -2785,7 +2788,7 @@ dependencies = [
 
 [[package]]
 name = "ras-identity-session"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2804,7 +2807,7 @@ dependencies = [
 
 [[package]]
 name = "ras-jsonrpc-bidirectional-client"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2833,7 +2836,7 @@ dependencies = [
 
 [[package]]
 name = "ras-jsonrpc-bidirectional-macro"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2863,7 +2866,7 @@ dependencies = [
 
 [[package]]
 name = "ras-jsonrpc-bidirectional-server"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -2878,6 +2881,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-tungstenite 0.26.2",
  "tracing",
 ]
 
@@ -3010,7 +3014,7 @@ dependencies = [
 
 [[package]]
 name = "ras-rest-macro"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "axum",

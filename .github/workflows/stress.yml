@@ -1,0 +1,50 @@
+name: Flake detector
+
+# Runs the whole suite several times at different parallelism levels. Any
+# failure here is a real flake (retries are disabled everywhere), so it is
+# a bug in the test, not noise. Weekly, plus on demand.
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: Runs per parallelism level
+        default: "5"
+        required: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  stress:
+    name: Repeated runs (threads=${{ matrix.threads }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        threads: [1, 4, 16]
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@nextest
+      - uses: Swatinem/rust-cache@v2
+      - name: Build tests
+        run: cargo nextest run --workspace --all-targets --all-features --locked --no-run
+      - name: Run repeatedly
+        shell: bash
+        run: |
+          n="${{ github.event.inputs.iterations || '5' }}"
+          failed=0
+          for i in $(seq 1 "$n"); do
+            echo "::group::run $i/$n (threads=${{ matrix.threads }})"
+            if ! cargo nextest run --workspace --all-targets --all-features --locked \
+                --profile stress --test-threads "${{ matrix.threads }}"; then
+              failed=$((failed + 1))
+            fi
+            echo "::endgroup::"
+          done
+          echo "failed runs: $failed / $n" | tee -a "$GITHUB_STEP_SUMMARY"
+          exit "$failed"

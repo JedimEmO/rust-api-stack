@@ -11,7 +11,7 @@ readme = "README.md"
 
 [dependencies]
 ras-observability-core = { path = "../../core/ras-observability-core", version = "0.2.0" }
-ras-auth-core = { path = "../../core/ras-auth-core", version = "0.2.0" }
+ras-auth-core = { path = "../../core/ras-auth-core", version = "0.3.0" }
 
 # OpenTelemetry dependencies
 opentelemetry = { workspace = true }

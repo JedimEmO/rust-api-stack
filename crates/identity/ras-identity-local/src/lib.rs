@@ -14,9 +14,15 @@ use std::fmt;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Maximum accepted password length in bytes (I4). Longer inputs are rejected before
+/// hashing so a client cannot make the server burn Argon2 time on multi-megabyte inputs.
+pub const MAX_PASSWORD_BYTES: usize = 1024;
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct LocalUser {
     pub username: String,
+    /// Argon2 PHC string. Never serialized (I1a); still required on deserialize.
+    #[serde(skip_serializing)]
     pub password_hash: String,
     pub email: Option<String>,
     pub display_name: Option<String>,
@@ -36,10 +42,20 @@ impl fmt::Debug for LocalUser {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Deserialize)]
 pub struct LocalAuthPayload {
     pub username: String,
     pub password: String,
+}
+
+/// Redacting `Debug` so the plaintext password never lands in logs (I2).
+impl fmt::Debug for LocalAuthPayload {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LocalAuthPayload")
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .finish()
+    }
 }
 
 /// Errors returned when managing local users.
@@ -49,6 +65,10 @@ pub enum LocalUserError {
     UserAlreadyExists { username: String },
     /// Password hashing failed while creating the user.
     PasswordHash(argon2::password_hash::Error),
+    /// The password exceeds [`MAX_PASSWORD_BYTES`].
+    PasswordTooLong { max_bytes: usize },
+    /// The blocking hashing task was cancelled or panicked.
+    HashTaskFailed,
 }
 
 impl fmt::Display for LocalUserError {
@@ -58,6 +78,10 @@ impl fmt::Display for LocalUserError {
                 write!(f, "user '{username}' already exists")
             }
             Self::PasswordHash(error) => write!(f, "failed to hash password: {error}"),
+            Self::PasswordTooLong { max_bytes } => {
+                write!(f, "password exceeds maximum length of {max_bytes} bytes")
+            }
+            Self::HashTaskFailed => write!(f, "password hashing task failed"),
         }
     }
 }
@@ -66,7 +90,9 @@ impl Error for LocalUserError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::PasswordHash(error) => Some(error),
-            Self::UserAlreadyExists { .. } => None,
+            Self::UserAlreadyExists { .. }
+            | Self::PasswordTooLong { .. }
+            | Self::HashTaskFailed => None,
         }
     }
 }
@@ -98,6 +124,12 @@ impl LocalUserProvider {
         email: Option<String>,
         display_name: Option<String>,
     ) -> Result<(), LocalUserError> {
+        if password.len() > MAX_PASSWORD_BYTES {
+            return Err(LocalUserError::PasswordTooLong {
+                max_bytes: MAX_PASSWORD_BYTES,
+            });
+        }
+
         {
             let users = self.users.read().await;
             if users.contains_key(&username) {
@@ -105,11 +137,15 @@ impl LocalUserProvider {
             }
         }
 
-        let argon2 = Argon2::default();
-        let salt = SaltString::generate(&mut OsRng);
-        let password_hash = argon2
-            .hash_password(password.as_bytes(), &salt)?
-            .to_string();
+        // Argon2 is CPU-bound; keep it off the async executor (I4).
+        let password_hash = tokio::task::spawn_blocking(move || {
+            let salt = SaltString::generate(&mut OsRng);
+            Argon2::default()
+                .hash_password(password.as_bytes(), &salt)
+                .map(|hash| hash.to_string())
+        })
+        .await
+        .map_err(|_| LocalUserError::HashTaskFailed)??;
 
         let user = LocalUser {
             username: username.clone(),
@@ -139,23 +175,40 @@ impl LocalUserProvider {
             self.semaphore.clone().acquire_owned().await.map_err(|_| {
                 IdentityError::ProviderError("local auth limiter closed".to_string())
             })?;
-        let users = self.users.read().await;
+
+        // Reject oversized passwords before spending Argon2 time on them (I4). Same error
+        // as a wrong password so nothing is leaked about the account.
+        if password.len() > MAX_PASSWORD_BYTES {
+            return Err(IdentityError::InvalidCredentials);
+        }
 
         // Verify missing users against a fixed sentinel hash to keep timing consistent.
         const SENTINEL_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$9QsJRKgzJkKaOUvlp7gl2Q$qmE3qIFBNJ6nZYbLYXEI2uo0zZc7T0Q8LU1ZsqsZ3QE";
 
-        let (user, password_hash) = if let Some(user) = users.get(username) {
-            (Some(user.clone()), user.password_hash.as_str())
-        } else {
-            (None, SENTINEL_HASH)
+        // Clone the stored hash out of the lock so verification never holds it (I4).
+        let (user, password_hash) = {
+            let users = self.users.read().await;
+            match users.get(username) {
+                Some(user) => (Some(user.clone()), user.password_hash.clone()),
+                None => (None, SENTINEL_HASH.to_string()),
+            }
         };
 
-        let parsed_hash = PasswordHash::new(password_hash)
-            .map_err(|e| IdentityError::ProviderError(e.to_string()))?;
-
-        let password_valid = Argon2::default()
-            .verify_password(password.as_bytes(), &parsed_hash)
-            .is_ok();
+        // Argon2 is CPU-bound; run it on the blocking pool (I4).
+        let password = password.to_string();
+        let password_valid = tokio::task::spawn_blocking(move || {
+            let parsed_hash = PasswordHash::new(&password_hash)
+                .map_err(|e| IdentityError::ProviderError(e.to_string()))?;
+            Ok::<bool, IdentityError>(
+                Argon2::default()
+                    .verify_password(password.as_bytes(), &parsed_hash)
+                    .is_ok(),
+            )
+        })
+        .await
+        .map_err(|_| {
+            IdentityError::ProviderError("password verification task failed".to_string())
+        })??;
 
         // Only succeed if both user exists AND password is valid.
         if password_valid {
@@ -215,6 +268,77 @@ mod tests {
         assert!(!debug.contains("$argon2id$"));
         assert!(debug.contains("[REDACTED]"));
         assert!(debug.contains("alice"));
+    }
+
+    #[test]
+    fn i1a_local_user_serialize_omits_password_hash() {
+        let user = LocalUser {
+            username: "alice".to_string(),
+            password_hash: "$argon2id$v=19$m=19456,t=2,p=1$secretsecret$hashhashhash".to_string(),
+            email: Some("alice@example.com".to_string()),
+            display_name: None,
+            metadata: None,
+        };
+        let json = serde_json::to_value(&user).unwrap();
+        assert!(json.get("password_hash").is_none());
+        assert!(!json.to_string().contains("hashhashhash"));
+        assert_eq!(json["username"], "alice");
+
+        // Deserialize still requires the hash.
+        let full = serde_json::json!({
+            "username": "alice",
+            "password_hash": "$argon2id$x",
+            "email": null,
+            "display_name": null,
+            "metadata": null
+        });
+        let parsed: LocalUser = serde_json::from_value(full).unwrap();
+        assert_eq!(parsed.password_hash, "$argon2id$x");
+        assert!(serde_json::from_value::<LocalUser>(json).is_err());
+    }
+
+    #[test]
+    fn i2_login_payload_debug_redacts_password() {
+        let payload = LocalAuthPayload {
+            username: "alice".to_string(),
+            password: "hunter2-super-secret".to_string(),
+        };
+        let debug = format!("{payload:?}");
+        assert!(!debug.contains("hunter2"));
+        assert!(debug.contains("[REDACTED]"));
+        assert!(debug.contains("alice"));
+    }
+
+    #[tokio::test]
+    async fn i4_oversized_password_rejected_before_hashing() {
+        let provider = setup_test_provider().await;
+
+        let too_long = "x".repeat(MAX_PASSWORD_BYTES + 1);
+        let result = provider
+            .add_user("bob".to_string(), too_long.clone(), None, None)
+            .await;
+        assert!(matches!(
+            result,
+            Err(LocalUserError::PasswordTooLong { max_bytes }) if max_bytes == MAX_PASSWORD_BYTES
+        ));
+
+        let result = provider
+            .verify(serde_json::json!({ "username": "testuser", "password": too_long }))
+            .await;
+        assert!(matches!(result, Err(IdentityError::InvalidCredentials)));
+
+        // Exactly at the limit is still accepted.
+        let at_limit = "y".repeat(MAX_PASSWORD_BYTES);
+        provider
+            .add_user("carol".to_string(), at_limit.clone(), None, None)
+            .await
+            .unwrap();
+        assert!(
+            provider
+                .verify(serde_json::json!({ "username": "carol", "password": at_limit }))
+                .await
+                .is_ok()
+        );
     }
 
     async fn setup_test_provider() -> LocalUserProvider {

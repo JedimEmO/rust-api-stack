@@ -33,6 +33,10 @@ pub enum BidirectionalError {
     #[error("Invalid subscription topic: {0}")]
     InvalidTopic(String),
 
+    /// A subscription limit (per connection or global) would be exceeded
+    #[error("Subscription limit reached: {0}")]
+    SubscriptionLimitReached(String),
+
     /// Connection closed
     #[error("Connection closed")]
     ConnectionClosed,

@@ -1,6 +1,6 @@
 [package]
 name = "ras-jsonrpc-bidirectional-server"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.88"
 description = "WebSocket server implementation for bidirectional JSON-RPC communication"
@@ -24,7 +24,7 @@ bon = { workspace = true }
 chrono = { workspace = true }
 
 # Internal dependencies
-ras-auth-core = { path = "../../../core/ras-auth-core", version = "0.2.0" }
+ras-auth-core = { path = "../../../core/ras-auth-core", version = "0.3.0" }
 ras-jsonrpc-types = { path = "../../ras-jsonrpc-types", version = "0.2.0" }
 ras-jsonrpc-bidirectional-types = { path = "../ras-jsonrpc-bidirectional-types", version = "0.2.0" }
 
@@ -36,4 +36,5 @@ dashmap = { workspace = true }
 
 [dev-dependencies]
 ras-jsonrpc-types = { path = "../../ras-jsonrpc-types", version = "0.2.0" }
-tokio = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = ["test-util", "net", "rt-multi-thread", "macros"] }
+tokio-tungstenite = { workspace = true }

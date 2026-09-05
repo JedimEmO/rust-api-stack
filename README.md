@@ -343,14 +343,26 @@ breakage before a pull request.
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
-# Tests and doctests
-cargo test --workspace --all-targets --all-features --no-run --locked
-cargo test --workspace --all-targets --all-features --locked
+# Tests (cargo-nextest, as in CI) and doctests
+cargo nextest run --workspace --all-targets --all-features --locked
 cargo test --doc --workspace --all-features --locked
+
+# Coverage (cargo-llvm-cov); CI posts the same table on every pull request
+cargo llvm-cov nextest --workspace --all-targets --all-features --locked
 
 # Documentation
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
 ```
+
+Tests run under [cargo-nextest](https://nexte.st) with retries disabled
+(`.config/nextest.toml`): a test that only passes on a retry is a bug in the
+test. A weekly `Flake detector` workflow runs the whole suite five times at
+three parallelism levels and can be triggered by hand from the Actions tab.
+Per-test hangs are capped at two minutes locally and three in CI.
+
+`cargo test` still works for one-off runs; nextest is preferred because it
+isolates each test in its own process, reports per-test timings, and is what
+CI and the coverage job execute.
 
 ### Documentation Hygiene
 

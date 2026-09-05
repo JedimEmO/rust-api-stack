@@ -270,7 +270,7 @@ mod tests {
         assert_eq!(response.headers[header::CONTENT_TYPE], "text/plain");
         assert_eq!(
             response.headers[header::CONTENT_DISPOSITION],
-            "attachment; filename=\"file.txt\""
+            "attachment; filename=\"file.txt\"; filename*=UTF-8''file.txt"
         );
 
         assert_eq!(body_bytes(response), b"download body");

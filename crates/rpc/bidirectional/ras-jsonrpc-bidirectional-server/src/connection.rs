@@ -1,20 +1,46 @@
 //! Connection context and management
 
+use crate::handler::{SubscriptionAccounting, SubscriptionLimits};
 use ras_auth_core::AuthenticatedUser;
-use ras_jsonrpc_bidirectional_types::{BidirectionalMessage, ConnectionId, ConnectionInfo};
+use ras_jsonrpc_bidirectional_types::{
+    BidirectionalError, BidirectionalMessage, ConnectionId, ConnectionInfo, ConnectionManager,
+};
 use std::sync::Arc;
 use tokio::sync::{RwLock, mpsc};
+use tracing::warn;
+
+/// A message queued for a connection's socket.
+///
+/// `topic` is set when the message was routed through a topic broadcast. The
+/// handler loop re-checks the subscription right before writing to the socket
+/// and drops the message if it was revoked in the meantime, so a broadcast
+/// that snapshotted the topic index moments before a permission change can
+/// never reach a connection that no longer holds the subscription.
+#[derive(Debug, Clone)]
+pub struct OutboundMessage {
+    pub message: BidirectionalMessage,
+    pub topic: Option<String>,
+}
+
+impl From<BidirectionalMessage> for OutboundMessage {
+    fn from(message: BidirectionalMessage) -> Self {
+        Self {
+            message,
+            topic: None,
+        }
+    }
+}
 
 /// A simple channel-based message sender
 #[derive(Debug, Clone)]
 pub struct ChannelMessageSender {
     connection_id: ConnectionId,
-    sender: mpsc::Sender<BidirectionalMessage>,
+    sender: mpsc::Sender<OutboundMessage>,
 }
 
 impl ChannelMessageSender {
     /// Create a new channel message sender
-    pub fn new(connection_id: ConnectionId, sender: mpsc::Sender<BidirectionalMessage>) -> Self {
+    pub fn new(connection_id: ConnectionId, sender: mpsc::Sender<OutboundMessage>) -> Self {
         Self {
             connection_id,
             sender,
@@ -23,7 +49,26 @@ impl ChannelMessageSender {
 
     /// Send a message through the channel
     pub async fn send(&self, message: BidirectionalMessage) -> Result<(), String> {
-        self.sender.send(message).await.map_err(|e| e.to_string())
+        self.sender
+            .send(message.into())
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    /// Send a message that was routed on `topic`; the receiving handler drops
+    /// it if the connection is no longer subscribed when it is dequeued.
+    pub async fn send_on_topic(
+        &self,
+        topic: &str,
+        message: BidirectionalMessage,
+    ) -> Result<(), String> {
+        self.sender
+            .send(OutboundMessage {
+                message,
+                topic: Some(topic.to_string()),
+            })
+            .await
+            .map_err(|e| e.to_string())
     }
 
     /// Get the connection ID
@@ -32,28 +77,71 @@ impl ChannelMessageSender {
     }
 }
 
-/// Context information for an active WebSocket connection
+/// Everything a subscription mutation has to be checked against and mirrored
+/// into. Owned by the service and shared by all of its connections.
+#[derive(Clone, Default)]
+pub struct SubscriptionPolicy {
+    /// Caps applied to every subscribe
+    pub limits: SubscriptionLimits,
+    /// Service-wide counter behind the global cap
+    pub accounting: Arc<SubscriptionAccounting>,
+    /// Manager whose topic index mirrors accepted subscriptions
+    pub manager: Option<Arc<dyn ConnectionManager>>,
+}
+
+impl std::fmt::Debug for SubscriptionPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SubscriptionPolicy")
+            .field("limits", &self.limits)
+            .field("held", &self.accounting.total())
+            .field("manager", &self.manager.is_some())
+            .finish()
+    }
+}
+
+/// Context information for an active WebSocket connection.
+///
+/// Subscription state can only change through [`subscribe`](Self::subscribe)
+/// and [`unsubscribe`](Self::unsubscribe), which enforce the service's
+/// [`SubscriptionPolicy`] and mirror into the manager. There is no unchecked
+/// path, so the caps hold no matter which callback a handler mutates from.
 #[derive(Debug, Clone)]
 pub struct ConnectionContext {
     /// Unique identifier for this connection
     pub id: ConnectionId,
 
     /// Connection information (user, subscriptions, metadata)
-    pub info: Arc<RwLock<ConnectionInfo>>,
+    info: Arc<RwLock<ConnectionInfo>>,
 
     /// Message sender for this connection
     pub sender: ChannelMessageSender,
+
+    policy: SubscriptionPolicy,
 }
 
 impl ConnectionContext {
-    /// Create a new connection context
+    /// Create a new connection context with a standalone default policy
+    /// (default limits, private counter, no manager). Services attach the
+    /// shared policy with [`with_subscription_policy`](Self::with_subscription_policy).
     pub fn new(id: ConnectionId, sender: ChannelMessageSender) -> Self {
         let info = ConnectionInfo::new(id);
         Self {
             id,
             info: Arc::new(RwLock::new(info)),
             sender,
+            policy: SubscriptionPolicy::default(),
         }
+    }
+
+    /// Attach the service-wide subscription policy.
+    pub fn with_subscription_policy(mut self, policy: SubscriptionPolicy) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    /// The policy this context enforces.
+    pub fn subscription_policy(&self) -> &SubscriptionPolicy {
+        &self.policy
     }
 
     /// Check if the connection is authenticated
@@ -86,14 +174,79 @@ impl ConnectionContext {
         self.info.read().await.is_subscribed_to(topic)
     }
 
-    /// Add a subscription
-    pub async fn subscribe(&self, topic: String) {
-        self.info.write().await.subscribe(topic);
+    /// Subscribe this connection to `topic`, subject to the policy.
+    ///
+    /// Checks the topic length and the per-connection cap, reserves a slot
+    /// against the global cap, and mirrors into the manager's topic index;
+    /// any refusal leaves state, counter and index untouched. Idempotent for
+    /// a topic already held.
+    pub async fn subscribe(&self, topic: String) -> Result<(), BidirectionalError> {
+        let limits = &self.policy.limits;
+        if topic.is_empty() || topic.len() > limits.max_topic_length {
+            return Err(BidirectionalError::InvalidTopic(
+                "topic name length out of range".to_string(),
+            ));
+        }
+
+        // The write guard serializes every mutation of this connection's
+        // subscriptions, so the cap check and the insert are one unit.
+        let mut info = self.info.write().await;
+        if info.is_subscribed_to(&topic) {
+            return Ok(());
+        }
+        if info.subscriptions.len() >= limits.max_topics_per_connection {
+            return Err(BidirectionalError::SubscriptionLimitReached(
+                "subscription limit for this connection reached".to_string(),
+            ));
+        }
+        if !self
+            .policy
+            .accounting
+            .reserve(limits.max_total_subscriptions)
+        {
+            return Err(BidirectionalError::SubscriptionLimitReached(
+                "global subscription limit reached".to_string(),
+            ));
+        }
+        if let Some(manager) = &self.policy.manager
+            && let Err(e) = manager.add_subscription(self.id, topic.clone()).await
+        {
+            self.policy.accounting.release(1);
+            return Err(e);
+        }
+        info.subscribe(topic);
+        Ok(())
     }
 
-    /// Remove a subscription
+    /// Remove a subscription. Returns whether it was held.
+    ///
+    /// The context is updated first, so the egress gate stops delivering on
+    /// the topic before the manager index catches up.
     pub async fn unsubscribe(&self, topic: &str) -> bool {
-        self.info.write().await.unsubscribe(topic)
+        let removed = {
+            let mut info = self.info.write().await;
+            info.unsubscribe(topic)
+        };
+        if removed {
+            self.policy.accounting.release(1);
+            if let Some(manager) = &self.policy.manager
+                && let Err(e) = manager.remove_subscription(self.id, topic).await
+            {
+                warn!(
+                    "Manager failed to drop subscription '{}' for {}: {}",
+                    topic, self.id, e
+                );
+            }
+        }
+        removed
+    }
+
+    /// Release every held subscription (connection teardown).
+    pub(crate) async fn release_all_subscriptions(&self) {
+        let topics = self.get_subscriptions().await;
+        for topic in topics {
+            self.unsubscribe(&topic).await;
+        }
     }
 
     /// Get all subscriptions
@@ -156,7 +309,7 @@ mod tests {
 
         sender.send(BidirectionalMessage::Ping).await.unwrap();
         let received = rx.recv().await.unwrap();
-        assert!(matches!(received, BidirectionalMessage::Ping));
+        assert!(matches!(received.message, BidirectionalMessage::Ping));
     }
 
     #[tokio::test]
@@ -192,8 +345,8 @@ mod tests {
         assert!(c.get_subscriptions().await.is_empty());
         assert!(!c.is_subscribed_to("t1").await);
 
-        c.subscribe("t1".into()).await;
-        c.subscribe("t2".into()).await;
+        c.subscribe("t1".into()).await.unwrap();
+        c.subscribe("t2".into()).await.unwrap();
         assert!(c.is_subscribed_to("t1").await);
         assert_eq!(c.get_subscriptions().await.len(), 2);
 

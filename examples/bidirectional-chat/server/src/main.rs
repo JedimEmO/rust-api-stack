@@ -1558,8 +1558,10 @@ async fn main() -> Result<()> {
         enforce_active_sessions: true,
         algorithm: JwtAlgorithm::from_name(&config.auth.jwt_algorithm)
             .unwrap_or(JwtAlgorithm::HS256),
-        iss: None,
-        aud: None,
+        iss: Some("bidirectional-chat".to_string()),
+        aud: Some("bidirectional-chat".to_string()),
+        require_iss_aud: true,
+        max_sessions_per_user: ras_identity_session::DEFAULT_MAX_SESSIONS_PER_USER,
     };
     info!(
         "Creating session service with JWT TTL: {} seconds",
@@ -1594,10 +1596,13 @@ async fn main() -> Result<()> {
     );
 
     // Create handler with the service and connection manager
-    let handler = Arc::new(bidirectional_chat_api::ChatServiceHandler::new(
-        chat_server.clone(),
-        connection_manager.clone(),
-    ));
+    let handler = Arc::new(
+        bidirectional_chat_api::ChatServiceHandler::new(
+            chat_server.clone(),
+            connection_manager.clone(),
+        )
+        .with_auth_provider(auth_provider.clone()),
+    );
 
     // Build WebSocket service
     let ws_service = WebSocketServiceBuilder::builder()
@@ -1800,7 +1805,7 @@ mod tests {
 
     struct TestConnection {
         context: Arc<ConnectionContext>,
-        messages: mpsc::Receiver<BidirectionalMessage>,
+        messages: mpsc::Receiver<ras_jsonrpc_bidirectional_server::OutboundMessage>,
         user: AuthenticatedUser,
     }
 
@@ -1830,11 +1835,11 @@ mod tests {
     }
 
     fn drain_messages(
-        receiver: &mut mpsc::Receiver<BidirectionalMessage>,
+        receiver: &mut mpsc::Receiver<ras_jsonrpc_bidirectional_server::OutboundMessage>,
     ) -> Vec<BidirectionalMessage> {
         let mut messages = Vec::new();
-        while let Ok(message) = receiver.try_recv() {
-            messages.push(message);
+        while let Ok(outbound) = receiver.try_recv() {
+            messages.push(outbound.message);
         }
         messages
     }

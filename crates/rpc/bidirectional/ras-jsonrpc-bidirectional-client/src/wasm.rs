@@ -22,6 +22,8 @@ pub struct WasmWebSocketTransport {
     message_queue: Arc<Mutex<VecDeque<BidirectionalMessage>>>,
     connection_state: Arc<Mutex<WasmConnectionState>>,
     url: String,
+    /// Subprotocols offered on upgrade; carries the bearer token in browsers
+    protocols: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -38,12 +40,14 @@ impl WasmWebSocketTransport {
     /// Create a new WASM WebSocket transport
     pub fn new(config: ClientConfig) -> Self {
         let url = config.get_connection_url();
+        let protocols = config.get_subprotocols();
 
         Self {
             websocket: Arc::new(Mutex::new(None)),
             message_queue: Arc::new(Mutex::new(VecDeque::new())),
             connection_state: Arc::new(Mutex::new(WasmConnectionState::Disconnected)),
             url,
+            protocols,
         }
     }
 
@@ -175,8 +179,13 @@ impl WebSocketTransport for WasmWebSocketTransport {
 
         *self.connection_state.lock().unwrap() = WasmConnectionState::Connecting;
 
-        // Create WebSocket
-        let websocket = WebSocket::new(&self.url)
+        // Create WebSocket, offering the subprotocol list (browsers cannot set
+        // headers, so `token.<jwt>` rides here; the server selects `ras-jsonrpc`)
+        let protocol_list = js_sys::Array::new();
+        for protocol in &self.protocols {
+            protocol_list.push(&JsValue::from_str(protocol));
+        }
+        let websocket = WebSocket::new_with_str_sequence(&self.url, &protocol_list)
             .map_err(|e| ClientError::javascript(format!("Failed to create WebSocket: {:?}", e)))?;
 
         // Set binary type to arraybuffer for better binary message handling

@@ -65,13 +65,15 @@ provider
     )
     .await?;
 
+let session_config = SessionConfig::new(
+    "fd2f56e597efef86b80c5484eb5247f4139b33bcdcb60dab", // openssl rand -hex 32
+    "my-service",                                        // iss
+    "my-service",                                        // aud
+)?;
 let session_service = Arc::new(SessionService::new(SessionConfig {
-    jwt_secret: "use-at-least-32-bytes-of-random-secret".to_string(),
     jwt_ttl: Duration::hours(1),
-    enforce_active_sessions: true,
     algorithm: JwtAlgorithm::HS256,
-    iss: None,
-    aud: None,
+    ..session_config
 })?);
 
 session_service.register_provider(Box::new(provider)).await;

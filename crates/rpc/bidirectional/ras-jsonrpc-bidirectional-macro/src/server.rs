@@ -137,11 +137,17 @@ pub fn generate_server_code(
                             .ok_or_else(|| ras_jsonrpc_bidirectional_server::ServerError::AuthenticationFailed(ras_auth_core::AuthError::InvalidToken))?;
 
                         // OR-of-AND permission check against the cached
-                        // connection user (shared ras-auth-core implementation)
+                        // connection user, routed through the auth provider
+                        // when one is attached (W5)
                         let required_permission_groups: Vec<Vec<String>> = #permission_groups_code;
-                        if !ras_auth_core::user_satisfies_permission_groups(user.as_ref(), &required_permission_groups) {
+                        if !self.permission_check_passes(user.as_ref(), &required_permission_groups) {
+                            let required = required_permission_groups
+                                .iter()
+                                .find(|group| !group.is_empty())
+                                .cloned()
+                                .unwrap_or_default();
                             let error_response = ras_jsonrpc_types::JsonRpcResponse::error(
-                                ras_jsonrpc_types::JsonRpcError::new(-32002, "Insufficient permissions".to_string(), None),
+                                ras_jsonrpc_types::JsonRpcError::insufficient_permissions(required),
                                 request.id.clone()
                             );
                             return Ok(Some(error_response));
@@ -349,6 +355,10 @@ pub fn generate_server_code(
         pub struct #handler_name<T: #service_trait_name, M: ras_jsonrpc_bidirectional_types::ConnectionManager + 'static> {
             service: std::sync::Arc<T>,
             connection_manager: std::sync::Arc<M>,
+            /// Provider whose `check_permissions` decides WITH_PERMISSIONS
+            /// methods. Without one the handler falls back to plain
+            /// set-membership against the cached connection user.
+            auth_provider: Option<std::sync::Arc<dyn ras_auth_core::AuthProvider>>,
         }
 
         impl<T: #service_trait_name, M: ras_jsonrpc_bidirectional_types::ConnectionManager + 'static> #handler_name<T, M> {
@@ -356,7 +366,24 @@ pub fn generate_server_code(
                 service: std::sync::Arc<T>,
                 connection_manager: std::sync::Arc<M>,
             ) -> Self {
-                Self { service, connection_manager }
+                Self { service, connection_manager, auth_provider: None }
+            }
+
+            /// Route WITH_PERMISSIONS checks through this provider's
+            /// `check_permissions`, so custom permission semantics (wildcards,
+            /// hierarchies, dynamic denies) apply over WebSocket exactly as
+            /// they do over REST and JSON-RPC. The generated builder sets this
+            /// automatically; call it when constructing the handler by hand.
+            pub fn with_auth_provider(mut self, auth_provider: std::sync::Arc<dyn ras_auth_core::AuthProvider>) -> Self {
+                self.auth_provider = Some(auth_provider);
+                self
+            }
+
+            fn permission_check_passes(&self, user: &ras_auth_core::AuthenticatedUser, groups: &[Vec<String>]) -> bool {
+                match &self.auth_provider {
+                    Some(provider) => ras_auth_core::check_permission_groups(provider.as_ref(), user, groups).is_ok(),
+                    None => ras_auth_core::user_satisfies_permission_groups(user, groups),
+                }
             }
 
             /// Get a typed client handle for a connection
@@ -441,6 +468,11 @@ pub fn generate_server_code(
             service: std::sync::Arc<T>,
             auth_provider: std::sync::Arc<A>,
             require_auth: bool,
+            max_connections: Option<usize>,
+            max_message_size: Option<usize>,
+            subscription_limits: Option<ras_jsonrpc_bidirectional_server::SubscriptionLimits>,
+            keepalive: Option<ras_jsonrpc_bidirectional_server::KeepaliveConfig>,
+            on_permission_change: Option<ras_jsonrpc_bidirectional_server::PermissionChangePolicy>,
         }
 
         impl<T: #service_trait_name, A: ras_auth_core::AuthProvider> #builder_name<T, A> {
@@ -453,6 +485,11 @@ pub fn generate_server_code(
                     service: std::sync::Arc::new(service),
                     auth_provider: std::sync::Arc::new(auth_provider),
                     require_auth: true,
+                    max_connections: Some(ras_jsonrpc_bidirectional_server::service::DEFAULT_MAX_CONNECTIONS),
+                    max_message_size: None,
+                    subscription_limits: None,
+                    keepalive: None,
+                    on_permission_change: None,
                 }
             }
 
@@ -462,20 +499,61 @@ pub fn generate_server_code(
                 self
             }
 
+            /// Cap on simultaneous connections (`None` lifts the cap). Defaults
+            /// to `DEFAULT_MAX_CONNECTIONS`; admission is atomic.
+            pub fn max_connections(mut self, max_connections: Option<usize>) -> Self {
+                self.max_connections = max_connections;
+                self
+            }
+
+            /// Maximum inbound message size in bytes, enforced at the transport.
+            pub fn max_message_size(mut self, max_message_size: usize) -> Self {
+                self.max_message_size = Some(max_message_size);
+                self
+            }
+
+            /// Per-message, per-connection, topic-length and global subscription caps.
+            pub fn subscription_limits(mut self, limits: ras_jsonrpc_bidirectional_server::SubscriptionLimits) -> Self {
+                self.subscription_limits = Some(limits);
+                self
+            }
+
+            /// Server ping interval and idle timeout.
+            pub fn keepalive(mut self, keepalive: ras_jsonrpc_bidirectional_server::KeepaliveConfig) -> Self {
+                self.keepalive = Some(keepalive);
+                self
+            }
+
+            /// What to do when a live connection's permissions change on re-validation.
+            pub fn on_permission_change(mut self, policy: ras_jsonrpc_bidirectional_server::PermissionChangePolicy) -> Self {
+                self.on_permission_change = Some(policy);
+                self
+            }
+
             /// Build the WebSocket service
             pub fn build(self) -> ras_jsonrpc_bidirectional_server::service::BuiltWebSocketService<#handler_name<T, ras_jsonrpc_bidirectional_server::DefaultConnectionManager>, A, ras_jsonrpc_bidirectional_server::DefaultConnectionManager> {
                 use ras_jsonrpc_bidirectional_server::DefaultConnectionManager;
 
-                let connection_manager = std::sync::Arc::new(DefaultConnectionManager::new());
+                let subscription_limits = self.subscription_limits.unwrap_or_default();
+                let connection_manager = std::sync::Arc::new(
+                    DefaultConnectionManager::with_subscription_limits(subscription_limits),
+                );
+                let auth_provider_dyn: std::sync::Arc<dyn ras_auth_core::AuthProvider> = self.auth_provider.clone();
                 let handler = #handler_name::new(
                     self.service.clone(),
                     connection_manager.clone(),
-                );
+                )
+                .with_auth_provider(auth_provider_dyn);
 
                 let builder = ras_jsonrpc_bidirectional_server::WebSocketServiceBuilder::builder()
                     .handler(std::sync::Arc::new(handler))
                     .auth_provider(self.auth_provider)
                     .require_auth(self.require_auth)
+                    .max_connections(self.max_connections)
+                    .maybe_max_message_size(self.max_message_size)
+                    .subscription_limits(subscription_limits)
+                    .maybe_keepalive(self.keepalive)
+                    .maybe_on_permission_change(self.on_permission_change)
                     .build();
                 builder.build()
             }

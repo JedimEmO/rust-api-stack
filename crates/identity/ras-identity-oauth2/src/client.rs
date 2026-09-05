@@ -11,7 +11,8 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, error, info};
+use subtle::ConstantTimeEq;
+use tracing::{debug, error, info, warn};
 use url::Url;
 
 #[async_trait::async_trait]
@@ -41,7 +42,13 @@ impl OAuth2HttpTransport for ReqwestOAuth2HttpTransport {
         token_endpoint: &str,
         params: &HashMap<String, String>,
     ) -> OAuth2Result<TokenResponse> {
-        let response = self.client.post(token_endpoint).form(params).send().await?;
+        let response = self
+            .client
+            .post(token_endpoint)
+            .form(params)
+            .send()
+            .await
+            .map_err(log_upstream_error)?;
 
         if !response.status().is_success() {
             // Never log or propagate the raw provider response body — it can
@@ -53,10 +60,11 @@ impl OAuth2HttpTransport for ReqwestOAuth2HttpTransport {
             )));
         }
 
-        let token_response: TokenResponse = response
-            .json()
-            .await
-            .map_err(|e| OAuth2Error::InvalidTokenResponse(e.to_string()))?;
+        let token_response: TokenResponse = response.json().await.map_err(|e| {
+            // reqwest decode errors embed the request URL; keep that in the log only (I6).
+            warn!(error = %e, "token endpoint returned an undecodable response");
+            OAuth2Error::InvalidTokenResponse("undecodable token response".to_string())
+        })?;
 
         info!("Successfully exchanged code for tokens");
         Ok(token_response)
@@ -72,7 +80,8 @@ impl OAuth2HttpTransport for ReqwestOAuth2HttpTransport {
             .get(userinfo_endpoint)
             .bearer_auth(access_token)
             .send()
-            .await?;
+            .await
+            .map_err(log_upstream_error)?;
 
         if !response.status().is_success() {
             // Status only; the raw body may echo the bearer token (L1).
@@ -83,10 +92,10 @@ impl OAuth2HttpTransport for ReqwestOAuth2HttpTransport {
             )));
         }
 
-        let user_info: UserInfoResponse = response
-            .json()
-            .await
-            .map_err(|e| OAuth2Error::InvalidUserInfoResponse(e.to_string()))?;
+        let user_info: UserInfoResponse = response.json().await.map_err(|e| {
+            warn!(error = %e, "userinfo endpoint returned an undecodable response");
+            OAuth2Error::InvalidUserInfoResponse("undecodable userinfo response".to_string())
+        })?;
 
         debug!(
             "Successfully retrieved user info for subject: {}",
@@ -352,30 +361,35 @@ impl OAuth2Client {
         }
 
         // When the flow was bound to a browser session, the callback must
-        // present the identical binding value (login-CSRF guard).
-        if state.binding.is_some() && state.binding != callback_response.binding {
+        // present the identical binding value (login-CSRF guard). Compared in
+        // constant time so the binding cannot be recovered byte-by-byte (I7).
+        if let Some(expected) = &state.binding
+            && !binding_matches(expected, callback_response.binding.as_deref())
+        {
             return Err(OAuth2Error::InvalidState);
         }
 
-        // Check for errors in callback
+        // Check for errors in callback. Only the standardized error code is
+        // surfaced; the free-text description stays in the server log (I5).
         if let Some(error) = &callback_response.error {
-            let error_desc = callback_response
-                .error_description
-                .as_deref()
-                .unwrap_or("No description");
-            return Err(OAuth2Error::CallbackError(format!(
-                "{}: {}",
-                error, error_desc
-            )));
+            warn!(
+                provider = %provider_config.provider_id,
+                error = %error,
+                error_description = callback_response.error_description.as_deref().unwrap_or(""),
+                "OAuth2 provider returned an error on callback"
+            );
+            return Err(OAuth2Error::ProviderDenied {
+                error: error.clone(),
+            });
         }
+
+        let Some(code) = callback_response.code.as_deref() else {
+            return Err(OAuth2Error::InvalidCallback);
+        };
 
         // Exchange authorization code for tokens
         let token_response = self
-            .exchange_code(
-                provider_config,
-                &callback_response.code,
-                state.code_verifier.as_deref(),
-            )
+            .exchange_code(provider_config, code, state.code_verifier.as_deref())
             .await?;
 
         // Validate id_token claims when the provider returned one. The token
@@ -472,6 +486,26 @@ fn decode_id_token_claims(id_token: &str) -> OAuth2Result<IdTokenClaims> {
 /// The signature is not verified: the token was received directly from the
 /// token endpoint over TLS, which OIDC Core §3.1.3.7 permits as a substitute
 /// for signature validation in the authorization-code flow.
+/// Log a transport-level failure at `warn` (the `reqwest::Error` carries the
+/// request URL) and hand back the fixed-message error variant (I6).
+fn log_upstream_error(error: reqwest::Error) -> OAuth2Error {
+    warn!(error = %error, "upstream OAuth2 request failed");
+    OAuth2Error::HttpError(error)
+}
+
+/// Constant-time comparison of the stored session binding against the value
+/// presented on callback (I7). A missing callback value never matches.
+fn binding_matches(expected: &str, presented: Option<&str>) -> bool {
+    match presented {
+        Some(presented) => {
+            // `ct_eq` on slices short-circuits on length, but the length of the
+            // binding is not secret (it is a UUID or caller-chosen value).
+            expected.as_bytes().ct_eq(presented.as_bytes()).into()
+        }
+        None => false,
+    }
+}
+
 pub(crate) fn validate_id_token_claims(
     provider_config: &OAuth2ProviderConfig,
     id_token: &str,
@@ -638,6 +672,8 @@ mod tests {
             auth_params: HashMap::new(),
             use_pkce: true,
             user_info_mapping: None,
+            metadata_claims: Vec::new(),
+            allow_insecure_endpoints: false,
         }
     }
 
@@ -747,7 +783,7 @@ mod tests {
             .handle_callback(
                 &wrong_provider,
                 AuthorizationResponse {
-                    code: "auth-code".to_string(),
+                    code: Some("auth-code".to_string()),
                     state,
                     error: None,
                     error_description: None,
@@ -762,7 +798,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_callback_returns_provider_callback_error_without_transport_call() {
+    async fn i5_handle_callback_maps_provider_error_to_fixed_variant_without_description() {
+        let state_store = Arc::new(InMemoryStateStore::new());
+        let transport = Arc::new(RecordingTransport::new());
+        let client = client_with_transport(state_store, transport.clone());
+        let provider_config = provider_config();
+
+        let (_, state) = client
+            .generate_authorization_url(&provider_config, HashMap::new())
+            .await
+            .unwrap();
+
+        // A legitimate denial carries no code at all.
+        let error = client
+            .handle_callback(
+                &provider_config,
+                AuthorizationResponse {
+                    code: None,
+                    state,
+                    error: Some("access_denied".to_string()),
+                    error_description: Some("user denied consent <script>".to_string()),
+                    binding: None,
+                },
+            )
+            .await
+            .expect_err("provider callback error should be surfaced");
+
+        match &error {
+            OAuth2Error::ProviderDenied { error } => assert_eq!(error, "access_denied"),
+            other => panic!("expected ProviderDenied, got {other:?}"),
+        }
+        // The free-text description never reaches the error string.
+        assert!(!error.to_string().contains("user denied consent"));
+        assert!(transport.token_requests().is_empty());
+    }
+
+    #[tokio::test]
+    async fn i5_handle_callback_without_code_or_error_is_invalid_callback() {
         let state_store = Arc::new(InMemoryStateStore::new());
         let transport = Arc::new(RecordingTransport::new());
         let client = client_with_transport(state_store, transport.clone());
@@ -777,23 +849,38 @@ mod tests {
             .handle_callback(
                 &provider_config,
                 AuthorizationResponse {
-                    code: "ignored-code".to_string(),
+                    code: None,
                     state,
-                    error: Some("access_denied".to_string()),
-                    error_description: Some("user denied consent".to_string()),
+                    error: None,
+                    error_description: None,
                     binding: None,
                 },
             )
             .await
-            .expect_err("provider callback error should be surfaced");
-
-        match error {
-            OAuth2Error::CallbackError(message) => {
-                assert_eq!(message, "access_denied: user denied consent");
-            }
-            other => panic!("expected callback error, got {other:?}"),
-        }
+            .unwrap_err();
+        assert!(matches!(error, OAuth2Error::InvalidCallback));
         assert!(transport.token_requests().is_empty());
+    }
+
+    #[test]
+    fn i5_authorization_response_deserializes_without_code() {
+        let denied: AuthorizationResponse = serde_json::from_value(serde_json::json!({
+            "state": "s",
+            "error": "access_denied"
+        }))
+        .unwrap();
+        assert!(denied.code.is_none());
+        assert_eq!(denied.error.as_deref(), Some("access_denied"));
+    }
+
+    #[test]
+    fn i7_binding_matches_is_exact_and_rejects_missing() {
+        assert!(binding_matches("cookie-123", Some("cookie-123")));
+        assert!(!binding_matches("cookie-123", Some("cookie-124")));
+        assert!(!binding_matches("cookie-123", Some("cookie-12")));
+        assert!(!binding_matches("cookie-123", Some("cookie-1234")));
+        assert!(!binding_matches("cookie-123", Some("")));
+        assert!(!binding_matches("cookie-123", None));
     }
 
     #[tokio::test]
@@ -813,7 +900,7 @@ mod tests {
             .handle_callback(
                 &provider_config,
                 AuthorizationResponse {
-                    code: "auth-code".to_string(),
+                    code: Some("auth-code".to_string()),
                     state,
                     error: None,
                     error_description: None,
@@ -1104,7 +1191,7 @@ mod tests {
             .handle_callback(
                 &config,
                 AuthorizationResponse {
-                    code: "code".to_string(),
+                    code: Some("code".to_string()),
                     state,
                     error: None,
                     error_description: None,
@@ -1129,7 +1216,7 @@ mod tests {
             .handle_callback(
                 &config,
                 AuthorizationResponse {
-                    code: "code".to_string(),
+                    code: Some("code".to_string()),
                     state,
                     error: None,
                     error_description: None,
@@ -1139,5 +1226,56 @@ mod tests {
             .await
             .expect("bound callback succeeds");
         assert_eq!(transport.token_requests().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn i7_handle_callback_rejects_wrong_binding_value() {
+        let state_store = Arc::new(InMemoryStateStore::new());
+        let transport = Arc::new(RecordingTransport::new());
+        let client = client_with_transport(state_store.clone(), transport.clone());
+        let config = provider_config();
+
+        let (_, state) = client
+            .generate_authorization_url_bound(
+                &config,
+                HashMap::new(),
+                Some("cookie-123".to_string()),
+            )
+            .await
+            .unwrap();
+        let err = client
+            .handle_callback(
+                &config,
+                AuthorizationResponse {
+                    code: Some("code".to_string()),
+                    state,
+                    error: None,
+                    error_description: None,
+                    binding: Some("cookie-124".to_string()),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, OAuth2Error::InvalidState));
+        assert!(transport.token_requests().is_empty());
+
+        // An unbound flow still ignores whatever the callback presents.
+        let (_, state) = client
+            .generate_authorization_url_bound(&config, HashMap::new(), None)
+            .await
+            .unwrap();
+        client
+            .handle_callback(
+                &config,
+                AuthorizationResponse {
+                    code: Some("code".to_string()),
+                    state,
+                    error: None,
+                    error_description: None,
+                    binding: Some("anything".to_string()),
+                },
+            )
+            .await
+            .expect("unbound flow ignores callback binding");
     }
 }

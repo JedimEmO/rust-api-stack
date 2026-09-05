@@ -45,6 +45,10 @@ let google_config = OAuth2ProviderConfig {
     auth_params: HashMap::new(),
     use_pkce: true,
     user_info_mapping: None,
+    // Extra userinfo claims to copy into session metadata (and the JWT). Empty = none.
+    metadata_claims: Vec::new(),
+    // Endpoints must be https:// unless this is set (local mock IdP only).
+    allow_insecure_endpoints: false,
 };
 
 // Create OAuth2 configuration
@@ -67,7 +71,11 @@ use ras_identity_session::{SessionConfig, SessionService};
 
 // Register with session service. The provider is cheap to clone; keep one
 // handle for flow initiation and register the other for verification.
-let session_config = SessionConfig::new("use-at-least-32-bytes-of-random-secret")?;
+let session_config = SessionConfig::new(
+    "50f60a216877ea8c01d90deebfaf37ee95297d744bca0931", // openssl rand -hex 32
+    "my-service",                                        // iss
+    "my-service",                                        // aud
+)?;
 let session_service = SessionService::new(session_config)?;
 
 session_service.register_provider(Box::new(oauth2_provider.clone())).await;
@@ -128,6 +136,8 @@ For a non-browser flow where login CSRF does not apply, use
 - `auth_params`: Additional authorization parameters
 - `use_pkce`: Enable PKCE for enhanced security
 - `user_info_mapping`: Custom field mapping for user info
+- `metadata_claims`: Allow-list of additional userinfo claims copied into the identity metadata (and therefore the session JWT). Defaults to empty; only `picture` and `email_verified` are ever propagated without it
+- `allow_insecure_endpoints`: Permit non-`https://` endpoint URLs. Defaults to `false`; `OAuth2Provider::new`/`try_new`/`add_provider` reject insecure endpoints unless set. Only enable for a local mock IdP
 
 ### OAuth2Config
 

@@ -1,6 +1,6 @@
 [package]
 name = "ras-auth-core"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Core authentication and authorization traits for Rust Agent Stack services"
@@ -15,6 +15,7 @@ http = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 subtle = { workspace = true }
+tracing = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

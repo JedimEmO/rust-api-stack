@@ -1,6 +1,6 @@
 [package]
 name = "ras-identity-oauth2"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.88"
 description = "OAuth2 authentication provider with Google support, PKCE, and state management"
@@ -28,10 +28,11 @@ base64 = { workspace = true }
 sha2 = { workspace = true }
 rand = { workspace = true }
 url = { workspace = true }
+subtle = { workspace = true }
 
 [dev-dependencies]
 axum-test = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 # For the example
-ras-identity-session = { path = "../ras-identity-session", version = "0.3.0" }
+ras-identity-session = { path = "../ras-identity-session", version = "0.4.0" }

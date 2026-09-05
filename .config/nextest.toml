@@ -1,0 +1,26 @@
+# cargo-nextest configuration. Shared by local runs and CI.
+#
+# Flakiness policy: no retries anywhere. A test that needs a retry is a bug
+# in the test; fix the test. `slow-timeout` turns a hang into a failure with
+# a name attached instead of a stalled job.
+
+[profile.default]
+slow-timeout = { period = "30s", terminate-after = 4 }   # 2 min hard cap per test
+fail-fast = false
+
+[profile.ci]
+slow-timeout = { period = "30s", terminate-after = 6 }   # 3 min on slower runners
+fail-fast = false
+failure-output = "immediate-final"
+status-level = "fail"
+final-status-level = "slow"
+
+[profile.ci.junit]
+path = "junit.xml"
+
+# Repeated-run profile for flake hunting: same policy, quieter output.
+[profile.stress]
+slow-timeout = { period = "30s", terminate-after = 4 }
+fail-fast = false
+status-level = "fail"
+final-status-level = "fail"
