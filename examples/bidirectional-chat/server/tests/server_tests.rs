@@ -1,17 +1,16 @@
-//! Chat configuration, persistence, and health-router fixture tests.
-//!
-//! The health fixture does not construct the application server.
+//! Chat configuration, persistence, and production application startup tests.
 
 use anyhow::Result;
-use axum::Router;
 use bidirectional_chat_server::config::{
     AdminConfig, AdminUser, AuthConfig, ChatConfig, Config, LoggingConfig, RateLimitConfig,
     RoomConfig, ServerConfig,
 };
+use bidirectional_chat_server::{ApplicationDependencies, build_application};
 use config::{Config as FileConfig, File};
+use ras_identity_local::LocalUserProvider;
 use ras_identity_session::{JwtAlgorithm, SessionConfig};
+use std::sync::Arc;
 use tempfile::TempDir;
-use tower_http::cors::CorsLayer;
 
 /// Test server instance
 struct TestServer {
@@ -19,13 +18,16 @@ struct TestServer {
 }
 
 impl TestServer {
-    /// Start the isolated health router; application configuration is unused.
-    async fn start(_config: Config) -> Result<Self> {
-        let health_router = Router::new().route("/health", axum::routing::get(|| async { "OK" }));
-
-        let app = Router::new()
-            .merge(health_router)
-            .layer(CorsLayer::permissive());
+    async fn start(config: Config) -> Result<Self> {
+        let application = build_application(
+            &config,
+            ApplicationDependencies {
+                identity_provider: Arc::new(LocalUserProvider::new()),
+                seed_development_users: false,
+            },
+        )
+        .await?;
+        let app = application.router;
 
         Ok(Self {
             server: axum_test::TestServer::builder()
@@ -154,7 +156,7 @@ async fn test_server_startup() -> Result<()> {
     let response = server.server.get("/health").await;
 
     response.assert_status_ok();
-    assert_eq!(response.text(), "OK");
+    assert_eq!(response.json::<serde_json::Value>()["status"], "OK");
 
     server.shutdown().await;
     Ok(())
@@ -378,11 +380,79 @@ async fn test_message_persistence() -> Result<()> {
     Ok(())
 }
 
-// Module to re-export necessary types for the tests
-mod bidirectional_chat_server {
-    pub use bidirectional_chat_server::config;
+#[tokio::test]
+async fn application_router_authenticates_websocket_and_persists_messages() -> Result<()> {
+    use bidirectional_chat_server::persistence::PersistenceManager;
+    use ras_jsonrpc_bidirectional_types::BidirectionalMessage;
+    use serde_json::json;
+    use std::time::Duration;
 
-    pub mod persistence {
-        pub use bidirectional_chat_server::persistence::*;
-    }
+    let (config, _temp_dir) = create_test_config().await?;
+    let application = build_application(
+        &config,
+        ApplicationDependencies {
+            identity_provider: Arc::new(LocalUserProvider::new()),
+            seed_development_users: false,
+        },
+    )
+    .await?;
+    let manager = application.connection_manager;
+    let server = axum_test::TestServer::builder()
+        .http_transport()
+        .build(application.router)?;
+    server
+        .post("/auth/register")
+        .json(&json!({"username": "socket-user", "password": "socket-password"}))
+        .await
+        .assert_status(axum::http::StatusCode::CREATED);
+    let login: serde_json::Value = server
+        .post("/auth/login")
+        .json(&json!({"username": "socket-user", "password": "socket-password"}))
+        .await
+        .json();
+    let mut socket = server
+        .get_websocket("/ws")
+        .add_header(
+            "authorization",
+            format!("Bearer {}", login["token"].as_str().unwrap()),
+        )
+        .await
+        .into_websocket()
+        .await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let first: BidirectionalMessage = socket.receive_json().await;
+        assert!(matches!(first, BidirectionalMessage::ConnectionEstablished { .. }));
+        for (id, method, params) in [
+            ("join", "join_room", json!({"room_name": "general"})),
+            ("send", "send_message", json!({"text": "persisted through application router"})),
+            ("list", "list_rooms", json!({})),
+        ] {
+            socket.send_json(&json!({"type": "request", "jsonrpc": "2.0", "id": id, "method": method, "params": params})).await;
+            loop {
+                let message: BidirectionalMessage = socket.receive_json().await;
+                if let BidirectionalMessage::Response(response) = message
+                    && response.id == Some(json!(id))
+                {
+                    assert!(response.error.is_none(), "{response:?}");
+                    if id == "list" {
+                        assert!(response.result.unwrap()["rooms"].as_array().unwrap().iter().any(|room| room["room_id"] == "general"));
+                    }
+                    break;
+                }
+            }
+        }
+        socket.close().await;
+        while manager.connection_count() != 0 {
+            tokio::task::yield_now().await;
+        }
+    }).await?;
+    let messages = PersistenceManager::new(&config.chat.data_dir)
+        .load_room_messages("general", None)
+        .await?;
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.text == "persisted through application router")
+    );
+    Ok(())
 }
