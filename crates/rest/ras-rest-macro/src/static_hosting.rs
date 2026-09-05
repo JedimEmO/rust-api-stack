@@ -54,6 +54,7 @@ pub fn generate_static_hosting_code(
     let docs_handler_name =
         quote::format_ident!("{}_docs_handler", service_name.to_string().to_lowercase());
     let template_lit = syn::LitStr::new(TEMPLATE_CONTENT, proc_macro2::Span::call_site());
+    let config_placeholder = ras_api_explorer_assets::CONFIG_PLACEHOLDER;
 
     quote! {
         async fn #docs_handler_name() -> ::axum::response::Html<String> {
@@ -70,7 +71,7 @@ pub fn generate_static_hosting_code(
                 .to_string()
                 .replace("<", "\\u003c");
 
-                TEMPLATE.replace("{EXPLORER_CONFIG_JSON}", &config_json)
+                TEMPLATE.replace(#config_placeholder, &config_json)
             });
 
             ::axum::response::Html(html.clone())

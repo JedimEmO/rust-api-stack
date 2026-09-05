@@ -41,6 +41,7 @@ pub fn generate_static_hosting_code(
 
     // Embed the template as a string literal
     let template_lit = syn::LitStr::new(TEMPLATE_CONTENT, proc_macro2::Span::call_site());
+    let config_placeholder = ras_api_explorer_assets::CONFIG_PLACEHOLDER;
 
     quote! {
         /// Routes for the JSON-RPC explorer
@@ -61,7 +62,7 @@ pub fn generate_static_hosting_code(
                 .to_string()
                 .replace("<", "\\u003c");
 
-                ::std::sync::Arc::new(TEMPLATE.replace("{EXPLORER_CONFIG_JSON}", &config_json))
+                ::std::sync::Arc::new(TEMPLATE.replace(#config_placeholder, &config_json))
             };
 
             let serve_explorer = {

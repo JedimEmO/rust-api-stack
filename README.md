@@ -76,8 +76,10 @@ crates/
 │   └── ras-identity-session # JWT session management
 ├── observability/           # Monitoring and metrics
 │   └── ras-observability-otel # OpenTelemetry implementation
-├── specs/                   # Specification types
-│   └── ras-openrpc-types    # OpenRPC 1.3.2 spec types
+├── specs/                   # Specifications and their shared assets
+│   ├── ras-api-explorer-assets # Embedded API explorer shared by the REST and JSON-RPC macros
+│   ├── ras-openrpc-types    # OpenRPC 1.3.2 spec types
+│   └── ras-permission-manifest # Permission manifest types
 examples/                    # Example applications
 ├── basic-jsonrpc/           # JSON-RPC service demo
 ├── bidirectional-chat/      # Real-time chat system

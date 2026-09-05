@@ -1,4 +1,3 @@
-
         * { box-sizing: border-box; }
         :root {
             color-scheme: dark;
@@ -431,4 +430,3 @@
             .grid2, .param-row, .schema-field { grid-template-columns: 1fr; }
             .topbar { align-items: flex-start; }
         }
-    
