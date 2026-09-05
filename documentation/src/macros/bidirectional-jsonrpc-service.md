@@ -126,6 +126,36 @@ let app = axum::Router::new()
 `require_auth(true)` requires credentials for the connection as a whole.
 Method-level permissions are still enforced for protected calls.
 
+### Connection Security Defaults
+
+The generated builder produces a `WebSocketService`. Its defaults are tuned for
+production, and every one of them is overridable on
+`ras_jsonrpc_bidirectional_server::WebSocketServiceBuilder` or by implementing
+the corresponding `WebSocketService` method:
+
+| Setting | Default | What it does |
+|---|---|---|
+| `max_message_size` | 1 MiB | Enforced at the transport, so an oversized frame is rejected before it is buffered. |
+| `subscription_limits` | 64 topics per message, 256 per connection, 256-byte names | An over-limit `Subscribe` gets an invalid-params error and the connection stays open. |
+| `keepalive` | ping every 30 s, close after 90 s idle | Reclaims half-open sockets. Browsers and tungstenite answer pings automatically. |
+| `auth_revalidation_interval` | 30 s | Re-runs the auth provider on the connection's token. Failure closes the socket. |
+| `on_permission_change` | `DropSubscriptions` | On successful re-validation every held subscription is re-run through `authorize_subscribe`; topics no longer authorized are dropped. `Close` closes the socket instead so the client must reconnect. |
+| `max_connections` | unbounded | Set a cap in production. |
+
+Topic subscriptions are default-deny: override `authorize_subscribe` on the
+handler to allow the topics a connection is entitled to. `WITH_PERMISSIONS`
+checks go through your provider's `check_permissions`, so wildcard or
+hierarchical permission schemes behave the same over WebSocket as over REST.
+
+### Authenticating From A Browser
+
+A browser `WebSocket` cannot set headers. The WASM client therefore offers two
+subprotocols on upgrade, `ras-jsonrpc` and `token.<jwt>`; the server reads the
+token from the second and selects the first, so the token is never echoed in
+the response. Native clients send `Authorization: Bearer <token>`. Tokens are
+never placed in the URL query string, and the server does not read them from
+there.
+
 ## Client Usage
 
 The client feature generates a typed client builder, method calls, connection

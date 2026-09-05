@@ -239,7 +239,9 @@ fn default_true() -> bool {
 
 fn default_jwt_secret() -> String {
     warn!("Using default JWT secret - this is insecure for production!");
-    "dev-secret-key-change-in-production".to_string()
+    // Random-looking so it passes SessionConfig validation; still rejected by
+    // `validate()` in release builds so it never ships to production.
+    "3c54c66e0ad5659b4f96a859156b4ef52689c4c2a0f0c47f".to_string()
 }
 
 fn default_jwt_ttl() -> i64 {

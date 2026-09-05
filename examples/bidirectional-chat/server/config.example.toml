@@ -16,7 +16,7 @@ allowed_origins = ["http://localhost:3000", "https://example.com"]
 
 [auth]
 # JWT secret key. Must be at least 32 bytes; replace for shared environments.
-jwt_secret = "change-this-to-at-least-32-random-bytes"
+jwt_secret = "2d3d78881c4b8eb6816b66cb08abe3e4a2819c56449df210"  # replace: openssl rand -hex 32
 # JWT TTL in seconds (24 hours)
 jwt_ttl_seconds = 86400
 # Enable refresh tokens

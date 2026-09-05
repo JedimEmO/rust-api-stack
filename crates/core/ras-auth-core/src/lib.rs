@@ -14,7 +14,12 @@ pub use authorize::*;
 pub use transport::*;
 
 /// Errors that can occur during authentication or authorization.
-#[derive(Debug, Error, Clone, Serialize, Deserialize)]
+///
+/// Deliberately **not** `Serialize`/`Deserialize`: this is a server-side
+/// diagnostic type. [`AuthError::InsufficientPermissions`] carries the caller's
+/// full permission set in `has`, which must never be sent over the wire. Map
+/// to a generic per-class client message instead (as the generated servers do).
+#[derive(Debug, Error, Clone)]
 pub enum AuthError {
     /// The provided token is invalid or malformed.
     #[error("Invalid token")]
@@ -25,7 +30,11 @@ pub enum AuthError {
     TokenExpired,
 
     /// The token does not have the required permissions.
-    #[error("Insufficient permissions: required {required:?}, has {has:?}")]
+    ///
+    /// The `Display` output names the required set and only the *count* of
+    /// permissions the caller holds; `has` is retained for server-side logging
+    /// via `Debug`.
+    #[error("Insufficient permissions: required {required:?}, caller holds {} permission(s)", has.len())]
     InsufficientPermissions {
         required: Vec<String>,
         has: Vec<String>,
@@ -303,28 +312,47 @@ mod tests {
     }
 
     #[test]
-    fn auth_error_serializes_structured_permission_details() {
+    fn a2_insufficient_permissions_display_does_not_leak_held_permissions() {
         let error = AuthError::InsufficientPermissions {
             required: vec!["admin".to_string()],
-            has: vec!["user".to_string()],
+            has: vec!["user".to_string(), "billing:read".to_string()],
         };
 
-        let value = serde_json::to_value(&error).expect("serialize auth error");
-        assert_eq!(
-            value,
-            json!({
-                "InsufficientPermissions": {
-                    "required": ["admin"],
-                    "has": ["user"]
-                }
-            })
-        );
+        let display = error.to_string();
+        assert!(display.contains("required [\"admin\"]"), "{display}");
+        assert!(display.contains("holds 2 permission(s)"), "{display}");
+        assert!(!display.contains("user"), "{display}");
+        assert!(!display.contains("billing:read"), "{display}");
 
-        let decoded: AuthError = serde_json::from_value(value).expect("deserialize auth error");
-        let AuthError::InsufficientPermissions { required, has } = decoded else {
-            panic!("expected insufficient permissions");
-        };
-        assert_eq!(required, vec!["admin"]);
-        assert_eq!(has, vec!["user"]);
+        // `has` is kept for server-side logging through `Debug`.
+        let debug = format!("{error:?}");
+        assert!(debug.contains("billing:read"), "{debug}");
+    }
+
+    /// `AuthError` must not implement `Serialize` so it can never be emitted
+    /// on the wire by accident. Compile-time check via autoref specialization:
+    /// the `IsSerialize` impl on `Probe<T>` wins when `T: Serialize`; otherwise
+    /// method lookup falls back to the `NotSerialize` impl on `&Probe<T>`.
+    #[test]
+    fn a2_auth_error_is_not_serializable() {
+        struct Probe<T>(std::marker::PhantomData<T>);
+        trait NotSerialize {
+            fn is_serialize(&self) -> bool {
+                false
+            }
+        }
+        impl<T> NotSerialize for &Probe<T> {}
+        trait IsSerialize {
+            fn is_serialize(&self) -> bool {
+                true
+            }
+        }
+        impl<T: Serialize> IsSerialize for Probe<T> {}
+
+        let auth_error = &Probe::<AuthError>(std::marker::PhantomData);
+        assert!(!auth_error.is_serialize());
+        // Sanity check that the probe detects a serializable type.
+        let user = &Probe::<AuthenticatedUser>(std::marker::PhantomData);
+        assert!(user.is_serialize());
     }
 }

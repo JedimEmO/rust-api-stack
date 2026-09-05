@@ -121,6 +121,14 @@ impl WebSocketUpgrade {
     }
 }
 
+/// Subprotocol the server selects on upgrade. Browser clients must offer it
+/// alongside the `token.<jwt>` pseudo-protocol, otherwise the browser rejects
+/// an upgrade response that names no protocol from its list.
+pub const WS_SUBPROTOCOL: &str = "ras-jsonrpc";
+
+/// Prefix of the pseudo-subprotocol that carries a bearer token from browsers.
+pub const WS_TOKEN_SUBPROTOCOL_PREFIX: &str = "token.";
+
 fn extract_auth_token_from_headers(headers: &HeaderMap) -> Option<String> {
     // Only `Authorization: Bearer <token>` is a bearer token, matching the HTTP
     // transport (`ras_auth_core::extract_auth_credential`). A raw value or any
@@ -140,12 +148,17 @@ fn extract_auth_token_from_headers(headers: &HeaderMap) -> Option<String> {
         };
     }
 
-    // Browser fallback: `Sec-WebSocket-Protocol: token.<jwt>`. Documented as a
-    // last-resort transport; the raw protocol value must never be logged (it is
-    // in `redact_sensitive_headers`'s list).
+    // Browser fallback: `Sec-WebSocket-Protocol: ras-jsonrpc, token.<jwt>`.
+    // Browsers cannot set headers on a WebSocket, so the token rides in the
+    // subprotocol list; the server selects `ras-jsonrpc` (see
+    // `WS_SUBPROTOCOL`) so the token is never echoed back. The raw protocol
+    // value must never be logged (it is in `redact_sensitive_headers`'s list).
     if let Some(token_header) = headers.get("sec-websocket-protocol")
-        && let Ok(token_str) = token_header.to_str()
-        && let Some(token) = token_str.strip_prefix("token.")
+        && let Ok(protocols) = token_header.to_str()
+        && let Some(token) = protocols
+            .split(',')
+            .map(str::trim)
+            .find_map(|protocol| protocol.strip_prefix(WS_TOKEN_SUBPROTOCOL_PREFIX))
         && !token.trim().is_empty()
     {
         return Some(token.trim().to_string());
@@ -349,6 +362,19 @@ mod tests {
         headers.insert("x-auth-token", HeaderValue::from_static("fallback"));
 
         assert_eq!(extract_auth_token_from_headers(&headers), None);
+    }
+
+    #[test]
+    fn extracts_token_from_multi_value_subprotocol_list() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "sec-websocket-protocol",
+            HeaderValue::from_static("ras-jsonrpc, token.ws-token"),
+        );
+        assert_eq!(
+            extract_auth_token_from_headers(&headers),
+            Some("ws-token".to_string())
+        );
     }
 
     #[test]

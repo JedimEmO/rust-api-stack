@@ -20,10 +20,10 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 axum-extra = { workspace = true }
-ras-auth-core = { path = "../../../../crates/core/ras-auth-core", version = "0.2.0" }
+ras-auth-core = { path = "../../../../crates/core/ras-auth-core", version = "0.3.0" }
 ras-transport-core = { path = "../../../../crates/core/ras-transport-core", version = "0.1.0" }
 ras-rest-core = { path = "../../../../crates/rest/ras-rest-core", version = "0.2.0" }
-ras-rest-macro = { path = "../../../../crates/rest/ras-rest-macro", version = "0.3.0", default-features = false }
+ras-rest-macro = { path = "../../../../crates/rest/ras-rest-macro", version = "0.3.1", default-features = false }
 ras-permission-manifest = { path = "../../../../crates/specs/ras-permission-manifest", version = "0.1.0" }
 reqwest = { workspace = true }
 schemars = { workspace = true }

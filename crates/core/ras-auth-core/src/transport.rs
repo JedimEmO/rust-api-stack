@@ -377,14 +377,27 @@ impl CsrfConfig {
         }
     }
 
-    /// Require the custom header to carry an exact value.
+    /// Require the custom header to carry a single, static, process-wide value.
     ///
-    /// This is intended for callers that validate a session-specific CSRF token
-    /// outside of the default double-submit cookie flow.
-    pub fn with_expected_value(mut self, expected_value: impl Into<String>) -> Self {
+    /// **Dangerous.** A static value is not bound to a session: any attacker
+    /// who learns it once (from a leaked bundle, a shared client, or a single
+    /// captured request) can forge unsafe cookie-authenticated requests for
+    /// every user until the value is rotated. This disables the double-submit
+    /// cookie check. Prefer [`Self::default`] for browser sessions.
+    pub fn dangerous_static_value(mut self, expected_value: impl Into<String>) -> Self {
         self.expected_value = Some(expected_value.into());
         self.cookie_name = None;
         self
+    }
+
+    /// Deprecated alias for [`Self::dangerous_static_value`].
+    #[deprecated(
+        since = "0.3.0",
+        note = "renamed to `dangerous_static_value`; a static CSRF value is not \
+                bound to a session and is a weak CSRF defense"
+    )]
+    pub fn with_expected_value(self, expected_value: impl Into<String>) -> Self {
+        self.dangerous_static_value(expected_value)
     }
 
     /// Require the custom header to match this CSRF cookie.
@@ -396,13 +409,56 @@ impl CsrfConfig {
 
     /// Require only a non-empty custom header.
     ///
-    /// This mode depends on restrictive credentialed CORS and is not a complete
-    /// CSRF defense by itself. Prefer [`Self::default`] for browser sessions.
-    pub fn header_presence_only(header_name: HeaderName) -> Self {
+    /// **Dangerous.** This mode relies entirely on the browser refusing to send
+    /// a custom header cross-origin without a successful CORS preflight. It is
+    /// only sound behind a restrictive credentialed CORS policy and is not a
+    /// complete CSRF defense by itself. Prefer [`Self::default`] for browser
+    /// sessions.
+    pub fn dangerous_header_presence_only(header_name: HeaderName) -> Self {
         Self {
             header_name,
             expected_value: None,
             cookie_name: None,
+        }
+    }
+
+    /// Deprecated alias for [`Self::dangerous_header_presence_only`].
+    #[deprecated(
+        since = "0.3.0",
+        note = "renamed to `dangerous_header_presence_only`; presence-only CSRF \
+                depends on restrictive CORS and is a weak CSRF defense"
+    )]
+    pub fn header_presence_only(header_name: HeaderName) -> Self {
+        Self::dangerous_header_presence_only(header_name)
+    }
+
+    /// Whether this configuration uses one of the weak, opt-in modes
+    /// ([`Self::dangerous_static_value`] or
+    /// [`Self::dangerous_header_presence_only`]) rather than the default
+    /// double-submit cookie check.
+    ///
+    /// Returns the mode name for logging, or `None` for the double-submit mode.
+    pub fn dangerous_mode(&self) -> Option<&'static str> {
+        match (&self.expected_value, &self.cookie_name) {
+            (Some(_), _) => Some("static_value"),
+            (None, None) => Some("header_presence_only"),
+            (None, Some(_)) => None,
+        }
+    }
+
+    /// Emit a `warn!` if this CSRF config is in a weak mode. Called from the
+    /// [`AuthTransportConfig`] builders (once per construction) and, as a
+    /// fallback for struct-literal construction, once per process from
+    /// [`AuthTransportConfig::validate`].
+    fn warn_if_dangerous(&self) {
+        if let Some(mode) = self.dangerous_mode() {
+            tracing::warn!(
+                csrf_mode = mode,
+                csrf_header = %self.header_name,
+                "cookie auth is configured with a weak CSRF mode \
+                 (`CsrfConfig::dangerous_*`); this is not a complete CSRF defense. \
+                 Prefer the default double-submit cookie mode for browser sessions"
+            );
         }
     }
 
@@ -424,7 +480,7 @@ impl CsrfConfig {
     pub fn validate(&self) -> Result<(), AuthTransportError> {
         // A CORS-safelisted or browser-controlled header name provides zero CSRF
         // protection (it is sent automatically cross-origin), so reject it —
-        // otherwise `header_presence_only(HeaderName::from_static("accept"))`
+        // otherwise `dangerous_header_presence_only(HeaderName::from_static("accept"))`
         // would produce a config that passes validation but never blocks a
         // forged request.
         let header = self.header_name.as_str();
@@ -546,13 +602,27 @@ impl AuthTransportConfig {
         if self.csrf.is_none() {
             self.csrf = Some(CsrfConfig::default());
         }
+        self.warn_if_weak_csrf();
         self
     }
 
     /// Enable CSRF protection for cookie-authenticated unsafe requests.
+    ///
+    /// Passing a `CsrfConfig::dangerous_*` mode together with cookie auth logs
+    /// a `warn!` at construction time.
     pub fn with_csrf(mut self, csrf: CsrfConfig) -> Self {
         self.csrf = Some(csrf);
+        self.warn_if_weak_csrf();
         self
+    }
+
+    /// Log a warning when cookie auth is paired with a weak CSRF mode.
+    fn warn_if_weak_csrf(&self) {
+        if self.cookie.is_some()
+            && let Some(csrf) = &self.csrf
+        {
+            csrf.warn_if_dangerous();
+        }
     }
 
     /// Disable bearer-token extraction.
@@ -587,6 +657,26 @@ impl AuthTransportConfig {
 
         if let Some(csrf) = &self.csrf {
             csrf.validate()?;
+        }
+
+        // `validate` runs on every request, so the weak-mode warning is
+        // rate-limited here to once per distinct weak config per process. The
+        // builders (`with_cookie`, `with_csrf`) warn unconditionally at
+        // construction time; this is the fallback for struct-literal configs.
+        if self.cookie.is_some()
+            && let Some(csrf) = &self.csrf
+            && let Some(mode) = csrf.dangerous_mode()
+        {
+            static WEAK_CSRF_WARNED: std::sync::Mutex<Vec<(String, &'static str)>> =
+                std::sync::Mutex::new(Vec::new());
+            let key = (csrf.header_name.as_str().to_string(), mode);
+            let mut warned = WEAK_CSRF_WARNED
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if !warned.contains(&key) {
+                warned.push(key);
+                csrf.warn_if_dangerous();
+            }
         }
 
         Ok(())
@@ -950,7 +1040,7 @@ mod tests {
     fn csrf_expected_value_mode_does_not_require_csrf_cookie() {
         let config = AuthTransportConfig::default()
             .with_cookie(AuthCookieConfig::default())
-            .with_csrf(CsrfConfig::default().with_expected_value("csrf-token"));
+            .with_csrf(CsrfConfig::default().dangerous_static_value("csrf-token"));
         let cookie = AuthCredential::new("cookie-token", AuthTokenSource::Cookie);
         let headers = headers(&[(DEFAULT_CSRF_HEADER, "csrf-token")]);
 
@@ -1016,8 +1106,9 @@ mod tests {
             "cookie",
             "origin",
         ] {
-            let csrf =
-                CsrfConfig::header_presence_only(HeaderName::from_bytes(name.as_bytes()).unwrap());
+            let csrf = CsrfConfig::dangerous_header_presence_only(
+                HeaderName::from_bytes(name.as_bytes()).unwrap(),
+            );
             let error = csrf.validate().expect_err(name);
             assert!(
                 matches!(error, AuthTransportError::InvalidCsrfConfig(_)),
@@ -1026,7 +1117,8 @@ mod tests {
         }
 
         // A genuinely custom header (forces a CORS preflight) is accepted.
-        let ok = CsrfConfig::header_presence_only(HeaderName::from_static("x-csrf-token"));
+        let ok =
+            CsrfConfig::dangerous_header_presence_only(HeaderName::from_static("x-csrf-token"));
         assert!(ok.validate().is_ok());
     }
 
@@ -1084,5 +1176,130 @@ mod tests {
             redacted.get(csrf_header).unwrap(),
             HeaderValue::from_static("[REDACTED]")
         );
+    }
+
+    /// Minimal `tracing` subscriber that records the messages of `WARN` events.
+    /// Kept dependency-free (no `tracing-subscriber`) since it only needs to
+    /// capture a handful of events for the A1 regression tests.
+    struct WarnCapture(std::sync::Mutex<Vec<String>>);
+
+    impl tracing::Subscriber for WarnCapture {
+        fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+            *metadata.level() <= tracing::Level::WARN
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            struct Msg(String);
+            impl tracing::field::Visit for Msg {
+                fn record_debug(
+                    &mut self,
+                    field: &tracing::field::Field,
+                    value: &dyn std::fmt::Debug,
+                ) {
+                    self.0.push_str(&format!("{}={:?} ", field.name(), value));
+                }
+            }
+            let mut msg = Msg(String::new());
+            event.record(&mut msg);
+            self.0.lock().unwrap().push(msg.0);
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    fn capture_warnings(f: impl FnOnce()) -> Vec<String> {
+        let capture = std::sync::Arc::new(WarnCapture(std::sync::Mutex::new(Vec::new())));
+        tracing::subscriber::with_default(capture.clone(), f);
+        capture.0.lock().unwrap().clone()
+    }
+
+    #[test]
+    fn a1_dangerous_modes_are_reported_and_deprecated_aliases_still_work() {
+        let presence =
+            CsrfConfig::dangerous_header_presence_only(HeaderName::from_static("x-csrf-token"));
+        assert_eq!(presence.dangerous_mode(), Some("header_presence_only"));
+
+        let static_value = CsrfConfig::default().dangerous_static_value("shared-secret");
+        assert_eq!(static_value.dangerous_mode(), Some("static_value"));
+
+        assert_eq!(CsrfConfig::default().dangerous_mode(), None);
+        assert_eq!(
+            CsrfConfig::default()
+                .with_cookie_name("__Host-other")
+                .dangerous_mode(),
+            None
+        );
+
+        // The deprecated names remain as thin wrappers for one release.
+        #[allow(deprecated)]
+        let legacy_presence =
+            CsrfConfig::header_presence_only(HeaderName::from_static("x-csrf-token"));
+        assert_eq!(legacy_presence, presence);
+        #[allow(deprecated)]
+        let legacy_static = CsrfConfig::default().with_expected_value("shared-secret");
+        assert_eq!(legacy_static, static_value);
+    }
+
+    #[test]
+    fn a1_cookie_auth_with_weak_csrf_mode_warns_at_construction() {
+        let warnings = capture_warnings(|| {
+            let _ = AuthTransportConfig::default()
+                .with_cookie(AuthCookieConfig::default())
+                .with_csrf(CsrfConfig::dangerous_header_presence_only(
+                    HeaderName::from_static("x-csrf-token"),
+                ));
+        });
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("csrf_mode=\"header_presence_only\""));
+        assert!(warnings[0].contains("weak CSRF mode"));
+
+        // Ordering does not matter: csrf first, then cookie.
+        let warnings = capture_warnings(|| {
+            let _ = AuthTransportConfig::default()
+                .with_csrf(CsrfConfig::default().dangerous_static_value("shared-secret"))
+                .with_cookie(AuthCookieConfig::default());
+        });
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("csrf_mode=\"static_value\""));
+
+        // Weak CSRF without cookie auth is irrelevant (bearer-only) — no warning.
+        let warnings = capture_warnings(|| {
+            let _ = AuthTransportConfig::default().with_csrf(
+                CsrfConfig::dangerous_header_presence_only(HeaderName::from_static("x-csrf-token")),
+            );
+        });
+        assert!(warnings.is_empty(), "{warnings:?}");
+
+        // The default double-submit mode never warns.
+        let warnings = capture_warnings(|| {
+            let _ = AuthTransportConfig::default().with_cookie(AuthCookieConfig::default());
+        });
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    #[test]
+    fn a1_struct_literal_weak_csrf_warns_from_validate_once() {
+        // Struct-literal construction bypasses the builders, so `validate`
+        // warns as a fallback — but only once per distinct weak config per
+        // process, since it runs on every request. A header name unique to
+        // this test keeps it independent of test ordering.
+        let config = AuthTransportConfig {
+            bearer: true,
+            cookie: Some(AuthCookieConfig::default()),
+            csrf: Some(CsrfConfig::dangerous_header_presence_only(
+                HeaderName::from_static("x-a1-struct-literal-csrf"),
+            )),
+        };
+        let warnings = capture_warnings(|| {
+            config.validate().unwrap();
+            config.validate().unwrap();
+            config.validate().unwrap();
+        });
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("csrf_mode=\"header_presence_only\""));
     }
 }

@@ -54,6 +54,11 @@ without a CSRF config fails to `build()`. Override the default with
 `.csrf_protection(...)` if you need a session-bound token or a custom header, but
 there is deliberately no builder path to cookie auth without CSRF.
 
+`CsrfConfig` also offers two weaker modes, `dangerous_header_presence_only(...)`
+and `dangerous_static_value(...)`. They are named that way on purpose: neither
+binds the CSRF token to the session, and pairing either with cookie auth emits a
+`tracing::warn!` at startup. Prefer the default double-submit cookie.
+
 CSRF is enforced only for cookie credentials on unsafe methods (`POST`, `PUT`,
 `PATCH`, `DELETE`). Bearer tokens and safe methods remain exempt.
 

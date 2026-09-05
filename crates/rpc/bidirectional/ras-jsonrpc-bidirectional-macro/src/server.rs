@@ -137,11 +137,17 @@ pub fn generate_server_code(
                             .ok_or_else(|| ras_jsonrpc_bidirectional_server::ServerError::AuthenticationFailed(ras_auth_core::AuthError::InvalidToken))?;
 
                         // OR-of-AND permission check against the cached
-                        // connection user (shared ras-auth-core implementation)
+                        // connection user, routed through the auth provider
+                        // when one is attached (W5)
                         let required_permission_groups: Vec<Vec<String>> = #permission_groups_code;
-                        if !ras_auth_core::user_satisfies_permission_groups(user.as_ref(), &required_permission_groups) {
+                        if !self.permission_check_passes(user.as_ref(), &required_permission_groups) {
+                            let required = required_permission_groups
+                                .iter()
+                                .find(|group| !group.is_empty())
+                                .cloned()
+                                .unwrap_or_default();
                             let error_response = ras_jsonrpc_types::JsonRpcResponse::error(
-                                ras_jsonrpc_types::JsonRpcError::new(-32002, "Insufficient permissions".to_string(), None),
+                                ras_jsonrpc_types::JsonRpcError::insufficient_permissions(required),
                                 request.id.clone()
                             );
                             return Ok(Some(error_response));
@@ -349,6 +355,10 @@ pub fn generate_server_code(
         pub struct #handler_name<T: #service_trait_name, M: ras_jsonrpc_bidirectional_types::ConnectionManager + 'static> {
             service: std::sync::Arc<T>,
             connection_manager: std::sync::Arc<M>,
+            /// Provider whose `check_permissions` decides WITH_PERMISSIONS
+            /// methods. Without one the handler falls back to plain
+            /// set-membership against the cached connection user.
+            auth_provider: Option<std::sync::Arc<dyn ras_auth_core::AuthProvider>>,
         }
 
         impl<T: #service_trait_name, M: ras_jsonrpc_bidirectional_types::ConnectionManager + 'static> #handler_name<T, M> {
@@ -356,7 +366,24 @@ pub fn generate_server_code(
                 service: std::sync::Arc<T>,
                 connection_manager: std::sync::Arc<M>,
             ) -> Self {
-                Self { service, connection_manager }
+                Self { service, connection_manager, auth_provider: None }
+            }
+
+            /// Route WITH_PERMISSIONS checks through this provider's
+            /// `check_permissions`, so custom permission semantics (wildcards,
+            /// hierarchies, dynamic denies) apply over WebSocket exactly as
+            /// they do over REST and JSON-RPC. The generated builder sets this
+            /// automatically; call it when constructing the handler by hand.
+            pub fn with_auth_provider(mut self, auth_provider: std::sync::Arc<dyn ras_auth_core::AuthProvider>) -> Self {
+                self.auth_provider = Some(auth_provider);
+                self
+            }
+
+            fn permission_check_passes(&self, user: &ras_auth_core::AuthenticatedUser, groups: &[Vec<String>]) -> bool {
+                match &self.auth_provider {
+                    Some(provider) => ras_auth_core::check_permission_groups(provider.as_ref(), user, groups).is_ok(),
+                    None => ras_auth_core::user_satisfies_permission_groups(user, groups),
+                }
             }
 
             /// Get a typed client handle for a connection
@@ -467,10 +494,12 @@ pub fn generate_server_code(
                 use ras_jsonrpc_bidirectional_server::DefaultConnectionManager;
 
                 let connection_manager = std::sync::Arc::new(DefaultConnectionManager::new());
+                let auth_provider_dyn: std::sync::Arc<dyn ras_auth_core::AuthProvider> = self.auth_provider.clone();
                 let handler = #handler_name::new(
                     self.service.clone(),
                     connection_manager.clone(),
-                );
+                )
+                .with_auth_provider(auth_provider_dyn);
 
                 let builder = ras_jsonrpc_bidirectional_server::WebSocketServiceBuilder::builder()
                     .handler(std::sync::Arc::new(handler))

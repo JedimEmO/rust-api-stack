@@ -18,7 +18,7 @@ client = ["ras-jsonrpc-macro/reqwest", "ras-transport-core/reqwest"]
 [dependencies]
 anyhow = { workspace = true }
 axum = { workspace = true }
-ras-auth-core = { path = "../../../../crates/core/ras-auth-core", version = "0.2.0" }
+ras-auth-core = { path = "../../../../crates/core/ras-auth-core", version = "0.3.0" }
 ras-transport-core = { path = "../../../../crates/core/ras-transport-core", version = "0.1.0" }
 ras-jsonrpc-core = { path = "../../../../crates/rpc/ras-jsonrpc-core", version = "0.2.0" }
 ras-jsonrpc-macro = { path = "../../../../crates/rpc/ras-jsonrpc-macro", version = "0.3.0", default-features = false }

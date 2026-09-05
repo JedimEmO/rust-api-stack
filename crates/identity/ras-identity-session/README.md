@@ -32,13 +32,18 @@ provider
     )
     .await?;
 
+// `iss`/`aud` are required so tokens minted for another service sharing the
+// secret are rejected here. Opt out with `.allow_unscoped_tokens()` only for a
+// single-service deployment.
+let session_config = SessionConfig::new(
+    "fd2f56e597efef86b80c5484eb5247f4139b33bcdcb60dab", // openssl rand -hex 32
+    "my-service",                                        // iss
+    "my-service",                                        // aud
+)?;
 let session_service = Arc::new(SessionService::new(SessionConfig {
-    jwt_secret: "use-at-least-32-bytes-of-random-secret".to_string(),
     jwt_ttl: Duration::hours(1),
-    enforce_active_sessions: true,
     algorithm: JwtAlgorithm::HS256,
-    iss: None,
-    aud: None,
+    ..session_config
 })?);
 
 session_service.register_provider(Box::new(provider)).await;
@@ -76,15 +81,18 @@ session_service.end_session(&claims.jti).await;
 Generated tokens include:
 
 - `sub`: identity subject
-- `exp` and `iat`: expiration and issue timestamps
+- `exp` and `iat`: expiration and issue timestamps (an `iat`, or optional `nbf`, more than 60 s in the future is rejected)
+- `iss` and `aud`: issuer and audience, verified on every call
 - `jti`: session identifier used for revocation
 - `provider_id`: identity provider that verified the user
 - `email`, `display_name`, `permissions`, and provider metadata when available
 
 ## Security Notes
 
-- Use a high-entropy `jwt_secret` of at least 32 bytes.
-- Keep `enforce_active_sessions` enabled when immediate revocation matters.
+- Use a high-entropy `jwt_secret` of at least 32 bytes (`openssl rand -hex 32`). Validation rejects secrets with fewer than 10 distinct byte values, a run of 8+ identical bytes, or placeholder words such as `secret`, `password`, `example`, `change-me`.
+- `iss` and `aud` are required by default. Call `allow_unscoped_tokens()` only for a single-service deployment whose secret is never shared.
+- Keep `enforce_active_sessions` enabled when immediate revocation matters, and start `start_cleanup_task` so expired sessions are swept during traffic lulls (otherwise they are pruned lazily, at most once a minute, on `begin_session`/`verify_session`).
+- Each user holds at most `max_sessions_per_user` (default 32) active sessions; the oldest is evicted when a new login exceeds the cap.
 - Refresh tokens are not issued by `SessionService`; implement refresh-token storage and rotation at the application layer if needed.
 - Transmit JWTs only over HTTPS in production.
 

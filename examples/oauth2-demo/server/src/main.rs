@@ -174,11 +174,15 @@ fn create_oauth2_provider(config: &AppConfig) -> Result<OAuth2Provider> {
         },
         use_pkce: true,
         user_info_mapping: None,
+        metadata_claims: Vec::new(),
+        allow_insecure_endpoints: false,
     };
 
     let state_store = Arc::new(InMemoryStateStore::new());
     let mut provider = OAuth2Provider::new(oauth2_config, state_store);
-    provider.add_provider(google_config);
+    provider
+        .add_provider(google_config)
+        .map_err(anyhow::Error::from)?;
 
     Ok(provider)
 }
@@ -191,8 +195,10 @@ fn create_session_service(config: &AppConfig) -> Result<SessionService> {
         // Enabled so logout/revocation actually invalidates a session (H4).
         enforce_active_sessions: true,
         algorithm: JwtAlgorithm::HS256,
-        iss: None,
-        aud: None,
+        iss: Some("oauth2-demo".to_string()),
+        aud: Some("oauth2-demo".to_string()),
+        require_iss_aud: true,
+        max_sessions_per_user: ras_identity_session::DEFAULT_MAX_SESSIONS_PER_USER,
     };
 
     let permissions_provider = Arc::new(GoogleOAuth2Permissions::new());
@@ -275,10 +281,6 @@ async fn oauth2_callback_handler(
         return Ok((response_headers, Redirect::to("/error")));
     }
 
-    let code = callback_query
-        .code
-        .ok_or_else(|| "Missing authorization code in callback".to_string())?;
-
     let state_param = callback_query
         .state
         .ok_or_else(|| "Missing state parameter in callback".to_string())?;
@@ -289,7 +291,8 @@ async fn oauth2_callback_handler(
     // Complete the OAuth2 flow
     let auth_payload = OAuth2AuthPayload::Callback {
         provider_id: "google".to_string(),
-        code,
+        // Optional: the provider validates that either code or error is present.
+        code: callback_query.code,
         state: state_param,
         error: callback_query.error,
         error_description: callback_query.error_description,

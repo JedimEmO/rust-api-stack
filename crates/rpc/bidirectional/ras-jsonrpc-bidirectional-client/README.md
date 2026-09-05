@@ -116,7 +116,6 @@ use std::time::Duration;
 
 let client = ClientBuilder::new("wss://api.example.com/ws")
     .with_jwt_token("demo-token".to_string())
-    .with_jwt_in_header(true)
     .with_header("User-Agent", "MyApp/1.0")
     .with_request_timeout(Duration::from_secs(30))
     .with_connection_timeout(Duration::from_secs(10))
@@ -129,23 +128,21 @@ let client = ClientBuilder::new("wss://api.example.com/ws")
 
 The client supports multiple authentication methods:
 
-### JWT in Authorization Header
+### JWT
 ```rust
 let client = ClientBuilder::new("ws://localhost:8080/ws")
     .with_jwt_token("demo-token".to_string())
-    .with_jwt_in_header(true)  // Default
     .build()
     .await?;
 ```
 
-### JWT as Connection Parameter
-```rust
-let client = ClientBuilder::new("ws://localhost:8080/ws")
-    .with_jwt_token("demo-token".to_string())
-    .with_jwt_in_header(false)
-    .build()
-    .await?;
-```
+On native targets the token is sent as `Authorization: Bearer <token>`. In
+the browser (`wasm` feature), where a WebSocket cannot carry headers, the
+client offers the subprotocols `ras-jsonrpc` and `token.<jwt>`; the bundled
+server reads the token from the second and selects the first, so the token is
+never echoed back. Tokens are never placed in the URL: query strings end up in
+proxy logs, browser history and tracing spans, and the server does not accept
+them there.
 
 ### Custom Headers
 ```rust

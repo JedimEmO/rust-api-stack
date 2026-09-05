@@ -5,8 +5,8 @@ use crate::{
     ServerResult, WebSocketHandler, WebSocketUpgrade,
     connection::ChannelMessageSender,
     handler::{
-        AuthRevalidation, AxumWebSocketIo, DEFAULT_AUTH_REVALIDATION_INTERVAL, WebSocketIo,
-        WebSocketIoMessage,
+        AuthRevalidation, AxumWebSocketIo, DEFAULT_AUTH_REVALIDATION_INTERVAL, KeepaliveConfig,
+        PermissionChangePolicy, SubscriptionLimits, WebSocketIo, WebSocketIoMessage,
     },
 };
 use axum::{
@@ -68,9 +68,25 @@ pub trait WebSocketService: Clone + Send + Sync + 'static {
     /// Maximum simultaneous connections; further upgrades are refused.
     ///
     /// The check is advisory (checked-then-added, not atomic), so a burst
-    /// can briefly overshoot by a few connections.
+    /// can briefly overshoot by a few connections. Unbounded by default;
+    /// production deployments should set a cap.
     fn max_connections(&self) -> Option<usize> {
         None
+    }
+
+    /// Limits on client-initiated subscriptions.
+    fn subscription_limits(&self) -> SubscriptionLimits {
+        SubscriptionLimits::default()
+    }
+
+    /// Server-side ping interval and idle timeout.
+    fn keepalive(&self) -> KeepaliveConfig {
+        KeepaliveConfig::default()
+    }
+
+    /// What to do when a connection's permissions change on re-validation.
+    fn on_permission_change(&self) -> PermissionChangePolicy {
+        PermissionChangePolicy::default()
     }
 
     /// Handle WebSocket upgrade
@@ -94,6 +110,15 @@ pub trait WebSocketService: Clone + Send + Sync + 'static {
             }
         }
 
+        // Enforce the message limit at the transport so an oversized frame is
+        // rejected before it is buffered, not after (W2).
+        let max_message_size = self.max_message_size();
+        let upgrade = upgrade
+            .max_message_size(max_message_size)
+            .max_frame_size(max_message_size)
+            // Select the real subprotocol so browsers that also offered
+            // `token.<jwt>` accept the upgrade without the token being echoed.
+            .protocols([crate::upgrade::WS_SUBPROTOCOL]);
         let ws_upgrade = WebSocketUpgrade::new(upgrade, headers);
         // Captured pre-upgrade so the connection can periodically re-validate it.
         let auth_token = ws_upgrade.extract_auth_token();
@@ -197,12 +222,16 @@ where
         .await
         .map_err(ServerError::ConnectionError)?;
 
+    let manager: Arc<dyn ConnectionManager> = service.connection_manager();
     let mut handler = WebSocketHandler::new(
         service.handler(),
         context.clone(),
         message_rx,
         service.max_message_size(),
-    );
+    )
+    .with_connection_manager(manager)
+    .with_subscription_limits(service.subscription_limits())
+    .with_keepalive(service.keepalive());
 
     // Authenticated connections re-validate their token periodically so
     // revocation/expiry takes effect without waiting for a disconnect.
@@ -211,6 +240,7 @@ where
             auth_provider: service.auth_provider(),
             token,
             interval: service.auth_revalidation_interval(),
+            on_permission_change: service.on_permission_change(),
         });
     }
 
@@ -250,6 +280,15 @@ pub struct WebSocketServiceBuilder<H, A, M = DefaultConnectionManager> {
     auth_revalidation_interval: Duration,
     /// Maximum simultaneous connections (None = unbounded)
     max_connections: Option<usize>,
+    /// Limits on client-initiated subscriptions
+    #[builder(default)]
+    subscription_limits: SubscriptionLimits,
+    /// Server-side ping interval and idle timeout
+    #[builder(default)]
+    keepalive: KeepaliveConfig,
+    /// Policy when permissions change on re-validation
+    #[builder(default)]
+    on_permission_change: PermissionChangePolicy,
 }
 
 impl<H, A> WebSocketServiceBuilder<H, A, DefaultConnectionManager>
@@ -270,6 +309,9 @@ where
             max_message_size: self.max_message_size,
             auth_revalidation_interval: self.auth_revalidation_interval,
             max_connections: self.max_connections,
+            subscription_limits: self.subscription_limits,
+            keepalive: self.keepalive,
+            on_permission_change: self.on_permission_change,
         }
     }
 }
@@ -291,6 +333,9 @@ where
             max_message_size: self.max_message_size,
             auth_revalidation_interval: self.auth_revalidation_interval,
             max_connections: self.max_connections,
+            subscription_limits: self.subscription_limits,
+            keepalive: self.keepalive,
+            on_permission_change: self.on_permission_change,
         }
     }
 }
@@ -305,6 +350,9 @@ pub struct BuiltWebSocketService<H, A, M> {
     max_message_size: usize,
     auth_revalidation_interval: Duration,
     max_connections: Option<usize>,
+    subscription_limits: SubscriptionLimits,
+    keepalive: KeepaliveConfig,
+    on_permission_change: PermissionChangePolicy,
 }
 
 impl<H, A, M> Clone for BuiltWebSocketService<H, A, M> {
@@ -318,6 +366,9 @@ impl<H, A, M> Clone for BuiltWebSocketService<H, A, M> {
             max_message_size: self.max_message_size,
             auth_revalidation_interval: self.auth_revalidation_interval,
             max_connections: self.max_connections,
+            subscription_limits: self.subscription_limits,
+            keepalive: self.keepalive,
+            on_permission_change: self.on_permission_change,
         }
     }
 }
@@ -362,6 +413,18 @@ where
 
     fn max_connections(&self) -> Option<usize> {
         self.max_connections
+    }
+
+    fn subscription_limits(&self) -> SubscriptionLimits {
+        self.subscription_limits
+    }
+
+    fn keepalive(&self) -> KeepaliveConfig {
+        self.keepalive
+    }
+
+    fn on_permission_change(&self) -> PermissionChangePolicy {
+        self.on_permission_change
     }
 }
 

@@ -33,16 +33,16 @@ serde_json = { workspace = true }
 schemars = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
-ras-jsonrpc-bidirectional-macro = { path = "../../../crates/rpc/bidirectional/ras-jsonrpc-bidirectional-macro", version = "0.2.0", default-features = false, features = ["permissions"] }
+ras-jsonrpc-bidirectional-macro = { path = "../../../crates/rpc/bidirectional/ras-jsonrpc-bidirectional-macro", version = "0.2.1", default-features = false, features = ["permissions"] }
 ras-jsonrpc-bidirectional-types = { path = "../../../crates/rpc/bidirectional/ras-jsonrpc-bidirectional-types", version = "0.2.0" }
-ras-jsonrpc-bidirectional-server = { path = "../../../crates/rpc/bidirectional/ras-jsonrpc-bidirectional-server", version = "0.2.0", optional = true }
-ras-jsonrpc-bidirectional-client = { path = "../../../crates/rpc/bidirectional/ras-jsonrpc-bidirectional-client", version = "0.2.0", optional = true }
+ras-jsonrpc-bidirectional-server = { path = "../../../crates/rpc/bidirectional/ras-jsonrpc-bidirectional-server", version = "0.3.0", optional = true }
+ras-jsonrpc-bidirectional-client = { path = "../../../crates/rpc/bidirectional/ras-jsonrpc-bidirectional-client", version = "0.3.0", optional = true }
 ras-permission-manifest = { path = "../../../crates/specs/ras-permission-manifest", version = "0.1.0" }
-ras-auth-core = { path = "../../../crates/core/ras-auth-core", version = "0.2.0" }
+ras-auth-core = { path = "../../../crates/core/ras-auth-core", version = "0.3.0" }
 ras-rest-core = { path = "../../../crates/rest/ras-rest-core", version = "0.2.0" }
 ras-transport-core = { path = "../../../crates/core/ras-transport-core", version = "0.1.0" }
 ras-jsonrpc-types = { path = "../../../crates/rpc/ras-jsonrpc-types", version = "0.2.0" }
-ras-rest-macro = { path = "../../../crates/rest/ras-rest-macro", version = "0.3.0", default-features = false, features = ["permissions"] }
+ras-rest-macro = { path = "../../../crates/rest/ras-rest-macro", version = "0.3.1", default-features = false, features = ["permissions"] }
 reqwest = { workspace = true, features = ["json"] }
 tracing = { workspace = true }
 axum = { workspace = true, optional = true }

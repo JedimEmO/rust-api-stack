@@ -68,7 +68,7 @@ This example demonstrates how several Rust Agent Stack components fit together:
    GOOGLE_CLIENT_ID=000000000000-example.apps.googleusercontent.com
    GOOGLE_CLIENT_SECRET=GOCSPX-local-demo-secret
    REDIRECT_URI=http://localhost:3000/auth/callback
-   JWT_SECRET=oauth2-demo-local-secret-at-least-32-bytes
+   JWT_SECRET=2fb8fe6949e27ef7df9919203cb2fe10160dabc5f48b655c  # generate your own: openssl rand -hex 32
    ```
 
 ### 3. Run the Application

@@ -158,7 +158,7 @@ Create a `.env` file in the directory you run the server from. For workspace
 root commands, use paths relative to the repository root:
 ```env
 # Core settings
-JWT_SECRET=change-this-to-at-least-32-random-bytes
+JWT_SECRET=2d3d78881c4b8eb6816b66cb08abe3e4a2819c56449df210  # generate your own: openssl rand -hex 32
 HOST=0.0.0.0
 PORT=3000
 CHAT_CONFIG_FILE=examples/bidirectional-chat/server/config.toml
@@ -176,8 +176,9 @@ CHAT__ADMIN__USERS__0__USERNAME=admin
 CHAT__ADMIN__USERS__0__PASSWORD=secure_password
 ```
 
-`JWT_SECRET` must be at least 32 bytes. Generate a random value for shared
-or long-running environments.
+`JWT_SECRET` must be at least 32 random bytes (`openssl rand -hex 32`);
+placeholder words such as `secret` or `password` are rejected at startup.
+Generate a fresh value for shared or long-running environments.
 
 Nested values use the `CHAT__SECTION__FIELD` form, for example
 `CHAT__SERVER__CORS__ALLOW_ANY_ORIGIN=false`. See

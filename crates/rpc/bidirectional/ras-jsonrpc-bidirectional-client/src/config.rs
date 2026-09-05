@@ -10,14 +10,35 @@ pub enum AuthConfig {
     /// No authentication
     #[default]
     None,
-    /// JWT token sent in Authorization header
+    /// JWT token sent in the `Authorization` header (native) or as the
+    /// `token.<jwt>` WebSocket subprotocol (browsers, which cannot set
+    /// headers). Tokens are never placed in the URL: URLs land in proxy logs,
+    /// browser history and tracing spans.
     JwtHeader { token: String },
-    /// JWT token sent as a connection parameter
-    JwtParams { token: String },
     /// Custom headers
     CustomHeaders { headers: HashMap<String, String> },
-    /// Custom connection parameters
+    /// Custom connection parameters (percent-encoded into the query string).
+    /// Not for credentials; see `JwtHeader`.
     CustomParams { params: HashMap<String, String> },
+}
+
+/// Subprotocol the bundled server selects on upgrade.
+pub const WS_SUBPROTOCOL: &str = "ras-jsonrpc";
+/// Prefix of the pseudo-subprotocol that carries a bearer token from browsers.
+pub const WS_TOKEN_SUBPROTOCOL_PREFIX: &str = "token.";
+
+/// Percent-encode a query key or value (RFC 3986 unreserved set kept as-is).
+fn percent_encode(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for byte in input.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
 }
 
 /// Reconnection retry-policy configuration.
@@ -150,24 +171,35 @@ impl ClientConfig {
         }
     }
 
-    /// Get the WebSocket URL with authentication parameters if needed
+    /// Get the WebSocket URL with custom connection parameters if configured
     pub fn get_connection_url(&self) -> String {
         match &self.auth {
-            AuthConfig::JwtParams { token } => {
-                let separator = if self.url.contains('?') { "&" } else { "?" };
-                format!("{}{}token={}", self.url, separator, token)
-            }
             AuthConfig::CustomParams { params } => {
                 let separator = if self.url.contains('?') { "&" } else { "?" };
-                let param_string = params
+                let mut entries: Vec<_> = params.iter().collect();
+                entries.sort();
+                let param_string = entries
                     .iter()
-                    .map(|(k, v)| format!("{}={}", k, v))
+                    .map(|(k, v)| format!("{}={}", percent_encode(k), percent_encode(v)))
                     .collect::<Vec<_>>()
                     .join("&");
                 format!("{}{}{}", self.url, separator, param_string)
             }
             _ => self.url.clone(),
         }
+    }
+
+    /// Subprotocols to offer on upgrade.
+    ///
+    /// Always offers [`WS_SUBPROTOCOL`]; with `JwtHeader` auth it also offers
+    /// `token.<jwt>`, the only way a browser can present a bearer token. The
+    /// server selects `ras-jsonrpc`, so the token is not echoed back.
+    pub fn get_subprotocols(&self) -> Vec<String> {
+        let mut protocols = vec![WS_SUBPROTOCOL.to_string()];
+        if let AuthConfig::JwtHeader { token } = &self.auth {
+            protocols.push(format!("{WS_TOKEN_SUBPROTOCOL_PREFIX}{token}"));
+        }
+        protocols
     }
 
     /// Get connection headers including authentication if needed
@@ -304,17 +336,19 @@ mod tests {
     }
 
     #[test]
-    fn test_client_config_connection_url() {
+    fn c1_jwt_never_appears_in_connection_url() {
         let config = ClientConfig {
-            url: "ws://localhost:8080/ws".to_string(),
-            auth: AuthConfig::JwtParams {
+            auth: AuthConfig::JwtHeader {
                 token: "test_token".to_string(),
             },
             ..ClientConfig::new("ws://localhost:8080/ws")
         };
 
-        let url = config.get_connection_url();
-        assert_eq!(url, "ws://localhost:8080/ws?token=test_token");
+        assert_eq!(config.get_connection_url(), "ws://localhost:8080/ws");
+        assert_eq!(
+            config.get_subprotocols(),
+            vec!["ras-jsonrpc".to_string(), "token.test_token".to_string()]
+        );
     }
 
     #[test]
@@ -379,26 +413,28 @@ mod tests {
 
     #[test]
     fn connection_url_appends_amp_when_query_already_present() {
-        let cfg = ClientConfig {
-            auth: AuthConfig::JwtParams {
-                token: "tok".into(),
-            },
-            ..ClientConfig::new("ws://h/ws?x=1")
-        };
-        assert_eq!(cfg.get_connection_url(), "ws://h/ws?x=1&token=tok");
-    }
-
-    #[test]
-    fn connection_url_with_custom_params() {
         let mut params = HashMap::new();
         params.insert("foo".to_string(), "bar".to_string());
         let cfg = ClientConfig {
             auth: AuthConfig::CustomParams { params },
+            ..ClientConfig::new("ws://h/ws?x=1")
+        };
+        assert_eq!(cfg.get_connection_url(), "ws://h/ws?x=1&foo=bar");
+    }
+
+    #[test]
+    fn c2_custom_params_are_percent_encoded() {
+        let mut params = HashMap::new();
+        params.insert("a b".to_string(), "x&y=z/é".to_string());
+        params.insert("plain".to_string(), "ok".to_string());
+        let cfg = ClientConfig {
+            auth: AuthConfig::CustomParams { params },
             ..ClientConfig::new("ws://h/ws")
         };
-        let url = cfg.get_connection_url();
-        assert!(url.starts_with("ws://h/ws?"));
-        assert!(url.contains("foo=bar"));
+        assert_eq!(
+            cfg.get_connection_url(),
+            "ws://h/ws?a%20b=x%26y%3Dz%2F%C3%A9&plain=ok"
+        );
     }
 
     #[test]

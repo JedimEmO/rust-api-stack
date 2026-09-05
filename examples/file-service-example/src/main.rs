@@ -330,7 +330,7 @@ mod tests {
         assert_eq!(response.headers["content-type"], "text/plain");
         assert_eq!(
             response.headers["content-disposition"],
-            "attachment; filename=\"test123.txt\""
+            "attachment; filename=\"test123.txt\"; filename*=UTF-8''test123.txt"
         );
         assert_eq!(body_bytes(response), b"File content for test123");
     }
@@ -373,7 +373,7 @@ mod tests {
         assert_eq!(response.headers()["content-type"], "text/plain");
         assert_eq!(
             response.headers()["content-disposition"],
-            "attachment; filename=\"test123.txt\""
+            "attachment; filename=\"test123.txt\"; filename*=UTF-8''test123.txt"
         );
         assert_eq!(response.text(), "File content for test123");
     }

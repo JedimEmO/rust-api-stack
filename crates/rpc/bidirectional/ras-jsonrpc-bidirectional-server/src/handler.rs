@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use futures::stream::StreamExt;
 use ras_auth_core::AuthProvider;
-use ras_jsonrpc_bidirectional_types::BidirectionalMessage;
+use ras_jsonrpc_bidirectional_types::{BidirectionalMessage, ConnectionManager};
 use ras_jsonrpc_types::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, error_codes};
 use std::sync::Arc;
 use std::time::Duration;
@@ -195,6 +195,73 @@ pub struct AuthRevalidation {
     pub token: String,
     /// How often to re-validate
     pub interval: Duration,
+    /// What to do when re-validation succeeds but the permission set changed
+    pub on_permission_change: PermissionChangePolicy,
+}
+
+/// Policy applied when a live connection's permissions change on
+/// re-validation (W1).
+///
+/// In both modes every held subscription is re-run through
+/// [`MessageHandler::authorize_subscribe`] against the refreshed user and
+/// topics that are no longer authorized are dropped, so a downgraded
+/// connection stops receiving topic broadcasts within one interval.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PermissionChangePolicy {
+    /// Keep the socket open and silently drop subscriptions that are no
+    /// longer authorized.
+    #[default]
+    DropSubscriptions,
+    /// Close the socket so the client must reconnect and re-authenticate.
+    Close,
+}
+
+/// Limits on client-initiated subscriptions (W3).
+///
+/// Enforced by the handler loop before [`MessageHandler::handle_subscribe`]
+/// runs, so services never see an over-limit request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SubscriptionLimits {
+    /// Maximum topics in one `Subscribe`/`Unsubscribe` message
+    pub max_topics_per_message: usize,
+    /// Maximum concurrent subscriptions held by one connection
+    pub max_topics_per_connection: usize,
+    /// Maximum topic name length in bytes
+    pub max_topic_length: usize,
+}
+
+impl Default for SubscriptionLimits {
+    fn default() -> Self {
+        Self {
+            max_topics_per_message: 64,
+            max_topics_per_connection: 256,
+            max_topic_length: 256,
+        }
+    }
+}
+
+/// Server-side keepalive for a connection (W4).
+///
+/// The server sends a WebSocket ping every `ping_interval`; browsers and
+/// tungstenite answer pings automatically, and any inbound frame (including
+/// the pong) resets the idle clock. A connection that stays silent for
+/// `idle_timeout` is closed, so half-open sockets are reclaimed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeepaliveConfig {
+    /// Interval between server-initiated pings (`None` disables pings)
+    pub ping_interval: Option<Duration>,
+    /// Close the socket after this long without any inbound frame
+    /// (`None` disables the idle timeout)
+    pub idle_timeout: Option<Duration>,
+}
+
+impl Default for KeepaliveConfig {
+    fn default() -> Self {
+        Self {
+            ping_interval: Some(Duration::from_secs(30)),
+            idle_timeout: Some(Duration::from_secs(90)),
+        }
+    }
 }
 
 /// WebSocket connection handler that manages the message flow
@@ -208,6 +275,11 @@ pub struct WebSocketHandler<H: MessageHandler> {
     max_message_size: usize,
     /// Optional periodic credential re-validation
     auth_revalidation: Option<AuthRevalidation>,
+    /// Connection manager whose topic index mirrors this connection's
+    /// subscriptions (None when running without a manager, e.g. unit tests)
+    connection_manager: Option<Arc<dyn ConnectionManager>>,
+    subscription_limits: SubscriptionLimits,
+    keepalive: KeepaliveConfig,
 }
 
 impl<H: MessageHandler> WebSocketHandler<H> {
@@ -224,6 +296,9 @@ impl<H: MessageHandler> WebSocketHandler<H> {
             message_rx,
             max_message_size,
             auth_revalidation: None,
+            connection_manager: None,
+            subscription_limits: SubscriptionLimits::default(),
+            keepalive: KeepaliveConfig::default(),
         }
     }
 
@@ -231,6 +306,121 @@ impl<H: MessageHandler> WebSocketHandler<H> {
     pub fn with_auth_revalidation(mut self, revalidation: AuthRevalidation) -> Self {
         self.auth_revalidation = Some(revalidation);
         self
+    }
+
+    /// Mirror this connection's subscriptions and user into the manager so
+    /// topic broadcasts and revocation see the same state.
+    pub fn with_connection_manager(mut self, manager: Arc<dyn ConnectionManager>) -> Self {
+        self.connection_manager = Some(manager);
+        self
+    }
+
+    /// Override the default subscription limits.
+    pub fn with_subscription_limits(mut self, limits: SubscriptionLimits) -> Self {
+        self.subscription_limits = limits;
+        self
+    }
+
+    /// Override the default keepalive settings.
+    pub fn with_keepalive(mut self, keepalive: KeepaliveConfig) -> Self {
+        self.keepalive = keepalive;
+        self
+    }
+
+    /// Re-run authentication and re-authorize every held subscription.
+    ///
+    /// Returns `Ok(true)` to keep the connection, `Ok(false)` to close it.
+    async fn revalidate_credentials(&mut self) -> ServerResult<bool> {
+        let revalidation = self
+            .auth_revalidation
+            .as_ref()
+            .expect("revalidation timer implies config");
+        let user = match revalidation
+            .auth_provider
+            .authenticate(revalidation.token.clone())
+            .await
+        {
+            Ok(user) => user,
+            Err(e) => {
+                warn!(
+                    "Closing connection {}: credential re-validation failed: {}",
+                    self.context.id, e
+                );
+                return Ok(false);
+            }
+        };
+
+        let previous = self.context.get_user().await;
+        let permissions_changed = previous
+            .as_ref()
+            .map(|prev| prev.permissions != user.permissions || prev.user_id != user.user_id)
+            .unwrap_or(true);
+
+        // Refresh cached identity/permissions in both stores
+        self.context.set_user(user.clone()).await;
+        if let Some(manager) = &self.connection_manager {
+            let _ = manager.set_connection_user(self.context.id, user).await;
+        }
+
+        if permissions_changed && revalidation.on_permission_change == PermissionChangePolicy::Close
+        {
+            warn!(
+                "Closing connection {}: permissions changed on re-validation",
+                self.context.id
+            );
+            return Ok(false);
+        }
+
+        // Re-authorize held subscriptions against the refreshed user (W1)
+        for topic in self.context.get_subscriptions().await {
+            if !self
+                .handler
+                .authorize_subscribe(&topic, &self.context)
+                .await?
+            {
+                warn!(
+                    "Dropping subscription to '{}' on connection {}: no longer authorized",
+                    topic, self.context.id
+                );
+                self.context.unsubscribe(&topic).await;
+                if let Some(manager) = &self.connection_manager {
+                    let _ = manager.remove_subscription(self.context.id, &topic).await;
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    /// Validate a subscribe/unsubscribe request against the configured limits.
+    fn check_subscription_limits(&self, topics: &[String]) -> Result<(), &'static str> {
+        let limits = &self.subscription_limits;
+        if topics.len() > limits.max_topics_per_message {
+            return Err("too many topics in one message");
+        }
+        if topics
+            .iter()
+            .any(|topic| topic.len() > limits.max_topic_length || topic.is_empty())
+        {
+            return Err("topic name length out of range");
+        }
+        Ok(())
+    }
+
+    /// Push subscription changes made by the handler into the manager's
+    /// topic index so `broadcast_to_topic` sees them.
+    async fn sync_subscriptions(&self, before: &[String]) {
+        let Some(manager) = &self.connection_manager else {
+            return;
+        };
+        let after = self.context.get_subscriptions().await;
+        for topic in after.iter().filter(|t| !before.contains(t)) {
+            let _ = manager
+                .add_subscription(self.context.id, topic.clone())
+                .await;
+        }
+        for topic in before.iter().filter(|t| !after.contains(t)) {
+            let _ = manager.remove_subscription(self.context.id, topic).await;
+        }
     }
 
     /// Run the WebSocket handler loop
@@ -276,6 +466,16 @@ impl<H: MessageHandler> WebSocketHandler<H> {
             timer
         });
 
+        let mut ping_timer = self.keepalive.ping_interval.map(|interval| {
+            let mut timer =
+                tokio::time::interval_at(tokio::time::Instant::now() + interval, interval);
+            timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            timer
+        });
+        let idle_timeout = self.keepalive.idle_timeout;
+        let idle_deadline = tokio::time::sleep(idle_timeout.unwrap_or(Duration::from_secs(0)));
+        tokio::pin!(idle_deadline);
+
         // Main message handling loop
         loop {
             tokio::select! {
@@ -284,24 +484,9 @@ impl<H: MessageHandler> WebSocketHandler<H> {
                 _ = async { revalidation_timer.as_mut().expect("guarded by is_some").tick().await },
                     if revalidation_timer.is_some() =>
                 {
-                    let revalidation = self
-                        .auth_revalidation
-                        .as_ref()
-                        .expect("revalidation timer implies config");
-                    match revalidation
-                        .auth_provider
-                        .authenticate(revalidation.token.clone())
-                        .await
-                    {
-                        Ok(user) => {
-                            // Refresh cached identity/permissions
-                            self.context.set_user(user).await;
-                        }
-                        Err(e) => {
-                            warn!(
-                                "Closing connection {}: credential re-validation failed: {}",
-                                self.context.id, e
-                            );
+                    match self.revalidate_credentials().await {
+                        Ok(true) => {}
+                        Ok(false) => {
                             let _ = socket
                                 .send(WebSocketIoMessage::Close(Some(
                                     "credentials no longer valid".to_string(),
@@ -309,11 +494,43 @@ impl<H: MessageHandler> WebSocketHandler<H> {
                                 .await;
                             break;
                         }
+                        Err(e) => {
+                            error!("Error re-authorizing subscriptions: {}", e);
+                            break;
+                        }
                     }
+                }
+
+                // Server-initiated keepalive ping
+                _ = async { ping_timer.as_mut().expect("guarded by is_some").tick().await },
+                    if ping_timer.is_some() =>
+                {
+                    if let Err(e) = socket.send(WebSocketIoMessage::Ping(Vec::new())).await {
+                        error!("Error sending keepalive ping: {}", e);
+                        break;
+                    }
+                }
+
+                // Idle timeout: no inbound frame for the configured period
+                _ = &mut idle_deadline, if idle_timeout.is_some() => {
+                    warn!(
+                        "Closing connection {}: idle for {:?}",
+                        self.context.id,
+                        idle_timeout.expect("guarded")
+                    );
+                    let _ = socket
+                        .send(WebSocketIoMessage::Close(Some("idle timeout".to_string())))
+                        .await;
+                    break;
                 }
 
                 // Handle incoming WebSocket messages
                 msg = socket.recv() => {
+                    if let Some(timeout) = idle_timeout {
+                        idle_deadline
+                            .as_mut()
+                            .reset(tokio::time::Instant::now() + timeout);
+                    }
                     match msg {
                         Some(Ok(msg)) => {
                             if let Err(e) = self.handle_websocket_message(msg, socket).await {
@@ -466,14 +683,45 @@ impl<H: MessageHandler> WebSocketHandler<H> {
                 self.handle_jsonrpc_request(request, _socket).await
             }
             BidirectionalMessage::Subscribe { topics } => {
+                let before = self.context.get_subscriptions().await;
+                let limit_error = self.check_subscription_limits(&topics).err().or_else(|| {
+                    let new = topics.iter().filter(|t| !before.contains(t)).count();
+                    (before.len() + new > self.subscription_limits.max_topics_per_connection)
+                        .then_some("subscription limit for this connection reached")
+                });
+                if let Some(reason) = limit_error {
+                    warn!(
+                        "Rejected subscribe on connection {}: {}",
+                        self.context.id, reason
+                    );
+                    let response = JsonRpcResponse::error(
+                        JsonRpcError::invalid_params(reason.to_string()),
+                        None,
+                    );
+                    return self
+                        .send_message(_socket, BidirectionalMessage::Response(response))
+                        .await;
+                }
                 self.handler
                     .handle_subscribe(topics, self.context.clone())
-                    .await
+                    .await?;
+                self.sync_subscriptions(&before).await;
+                Ok(())
             }
             BidirectionalMessage::Unsubscribe { topics } => {
+                if let Err(reason) = self.check_subscription_limits(&topics) {
+                    warn!(
+                        "Rejected unsubscribe on connection {}: {}",
+                        self.context.id, reason
+                    );
+                    return Ok(());
+                }
+                let before = self.context.get_subscriptions().await;
                 self.handler
                     .handle_unsubscribe(topics, self.context.clone())
-                    .await
+                    .await?;
+                self.sync_subscriptions(&before).await;
+                Ok(())
             }
             BidirectionalMessage::Ping => self.handler.on_ping(self.context.clone()).await,
             BidirectionalMessage::Pong => self.handler.on_pong(self.context.clone()).await,
@@ -1138,6 +1386,7 @@ mod tests {
                 auth_provider: Arc::new(SequenceAuthProvider::new([])),
                 token: "revoked-token".into(),
                 interval: Duration::from_secs(30),
+                on_permission_change: PermissionChangePolicy::default(),
             })
             .run_with_io(&mut socket)
             .await
@@ -1161,6 +1410,7 @@ mod tests {
                 auth_provider: Arc::new(SequenceAuthProvider::new([Ok(auth_user("fresh"))])),
                 token: "valid-token".into(),
                 interval: Duration::from_secs(30),
+                on_permission_change: PermissionChangePolicy::default(),
             })
             .run_with_io(&mut socket)
             .await
@@ -1175,6 +1425,234 @@ mod tests {
                 .iter()
                 .any(|message| matches!(message, WebSocketIoMessage::Close(_)))
         );
+    }
+
+    fn auth_user_with(id: &str, perms: &[&str]) -> ras_auth_core::AuthenticatedUser {
+        let mut user = auth_user(id);
+        user.permissions = perms.iter().map(|p| p.to_string()).collect();
+        user
+    }
+
+    /// Authorizes any topic for connections holding `room:read`.
+    struct PermissionGated;
+
+    #[async_trait]
+    impl MessageHandler for PermissionGated {
+        async fn handle_request(
+            &self,
+            _request: JsonRpcRequest,
+            _context: Arc<ConnectionContext>,
+        ) -> ServerResult<Option<JsonRpcResponse>> {
+            Ok(None)
+        }
+
+        async fn authorize_subscribe(
+            &self,
+            _topic: &str,
+            context: &Arc<ConnectionContext>,
+        ) -> ServerResult<bool> {
+            Ok(context.has_permission("room:read").await)
+        }
+    }
+
+    fn subscribe_msg(topics: Vec<String>) -> WebSocketIoMessage {
+        WebSocketIoMessage::Text(
+            serde_json::to_string(&BidirectionalMessage::Subscribe { topics }).unwrap(),
+        )
+    }
+
+    async fn manager_with(context: &ConnectionContext) -> Arc<dyn ConnectionManager> {
+        let manager: Arc<dyn ConnectionManager> = Arc::new(crate::DefaultConnectionManager::new());
+        manager
+            .add_connection(ras_jsonrpc_bidirectional_types::ConnectionInfo::new(
+                context.id,
+            ))
+            .await
+            .unwrap();
+        manager
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn w1_revalidation_drops_subscriptions_no_longer_authorized() {
+        let context = ctx();
+        context.set_user(auth_user_with("u", &["room:read"])).await;
+        let manager = manager_with(&context).await;
+        let (_tx, rx) = mpsc::channel(4);
+        let mut socket = InMemorySocket::pending();
+        socket
+            .incoming
+            .push_back(subscribe_msg(vec!["room:1".into()]));
+
+        // Tick 1 returns the same user with the permission revoked; tick 2 fails.
+        let provider = SequenceAuthProvider::new([Ok(auth_user_with("u", &[]))]);
+        WebSocketHandler::new(Arc::new(PermissionGated), context.clone(), rx, 1024)
+            .with_connection_manager(manager.clone())
+            .with_auth_revalidation(AuthRevalidation {
+                auth_provider: Arc::new(provider),
+                token: "t".into(),
+                interval: Duration::from_secs(30),
+                on_permission_change: PermissionChangePolicy::DropSubscriptions,
+            })
+            .run_with_io(&mut socket)
+            .await
+            .unwrap();
+
+        assert!(!context.is_subscribed_to("room:1").await);
+        assert!(
+            manager
+                .get_subscriptions(context.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            manager
+                .get_subscribed_connections("room:1")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn w1_subscribe_mirrors_into_manager_index() {
+        let context = ctx();
+        context.set_user(auth_user_with("u", &["room:read"])).await;
+        let manager = manager_with(&context).await;
+        let (_tx, rx) = mpsc::channel(4);
+        let mut socket = InMemorySocket::closing([subscribe_msg(vec!["room:1".into()])]);
+
+        WebSocketHandler::new(Arc::new(PermissionGated), context.clone(), rx, 1024)
+            .with_connection_manager(manager.clone())
+            .run_with_io(&mut socket)
+            .await
+            .unwrap();
+
+        assert!(context.is_subscribed_to("room:1").await);
+        assert_eq!(
+            manager.get_subscriptions(context.id).await.unwrap(),
+            vec!["room:1".to_string()]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn w1_close_policy_closes_socket_when_permissions_change() {
+        let context = ctx();
+        context.set_user(auth_user_with("u", &["room:read"])).await;
+        let (_tx, rx) = mpsc::channel(4);
+        let mut socket = InMemorySocket::pending();
+
+        WebSocketHandler::new(Arc::new(PermissionGated), context.clone(), rx, 1024)
+            .with_auth_revalidation(AuthRevalidation {
+                auth_provider: Arc::new(SequenceAuthProvider::new([Ok(auth_user_with("u", &[]))])),
+                token: "t".into(),
+                interval: Duration::from_secs(30),
+                on_permission_change: PermissionChangePolicy::Close,
+            })
+            .run_with_io(&mut socket)
+            .await
+            .unwrap();
+
+        // Closed on the first tick (permission change), not the second (failure).
+        assert_eq!(
+            socket
+                .outgoing
+                .iter()
+                .filter(|m| matches!(m, WebSocketIoMessage::Close(_)))
+                .count(),
+            1
+        );
+        assert!(context.get_user().await.unwrap().permissions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn w3_subscribe_over_per_message_limit_is_rejected() {
+        let context = ctx();
+        context.set_user(auth_user_with("u", &["room:read"])).await;
+        let (_tx, rx) = mpsc::channel(4);
+        let topics: Vec<String> = (0..3).map(|i| format!("room:{i}")).collect();
+        let mut socket = InMemorySocket::closing([subscribe_msg(topics)]);
+
+        WebSocketHandler::new(Arc::new(PermissionGated), context.clone(), rx, 1024)
+            .with_subscription_limits(SubscriptionLimits {
+                max_topics_per_message: 2,
+                ..SubscriptionLimits::default()
+            })
+            .run_with_io(&mut socket)
+            .await
+            .unwrap();
+
+        assert!(context.get_subscriptions().await.is_empty());
+        assert!(bidirectional_outgoing(&socket).iter().any(|m| matches!(
+            m,
+            BidirectionalMessage::Response(r) if r.error.is_some()
+        )));
+    }
+
+    #[tokio::test]
+    async fn w3_subscribe_over_per_connection_limit_is_rejected() {
+        let context = ctx();
+        context.set_user(auth_user_with("u", &["room:read"])).await;
+        let (_tx, rx) = mpsc::channel(4);
+        let mut socket = InMemorySocket::closing([
+            subscribe_msg(vec!["room:1".into()]),
+            subscribe_msg(vec!["room:2".into()]),
+        ]);
+
+        WebSocketHandler::new(Arc::new(PermissionGated), context.clone(), rx, 1024)
+            .with_subscription_limits(SubscriptionLimits {
+                max_topics_per_connection: 1,
+                ..SubscriptionLimits::default()
+            })
+            .run_with_io(&mut socket)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            context.get_subscriptions().await,
+            vec!["room:1".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn w3_overlong_topic_is_rejected() {
+        let context = ctx();
+        context.set_user(auth_user_with("u", &["room:read"])).await;
+        let (_tx, rx) = mpsc::channel(4);
+        let mut socket = InMemorySocket::closing([subscribe_msg(vec!["x".repeat(300)])]);
+
+        WebSocketHandler::new(Arc::new(PermissionGated), context.clone(), rx, 1024)
+            .run_with_io(&mut socket)
+            .await
+            .unwrap();
+
+        assert!(context.get_subscriptions().await.is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn w4_idle_connection_is_pinged_then_closed() {
+        let (_tx, rx) = mpsc::channel(4);
+        let mut socket = InMemorySocket::pending();
+
+        WebSocketHandler::new(Arc::new(PassThrough), ctx(), rx, 1024)
+            .with_keepalive(KeepaliveConfig {
+                ping_interval: Some(Duration::from_secs(5)),
+                idle_timeout: Some(Duration::from_secs(12)),
+            })
+            .run_with_io(&mut socket)
+            .await
+            .unwrap();
+
+        let pings = socket
+            .outgoing
+            .iter()
+            .filter(|m| matches!(m, WebSocketIoMessage::Ping(_)))
+            .count();
+        assert_eq!(pings, 2, "pings at 5s and 10s before the 12s idle close");
+        assert!(socket.outgoing.iter().any(|m| matches!(
+            m,
+            WebSocketIoMessage::Close(Some(reason)) if reason == "idle timeout"
+        )));
     }
 
     #[tokio::test]

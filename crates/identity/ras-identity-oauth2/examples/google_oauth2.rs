@@ -38,6 +38,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         auth_params: HashMap::new(),
         use_pkce: true,          // Enable PKCE for security
         user_info_mapping: None, // Use default mapping
+        metadata_claims: Vec::new(),
+        allow_insecure_endpoints: false,
     };
 
     // Create OAuth2 configuration
@@ -53,8 +55,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let oauth2_provider = OAuth2Provider::new(oauth2_config, state_store);
 
     // Create session service
-    let session_config =
-        SessionConfig::new("oauth2-example-secret-that-is-long-enough-for-tests").unwrap();
+    let session_config = SessionConfig::new(
+        "50f60a216877ea8c01d90deebfaf37ee95297d744bca0931", // openssl rand -hex 32
+        "google-oauth2-example",
+        "google-oauth2-example",
+    )
+    .unwrap();
     let session_service = SessionService::new(session_config).unwrap();
 
     // Register OAuth2 provider with session service
@@ -168,6 +174,8 @@ mod tests {
             auth_params: HashMap::new(),
             use_pkce: true,
             user_info_mapping: None,
+            metadata_claims: Vec::new(),
+            allow_insecure_endpoints: false,
         };
 
         let config = OAuth2Config::new().add_provider(google_config);

@@ -182,11 +182,54 @@ async fn run_generated_handler(
     user: Option<AuthenticatedUser>,
     close_after_outgoing: Option<usize>,
 ) -> Vec<BidirectionalMessage> {
+    run_generated_handler_with_provider(request, user, close_after_outgoing, None).await
+}
+
+/// Auth provider that treats the `*` permission as a grant of everything,
+/// exercising custom `check_permissions` semantics (W5).
+struct WildcardProvider;
+
+impl ras_auth_core::AuthProvider for WildcardProvider {
+    fn authenticate(&self, _token: String) -> ras_auth_core::AuthFuture<'_> {
+        Box::pin(future::ready(Err(ras_auth_core::AuthError::InvalidToken)))
+    }
+
+    fn check_permissions(
+        &self,
+        user: &AuthenticatedUser,
+        required: &[String],
+    ) -> ras_auth_core::AuthResult<()> {
+        if user.permissions.contains("*") {
+            return Ok(());
+        }
+        let missing: Vec<String> = required
+            .iter()
+            .filter(|p| !user.permissions.contains(*p))
+            .cloned()
+            .collect();
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(ras_auth_core::AuthError::InsufficientPermissions {
+                required: required.to_vec(),
+                has: user.permissions.iter().cloned().collect(),
+            })
+        }
+    }
+}
+
+async fn run_generated_handler_with_provider(
+    request: JsonRpcRequest,
+    user: Option<AuthenticatedUser>,
+    close_after_outgoing: Option<usize>,
+    auth_provider: Option<Arc<dyn ras_auth_core::AuthProvider>>,
+) -> Vec<BidirectionalMessage> {
     let connection_manager = Arc::new(DefaultConnectionManager::new());
-    let handler = Arc::new(DemoHandler::new(
-        Arc::new(DemoImpl),
-        connection_manager.clone(),
-    ));
+    let mut handler = DemoHandler::new(Arc::new(DemoImpl), connection_manager.clone());
+    if let Some(provider) = auth_provider {
+        handler = handler.with_auth_provider(provider);
+    }
+    let handler = Arc::new(handler);
 
     let connection_id = ConnectionId::new();
     let (message_tx, message_rx) = mpsc::channel(8);
@@ -310,6 +353,49 @@ async fn optional_auth_handler_identifies_connection_user() {
     let response = response_from(&messages);
     assert!(response.error.is_none());
     assert_eq!(response.result, Some(serde_json::json!("user-1")));
+}
+
+#[tokio::test]
+async fn w5_generated_handler_routes_permission_check_through_provider() {
+    let request = JsonRpcRequest::new(
+        "echo".into(),
+        Some(serde_json::json!(EchoIn { msg: "hi".into() })),
+        Some(3.into()),
+    );
+
+    // Plain set membership: "*" is not the literal "user" permission.
+    let messages =
+        run_generated_handler(request.clone(), Some(test_user("root", &["*"])), None).await;
+    assert!(response_from(&messages).error.is_some());
+
+    // With the provider attached, its wildcard semantics apply over WebSocket.
+    let messages = run_generated_handler_with_provider(
+        request,
+        Some(test_user("root", &["*"])),
+        None,
+        Some(Arc::new(WildcardProvider)),
+    )
+    .await;
+    let response = response_from(&messages);
+    assert!(response.error.is_none(), "provider grant must be honored");
+
+    // The error payload never echoes the caller's own grant set.
+    let messages = run_generated_handler_with_provider(
+        JsonRpcRequest::new(
+            "echo".into(),
+            Some(serde_json::json!(EchoIn { msg: "hi".into() })),
+            Some(4.into()),
+        ),
+        Some(test_user("readonly", &["read"])),
+        None,
+        Some(Arc::new(WildcardProvider)),
+    )
+    .await;
+    let error = response_from(&messages).error.as_ref().unwrap();
+    assert_eq!(error.code, -32002);
+    let data = error.data.as_ref().unwrap().to_string();
+    assert!(data.contains("\"user\""));
+    assert!(!data.contains("\"read\""));
 }
 
 #[tokio::test]

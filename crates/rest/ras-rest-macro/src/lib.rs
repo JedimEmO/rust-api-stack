@@ -1436,11 +1436,16 @@ fn generate_canonical_route_registration(
     let path = &endpoint.path;
     let handler_name = &endpoint.handler_name;
     let method_str = endpoint.method.as_str();
-    let axum_handler = generate_axum_handler(
+    let AxumHandlerParts {
+        extractors: axum_handler,
+        prelude: extractor_prelude,
+    } = generate_axum_handler(
         &endpoint.path_params,
         &endpoint.query_params,
         endpoint.request_type.as_ref(),
         query_struct_name,
+        method_str,
+        path,
     );
     let handler_body =
         generate_handler_body(endpoint, handler_name, method_str, path, require_json);
@@ -1465,6 +1470,7 @@ fn generate_canonical_route_registration(
                     let with_method_duration_tracker = with_method_duration_tracker.clone();
 
                     async move {
+                        #extractor_prelude
                         #handler_body
                     }
                 }
@@ -1482,11 +1488,16 @@ fn generate_legacy_route_registration(
 ) -> proc_macro2::TokenStream {
     let method_routing = endpoint.method.as_axum_method();
     let path = &version.path;
-    let axum_handler = generate_axum_handler(
+    let AxumHandlerParts {
+        extractors: axum_handler,
+        prelude: extractor_prelude,
+    } = generate_axum_handler(
         &version.path_params,
         &version.query_params,
         version.request_type.as_ref(),
         query_struct_name,
+        endpoint.method.as_str(),
+        path,
     );
     let handler_body = generate_legacy_handler_body(service_name, endpoint, version, require_json);
     let permission_groups_code = rest_permission_groups_code(&endpoint.auth);
@@ -1510,6 +1521,7 @@ fn generate_legacy_route_registration(
                     let with_method_duration_tracker = with_method_duration_tracker.clone();
 
                     async move {
+                        #extractor_prelude
                         #handler_body
                     }
                 }
@@ -1813,13 +1825,29 @@ fn generate_legacy_handler_body(
     }
 }
 
+/// Generated handler signature plus the prelude that unwraps fallible
+/// extractors inside the handler body.
+struct AxumHandlerParts {
+    /// Closure parameter list (`headers`, path/query extractors, raw request).
+    extractors: proc_macro2::TokenStream,
+    /// Emitted at the top of the handler body. Path and query extractors are
+    /// taken as `Result<_, Rejection>` so the axum default rejection body —
+    /// which echoes the offending value verbatim, e.g.
+    /// ``Invalid URL: Cannot parse `abc` to a `i32` `` — is never sent to the
+    /// client. The detail is logged at `warn` and a fixed message is returned.
+    prelude: proc_macro2::TokenStream,
+}
+
 fn generate_axum_handler(
     path_params: &[PathParam],
     query_params: &[QueryParam],
     request_type: Option<&Type>,
     query_struct_name: &Ident,
-) -> proc_macro2::TokenStream {
+    method: &str,
+    path: &str,
+) -> AxumHandlerParts {
     let mut extractors = Vec::new();
+    let mut prelude = Vec::new();
 
     // Always add headers extraction for tracking purposes
     extractors.push(quote! { headers: axum::http::HeaderMap });
@@ -1827,17 +1855,61 @@ fn generate_axum_handler(
     // Add path parameter extractors
     if !path_params.is_empty() {
         let path_param_types = path_params.iter().map(|param| &param.param_type);
-        if path_params.len() == 1 {
-            extractors.push(quote! { axum::extract::Path(path_params): axum::extract::Path<#(#path_param_types)*> });
+        let path_ty = if path_params.len() == 1 {
+            quote! { axum::extract::Path<#(#path_param_types)*> }
         } else {
-            extractors.push(quote! { axum::extract::Path(path_params): axum::extract::Path<(#(#path_param_types),*)> });
-        }
+            quote! { axum::extract::Path<(#(#path_param_types),*)> }
+        };
+        extractors.push(quote! {
+            __ras_path: Result<#path_ty, axum::extract::rejection::PathRejection>
+        });
+        prelude.push(quote! {
+            let axum::extract::Path(path_params) = match __ras_path {
+                Ok(path) => path,
+                Err(__ras_rejection) => {
+                    use axum::response::IntoResponse;
+                    ras_rest_core::tracing::warn!(
+                        method = #method,
+                        path = #path,
+                        status = __ras_rejection.status().as_u16(),
+                        detail = %__ras_rejection.body_text(),
+                        "rejected request: invalid path parameters"
+                    );
+                    return (
+                        axum::http::StatusCode::BAD_REQUEST,
+                        axum::Json(serde_json::json!({ "error": "Invalid path parameters" }))
+                    ).into_response();
+                }
+            };
+        });
     }
 
     // Add query parameter extractors
     if !query_params.is_empty() {
         extractors.push(quote! {
-            ::axum_extra::extract::Query(query_params): ::axum_extra::extract::Query<query_params::#query_struct_name>
+            __ras_query: Result<
+                ::axum_extra::extract::Query<query_params::#query_struct_name>,
+                ::axum_extra::extract::QueryRejection,
+            >
+        });
+        prelude.push(quote! {
+            let ::axum_extra::extract::Query(query_params) = match __ras_query {
+                Ok(query) => query,
+                Err(__ras_rejection) => {
+                    use axum::response::IntoResponse;
+                    ras_rest_core::tracing::warn!(
+                        method = #method,
+                        path = #path,
+                        status = __ras_rejection.status().as_u16(),
+                        detail = %__ras_rejection.body_text(),
+                        "rejected request: invalid query parameters"
+                    );
+                    return (
+                        axum::http::StatusCode::BAD_REQUEST,
+                        axum::Json(serde_json::json!({ "error": "Invalid query parameters" }))
+                    ).into_response();
+                }
+            };
         });
     }
 
@@ -1848,8 +1920,9 @@ fn generate_axum_handler(
         extractors.push(quote! { request: axum::extract::Request });
     }
 
-    quote! {
-        #(#extractors),*
+    AxumHandlerParts {
+        extractors: quote! { #(#extractors),* },
+        prelude: quote! { #(#prelude)* },
     }
 }
 

@@ -49,7 +49,7 @@ impl TestChatServer {
                 cors: Default::default(),
             },
             auth: AuthConfig {
-                jwt_secret: "test-secret-key-that-is-long-enough".to_string(),
+                jwt_secret: "af64d581a2e84c58924af06fe77e57bf06352f27be50c16e".to_string(),
                 jwt_ttl_seconds: 3600,
                 refresh_enabled: true,
                 jwt_algorithm: "HS256".to_string(),
@@ -133,8 +133,10 @@ impl TestChatServer {
             jwt_ttl: chrono::Duration::seconds(config.auth.jwt_ttl_seconds),
             enforce_active_sessions: true,
             algorithm: JwtAlgorithm::HS256,
-            iss: None,
-            aud: None,
+            iss: Some("bidirectional-chat".to_string()),
+            aud: Some("bidirectional-chat".to_string()),
+            require_iss_aud: true,
+            max_sessions_per_user: ras_identity_session::DEFAULT_MAX_SESSIONS_PER_USER,
         };
 
         let session_service = Arc::new(
@@ -159,15 +161,16 @@ impl TestChatServer {
         let chat_server = Arc::new(ChatServer::new(config.chat.clone()).await?);
 
         // Create handler
-        let handler = Arc::new(ChatServiceHandler::new(
-            chat_server.clone(),
-            connection_manager.clone(),
-        ));
+        let auth_provider = Arc::new(auth_provider);
+        let handler = Arc::new(
+            ChatServiceHandler::new(chat_server.clone(), connection_manager.clone())
+                .with_auth_provider(auth_provider.clone()),
+        );
 
         // Build WebSocket service
         let ws_service = WebSocketServiceBuilder::builder()
             .handler(handler)
-            .auth_provider(Arc::new(auth_provider.clone()))
+            .auth_provider(auth_provider)
             .require_auth(true)
             .build()
             .build_with_manager(connection_manager);
