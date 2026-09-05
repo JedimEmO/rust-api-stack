@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed - 2026-09-05 (responsibility boundaries refactor)
+- **`tokio-tungstenite` aligned with Axum** (`ras-jsonrpc-bidirectional-client`, `-server`, `-types`, `-macro`). The workspace pin moved from 0.26 to 0.29, the version Axum 0.8 already used, so the lockfile carries a single copy of `tungstenite` and `tokio-tungstenite`. No source changes were needed.
 - **New `ras-api-explorer-assets` crate** (`crates/specs`). The browser API explorer that `ras-rest-macro` and `ras-jsonrpc-macro` embed now lives in its own dependency-free crate as standalone HTML, CSS and JavaScript files assembled at compile time into `TEMPLATE`, with the configuration placeholder exported as `CONFIG_PLACEHOLDER`. Previously the JSON-RPC macro read the template from the REST macro's source tree with a relative `include_str!`, which broke outside the workspace. Publish this crate before either macro. The served explorer differs from the previous one only in whitespace around the style and script wrapper tags.
 - Large modules were split by responsibility across the macro, auth, identity, transport and bidirectional crates without changing public paths, generated code, or behavior; moved types are re-exported from their previous locations. Integration suites were regrouped into scenario modules under the same test targets, and the `xm_feedback_*` macro test targets were renamed to `http_service_contracts`.
 
