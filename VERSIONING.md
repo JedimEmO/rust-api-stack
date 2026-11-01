@@ -24,11 +24,37 @@ changed.
 - Include the affected crate names when a change is scoped to specific crates.
 - Mention version bumps in the same changelog entry set.
 
-## Release Checklist
+## Releasing
 
-1. Move relevant `[Unreleased]` entries into a dated release section.
-2. Confirm publishable crate versions match the release contents.
-3. Run the relevant crate tests and any affected e2e suites.
-4. Commit `Cargo.toml`, `Cargo.lock`, `CHANGELOG.md`, and release notes together.
-5. Tag releases using crate-aware tags when publishing one crate, for example
-   `ras-rest-macro-v0.1.1`.
+The [Release workflow](.github/workflows/release.yml) publishes every crate
+whose version in `master` is not on crates.io yet, in dependency order,
+and tags each one `<crate>-v<version>`, for example `ras-rest-macro-v0.4.1`.
+It authenticates with crates.io trusted publishing, so the repository holds no API token.
+
+1. Bump the versions of the crates that changed, and keep `Cargo.lock` aligned.
+2. Move the `[Unreleased]` entries into a dated release section of `CHANGELOG.md`.
+3. Merge to `master` with CI green.
+4. Run the Release workflow from the Actions tab with `dry_run` checked.
+   It lists the versions it would publish and verifies their packages.
+5. Run it again with `dry_run` unchecked.
+   The `publish` job runs in the `release` environment, which only `master` may deploy to.
+
+### Publishing a crate for the first time
+
+Trusted publishing only works for a crate that already exists on crates.io,
+so the first version of a new crate is published by hand with an API token:
+
+```bash
+cargo publish -p <new-crate> --locked
+```
+
+Then register the Release workflow as its trusted publisher.
+Create a crates.io API token with the `trusted-publishing` scope, and run:
+
+```bash
+CRATES_IO_TOKEN=... .github/scripts/configure-trusted-publishing.sh
+```
+
+The script configures every publishable crate that has no trusted publisher yet,
+and skips the ones crates.io does not know.
+Revoke the token afterwards; later releases do not need it.
