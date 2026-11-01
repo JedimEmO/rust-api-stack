@@ -300,7 +300,7 @@ async fn download_by_file_id(
 
     DownloadResponse::stream(file.stream)
         .content_type(file.content_type)?
-        .content_length(file.size)?
+        .content_length(file.size)
         .attachment(file.original_name)
 }
 ```

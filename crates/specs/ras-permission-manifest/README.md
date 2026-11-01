@@ -38,6 +38,10 @@ ras-permission-manifest = "0.1"
 
 A requirement is a list of groups.
 A caller passes when they hold every permission in at least one group.
+With no groups, or only empty ones, any authenticated caller passes.
+An empty group next to non-empty ones is ignored,
+so `["admin"] | []` still requires `admin`;
+these are the rules the generated server enforces.
 
 `SCHEMA_VERSION` is written into every manifest.
 Tooling can compare it before reading the rest of the document.

@@ -72,7 +72,7 @@ impl FileServiceImpl {
         })?;
 
         let size = data.len() as u64;
-        let mut response = DownloadResponse::bytes(data).content_length(size)?;
+        let mut response = DownloadResponse::bytes(data).content_length(size);
 
         if let Some(meta) = metadata {
             if let Some(content_type) = meta.content_type {

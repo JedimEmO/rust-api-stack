@@ -82,7 +82,9 @@ The `version` module lists the OpenRPC versions the crate accepts, from `1.0.0` 
 - the `openrpc` version is one the crate supports, and `info` has a title and a version;
 - method names are unique, contain no spaces, and do not use the reserved `rpc.` prefix;
 - parameter names within a method are unique, and required parameters come before optional ones;
-- error codes within a method are unique;
+- error codes within a method are unique,
+  and a code in the JSON-RPC reserved range `-32768..=-32000` is one of the pre-defined codes
+  or a server error code in `-32099..=-32000`;
 - component keys match `^[a-zA-Z0-9.\-_]+$`, and references name a known component type;
 - schema bounds are consistent, such as `minimum` not above `maximum`;
 - an example does not set both `value` and `externalValue`;

@@ -67,6 +67,13 @@ When two strings map to the same name, both names get a hash suffix.
 Each protected operation gets a `StaticPermissionRequirement` constant in `operations`,
 with the same OR-of-AND groups the server checks.
 Public and `OPTIONAL_AUTH` operations get none.
+
+A caller meets a requirement by holding every permission of one group.
+With no groups, or only empty ones, any authenticated caller does.
+An empty group next to non-empty ones is ignored, as it is on the server,
+so `["admin"] | []` requires `admin`.
+The service macros reject that shape anyway;
+the rule matters when code builds requirements by hand.
 The constant is named after the operation:
 
 | Macro | Constant name from |

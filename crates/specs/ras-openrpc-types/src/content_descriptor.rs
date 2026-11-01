@@ -47,7 +47,9 @@ pub struct ContentDescriptor {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ContentDescriptorSchema {
+    /// An inline schema.
     Schema(Box<Schema>),
+    /// A `$ref` to a schema in `components`.
     Reference(Reference),
 }
 
