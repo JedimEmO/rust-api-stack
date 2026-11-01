@@ -112,6 +112,26 @@ async fn optional_auth_method_is_lenient_with_bad_token() {
 }
 
 #[tokio::test]
+async fn unauthorized_method_ignores_a_bad_token() {
+    let server = server();
+
+    // An UNAUTHORIZED method never looks at the credential, so a stale or
+    // invalid one must not turn a public call into an auth error.
+    let resp: EchoResponse = call_rpc(
+        &server,
+        "ping",
+        json!(EchoRequest {
+            msg: "hi".to_string()
+        }),
+        Some("not-a-real-token"),
+    )
+    .await
+    .expect("ping ignores a bad token");
+
+    assert_eq!(resp.msg, "hi");
+}
+
+#[tokio::test]
 async fn permission_required_method_rejects_anonymous() {
     let server = server();
 

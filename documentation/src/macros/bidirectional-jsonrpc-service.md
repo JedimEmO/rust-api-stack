@@ -237,9 +237,9 @@ let app = axum::Router::new()
 
 `require_auth` is `true` by default,
 which refuses the upgrade of any connection without valid credentials.
-`require_auth(false)` lets connections without a token in;
+`require_auth(false)` lets connections without a valid token in, as anonymous connections;
 `WITH_PERMISSIONS` methods still reject them.
-A connection with an invalid token is refused either way.
+An invalid token is treated like a missing one, as public HTTP routes ignore it.
 
 The generated builder creates its own connection manager.
 To share one manager with other parts of the server, for example to broadcast from a background task,

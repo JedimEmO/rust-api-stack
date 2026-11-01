@@ -411,8 +411,9 @@ A `204` response is sent without a body.
 
 Every error the client sees has the body `{ "error": "<message>" }`,
 whether it comes from your handler or from the framework.
-A missing or invalid credential is answered with 401,
+A missing or invalid credential on a `WITH_PERMISSIONS` endpoint is answered with 401,
 and a failed permission or CSRF check with 403.
+`UNAUTHORIZED` and `OPTIONAL_AUTH` endpoints ignore a credential that fails.
 
 ## Build the router
 

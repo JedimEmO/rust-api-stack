@@ -54,9 +54,10 @@ async fn test_unauthorized_methods() {
         .authorization_bearer("not-a-valid-token")
         .json(&request_body)
         .await;
-    assert_eq!(response.status_code().as_u16(), 401);
+    // A public method ignores the credential, as REST and file routes do.
+    assert_eq!(response.status_code().as_u16(), 200);
     let response: Value = response.json();
-    assert_eq!(response["error"]["code"], -32001);
+    assert_eq!(response["result"], "This is public information");
 
     // Test echo_complex
     let complex_data = json!({

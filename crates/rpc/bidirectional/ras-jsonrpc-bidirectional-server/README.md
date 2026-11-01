@@ -129,13 +129,14 @@ It takes the token from the first of these that is present:
    The server selects `ras-jsonrpc`, so the token is not echoed back.
 3. `X-Auth-Token: <token>`.
 
-A token that the auth provider rejects refuses the upgrade.
-With `require_auth(true)`, the default, a missing token refuses it too.
+With `require_auth(true)`, the default, a missing token or one the auth provider rejects refuses the upgrade.
+With `require_auth(false)`, both connect anonymously.
 Tokens in the URL query string are never read.
 
 While the connection is open,
 the server re-runs the auth provider on the same token every 30 seconds by default,
 and closes the socket when it fails.
+An anonymous connection has no token to re-run.
 
 ## Sending to clients
 

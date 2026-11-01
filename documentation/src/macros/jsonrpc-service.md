@@ -320,8 +320,8 @@ The generated server answers with these codes:
 | `-32003` | `Token expired` | The auth provider reported an expired token. | 401 |
 | `-32004` | `CSRF validation failed` | A cookie credential without a valid CSRF token. | 403 |
 
-A credential that is present but invalid is rejected for every method except `OPTIONAL_AUTH` ones,
-`UNAUTHORIZED` methods included.
+A credential that is present but invalid is rejected only for `WITH_PERMISSIONS` methods.
+`UNAUTHORIZED` and `OPTIONAL_AUTH` methods ignore it, as public REST and file routes do.
 Malformed bodies and auth rejections are logged server-side through `tracing`.
 
 ### Notifications

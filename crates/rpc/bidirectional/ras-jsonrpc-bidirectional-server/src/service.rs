@@ -245,6 +245,10 @@ where
     let (message_tx, message_rx) = mpsc::channel(channel_capacity);
     let sender = ChannelMessageSender::new(connection_id, message_tx);
 
+    // An anonymous connection may carry a credential that failed to
+    // authenticate; it has nothing to re-validate.
+    let auth_token = auth_token.filter(|_| user.is_some());
+
     let mut info = ConnectionInfo::new(connection_id);
     if let Some(user) = user.clone() {
         info.set_user(user);

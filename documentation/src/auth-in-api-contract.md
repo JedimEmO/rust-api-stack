@@ -39,6 +39,7 @@ A provider may override it for its own policy.
 ## The auth keywords
 
 `UNAUTHORIZED` means the generated server requires no credential for the operation.
+It does not look at one either, so a stale or invalid credential does not turn a public call into an auth error.
 
 `OPTIONAL_AUTH` means the operation is public, but identifies the caller when it can.
 The route is never rejected for auth reasons.
