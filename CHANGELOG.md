@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Maintenance - 2026-11-01 (CI toolchain and runner)
+- `async-trait` 0.1.89 → 0.1.92 in `Cargo.lock`. Rust 1.99's `clippy::double_must_use` fires on code older `async-trait` versions generate, which failed `cargo clippy -D warnings` across the workspace; 0.1.92 resolves it. It brings in `syn` 3 alongside `syn` 2.
+- `@playwright/test` 1.58.2 → 1.64.1 (`tests/playwright`). `ubuntu-latest` runners are now Ubuntu 26.04, which Playwright supports from 1.61, so the explorer and WASM UI browser jobs could not install Chromium.
+
 ### Fixed - 2026-11-01 (post-build review)
 - **Generated document code compiles in edition 2018 consumers** (`ras-jsonrpc-macro`, `ras-rest-macro`, `ras-spec-components`). The embedded component code imports `TryFrom`, which is only in the 2021 prelude. A new unpublished fixture crate, `compile-fixture-edition2018`, uses both macros with examples, and CI checks it without features, client-only, server-only and for wasm; its client-only build also shows that a request type without `Deserialize` compiles when its method has no examples.
 - **Examples can call any helper** (`ras-jsonrpc-macro`, `ras-rest-macro`). The locals the generated code declares around example expressions (`generators`, `context`, `value`) are hygienic, so an example such as `result: context()` calls the user's own function.
