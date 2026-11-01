@@ -2,7 +2,7 @@
 name = "ras-observability-otel"
 version = "0.2.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95"
 description = "OpenTelemetry implementation for Rust API Stack observability"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/JedimEmO/rust-api-stack"

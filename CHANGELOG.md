@@ -57,7 +57,7 @@ Publish order follows the dependencies: `cargo publish --workspace` handles it.
 - `feature_gated: true` puts the generated server and client behind the API crate's own `server`, `client` and `reqwest` features,
   so a browser client does not compile axum.
 - The generated code compiles in consumer crates on any edition from 2018.
-- The crates need Rust 1.88 or newer.
+- The crates need Rust 1.95 or newer.
 
 ### Auth
 

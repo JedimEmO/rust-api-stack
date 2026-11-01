@@ -2,7 +2,7 @@
 name = "oauth2-demo-server"
 version = "0.1.1"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95"
 description = "OAuth2 and JWT session demo server for Rust API Stack"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/JedimEmO/rust-api-stack"

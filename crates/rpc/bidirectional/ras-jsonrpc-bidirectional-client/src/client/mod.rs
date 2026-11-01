@@ -409,23 +409,12 @@ struct PendingSlot<'a> {
 impl<'a> PendingSlot<'a> {
     fn acquire(client: &'a Client, request_id: Value) -> ClientResult<Self> {
         let max = client.config.max_pending_requests;
-        // A compare-exchange loop rather than `fetch_update`, which Rust 1.99 deprecates
-        // in favour of `try_update`, a method the 1.88 minimum does not have.
-        let mut current = client.calls_in_flight.load(Ordering::Acquire);
-        loop {
-            if current >= max {
-                return Err(ClientError::internal("Too many pending requests"));
-            }
-            match client.calls_in_flight.compare_exchange_weak(
-                current,
-                current + 1,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => break,
-                Err(actual) => current = actual,
-            }
-        }
+        client
+            .calls_in_flight
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                (n < max).then_some(n + 1)
+            })
+            .map_err(|_| ClientError::internal("Too many pending requests"))?;
         Ok(Self { client, request_id })
     }
 }

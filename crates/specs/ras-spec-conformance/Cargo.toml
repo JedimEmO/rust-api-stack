@@ -2,7 +2,7 @@
 name = "ras-spec-conformance"
 version = "0.0.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95"
 description = "Test support: validates generated OpenRPC and OpenAPI documents against the official schemas"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/JedimEmO/rust-api-stack"

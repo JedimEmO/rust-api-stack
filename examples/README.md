@@ -4,7 +4,7 @@ Runnable applications that use the Rust API Stack macros and crates.
 Each example has its own README with the run command, the demo credentials and what to try.
 For the concepts behind them, read the [mdBook guide](https://jedimemo.github.io/rust-api-stack/).
 
-You need Rust 1.88 or newer, because the example crates use the 2024 edition.
+You need Rust 1.95 or newer.
 `wasm-ui-demo` also needs Node.js 22.13 or newer.
 Run every command from the repository root.
 

@@ -14,6 +14,8 @@ changed.
 - Do not version-bump examples, fixtures, or crates marked `publish = false`
   unless their version is meaningful to a downstream release process.
 - Keep `Cargo.lock` aligned with any package version changes.
+- All published crates share one `rust-version`, and CI builds them with exactly that toolchain.
+  Raising it is a breaking change: a minor bump while crates are `0.x`.
 
 ## Changelog
 

@@ -2,7 +2,7 @@
 name = "ras-auth-core"
 version = "0.3.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95"
 description = "Core authentication and authorization traits for Rust API Stack services"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/JedimEmO/rust-api-stack"

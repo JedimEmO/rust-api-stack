@@ -115,7 +115,7 @@ with `server` and `client` features so a browser client does not compile Axum.
 The [tutorial](https://jedimemo.github.io/rust-api-stack/tutorial/index.html) builds that layout,
 and each macro guide lists the dependencies for its macro.
 
-The crates need Rust 1.88 or newer.
+The crates need Rust 1.95 or newer.
 
 ### The other crates
 

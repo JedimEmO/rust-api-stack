@@ -2,7 +2,7 @@
 name = "ras-rest-macro"
 version = "0.4.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95"
 description = "Procedural macro for type-safe REST APIs with auth integration and OpenAPI document generation"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/JedimEmO/rust-api-stack"
