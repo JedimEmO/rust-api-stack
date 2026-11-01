@@ -331,3 +331,160 @@ pub fn classify_params(schema: &Value, components: &Map<String, Value>) -> Param
             .collect(),
     )
 }
+
+/// An authored example, evaluated to JSON.
+pub struct Example {
+    /// The example's identifier.
+    pub name: String,
+    /// The example's doc comment, first line included.
+    pub description: Option<String>,
+    /// The serialized request; `None` for a method whose request is `()`.
+    pub params: Option<Value>,
+    /// What the call returns.
+    pub outcome: ExampleOutcome,
+}
+
+/// What an [`Example`] call returns.
+pub enum ExampleOutcome {
+    /// The serialized result.
+    Result(Value),
+    /// A JSON-RPC error object.
+    Error {
+        /// The error code.
+        code: i64,
+        /// The error message.
+        message: String,
+        /// The serialized `data`, if any.
+        data: Option<Value>,
+    },
+}
+
+/// Serializes an example value.
+pub fn to_json<T: ::serde::Serialize + ?Sized>(value: &T) -> Result<Value, String> {
+    ::serde_json::to_value(value).map_err(|error| format!("does not serialize: {error}"))
+}
+
+/// Serializes a request example and checks that the request type reads it back unchanged.
+///
+/// A `#[serde(default, rename(serialize = "out", deserialize = "in"))]` field
+/// decodes without error but loses its value, so decoding alone is not enough:
+/// the decoded value must serialize to the same JSON.
+pub fn round_trip<T>(value: &T) -> Result<Value, String>
+where
+    T: ::serde::Serialize + ::serde::de::DeserializeOwned,
+{
+    let written = to_json(value)?;
+    let decoded: T = ::serde_json::from_value(written.clone())
+        .map_err(|_| "does not deserialize back into the request type".to_string())?;
+    if to_json(&decoded)? != written {
+        return Err(
+            "reads back differently than it was written; check serde renames, \
+                    defaults and skipped fields on the request type"
+                .to_string(),
+        );
+    }
+    Ok(written)
+}
+
+/// The `params` list of an example pairing: one entry per serialized field for a
+/// named method, the whole value for a raw one, nothing for a `()` request.
+fn pairing_params(shape: Option<&ParamShape>, params: Option<Value>) -> Result<Vec<Value>, String> {
+    match (shape, params) {
+        (None, _) | (_, None) => Ok(Vec::new()),
+        (Some(ParamShape::Raw), Some(params)) => Ok(vec![
+            ::serde_json::json!({ "name": "params", "value": params }),
+        ]),
+        (Some(ParamShape::Named(fields)), Some(params)) => {
+            let Value::Object(params) = params else {
+                return Err("params do not serialize to an object".to_string());
+            };
+            params
+                .into_iter()
+                .map(|(name, value)| {
+                    if fields.iter().any(|field| field.name == name) {
+                        Ok(::serde_json::json!({ "name": name, "value": value }))
+                    } else {
+                        Err(format!("params field `{name}` has no parameter descriptor"))
+                    }
+                })
+                .collect()
+        }
+    }
+}
+
+/// Builds a method's OpenRPC example pairings and its `x-ras-error-examples`.
+///
+/// Fails with the example's name and the cause when a request field has no
+/// descriptor.
+pub fn example_objects(
+    shape: Option<&ParamShape>,
+    examples: Vec<Example>,
+) -> Result<(Vec<Value>, Vec<Value>), (String, String)> {
+    let mut pairings = Vec::new();
+    let mut error_examples = Vec::new();
+    for example in examples {
+        let params =
+            pairing_params(shape, example.params).map_err(|cause| (example.name.clone(), cause))?;
+        let mut object = Map::new();
+        object.insert("name".into(), Value::String(example.name));
+        if let Some(description) = example.description {
+            object.insert("description".into(), Value::String(description));
+        }
+        object.insert("params".into(), Value::Array(params));
+        match example.outcome {
+            ExampleOutcome::Result(value) => {
+                object.insert(
+                    "result".into(),
+                    ::serde_json::json!({ "name": "result", "value": value }),
+                );
+                pairings.push(Value::Object(object));
+            }
+            ExampleOutcome::Error {
+                code,
+                message,
+                data,
+            } => {
+                let mut error = ::serde_json::json!({ "code": code, "message": message });
+                if let Some(data) = data {
+                    error["data"] = data;
+                }
+                object.insert("error".into(), error);
+                error_examples.push(Value::Object(object));
+            }
+        }
+    }
+    Ok((pairings, error_examples))
+}
+
+/// A method's OpenRPC `errors` list: the built-in errors it can produce, as
+/// references into `components.errors`, then each application code its error
+/// examples use, once, with the first example's message.
+pub fn method_errors(has_params: bool, auth_required: bool, examples: &[Example]) -> Vec<Value> {
+    let reference =
+        |name: &str| ::serde_json::json!({ "$ref": format!("#/components/errors/{name}") });
+    let documents_invalid_params = examples
+        .iter()
+        .any(|example| matches!(example.outcome, ExampleOutcome::Error { code: -32602, .. }));
+    let mut errors = Vec::new();
+    if has_params || documents_invalid_params {
+        errors.push(reference("InvalidParams"));
+    }
+    if auth_required {
+        errors.push(reference("AuthenticationRequired"));
+        errors.push(reference("InsufficientPermissions"));
+        errors.push(reference("TokenExpired"));
+    }
+    errors.push(reference("InternalError"));
+
+    let mut seen = BTreeSet::new();
+    for example in examples {
+        if let ExampleOutcome::Error { code, message, .. } = &example.outcome {
+            // -32602 is the built-in InvalidParams entry.
+            if *code == -32602 || !seen.insert(*code) {
+                continue;
+            }
+            errors.push(::serde_json::json!({ "code": code, "message": message }));
+        }
+    }
+    errors
+}

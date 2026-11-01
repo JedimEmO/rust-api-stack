@@ -10,6 +10,7 @@ homepage = "https://github.com/JedimEmO/rust-api-stack"
 readme = "README.md"
 
 [dependencies]
+ras-spec-components = { path = "../../specs/ras-spec-components", version = "0.1.0" }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

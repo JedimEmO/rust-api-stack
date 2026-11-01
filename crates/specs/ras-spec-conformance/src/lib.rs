@@ -121,6 +121,24 @@ fn collect_dangling(doc: &Value, value: &Value, path: String, problems: &mut Vec
     }
 }
 
+/// Lists every way `value` fails `schema`, a schema from an OpenRPC document
+/// whose `$ref`s point into `doc`'s components. OpenRPC schemas are JSON Schema
+/// draft 7.
+pub fn openrpc_value_violations(doc: &Value, schema: &Value, value: &Value) -> Vec<String> {
+    let root = serde_json::json!({
+        "allOf": [schema],
+        "components": doc.get("components").cloned().unwrap_or(Value::Null),
+    });
+    match jsonschema::options()
+        .with_draft(Draft::Draft7)
+        .with_retriever(VendoredOnly)
+        .build(&root)
+    {
+        Ok(validator) => violations(&validator, value),
+        Err(error) => vec![format!("schema does not compile: {error}")],
+    }
+}
+
 fn assert_clean(kind: &str, problems: Vec<String>, doc: &Value) {
     assert!(
         problems.is_empty(),

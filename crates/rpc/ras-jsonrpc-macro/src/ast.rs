@@ -45,6 +45,27 @@ pub(crate) struct MethodDefinition {
     pub(crate) version: Option<String>,
     pub(crate) wire_name: Option<String>,
     pub(crate) versions: Vec<MethodVersionDefinition>,
+    pub(crate) examples: Vec<MethodExample>,
+}
+
+/// An authored call example: typed request value and its result or error.
+#[derive(Debug)]
+pub(crate) struct MethodExample {
+    pub(crate) name: Ident,
+    pub(crate) docs: Option<DocComment>,
+    /// `None` exactly when the request type is `()`.
+    pub(crate) params: Option<syn::Expr>,
+    pub(crate) outcome: ExampleOutcome,
+}
+
+#[derive(Debug)]
+pub(crate) enum ExampleOutcome {
+    Result(syn::Expr),
+    Error {
+        code: i32,
+        message: String,
+        data: Option<syn::Expr>,
+    },
 }
 
 #[derive(Debug)]

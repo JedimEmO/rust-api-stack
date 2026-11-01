@@ -6,6 +6,75 @@
 /// The text of `src/components.rs`, for the macros to embed.
 pub const SOURCE: &str = include_str!("components.rs");
 
+use std::fmt;
+
+/// Why a generated OpenRPC or OpenAPI document could not be built.
+///
+/// Returned by the generated `try_generate_*` functions; `ras-jsonrpc-types`
+/// and `ras-rest-core` re-export it. It names where the problem is, never an
+/// example's value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpecGenerationError {
+    /// The service the document describes.
+    pub service: String,
+    /// The method or endpoint, when the problem belongs to one.
+    pub operation: Option<String>,
+    /// The example, when the problem belongs to one.
+    pub example: Option<String>,
+    /// The part of the example or document, such as `params` or `result`.
+    pub part: Option<String>,
+    /// What went wrong.
+    pub cause: String,
+}
+
+impl SpecGenerationError {
+    /// A problem with the document as a whole.
+    pub fn document(service: &str, cause: impl Into<String>) -> Self {
+        Self {
+            service: service.to_string(),
+            operation: None,
+            example: None,
+            part: None,
+            cause: cause.into(),
+        }
+    }
+
+    /// A problem with one part of one example.
+    pub fn example(
+        service: &str,
+        operation: &str,
+        example: &str,
+        part: &str,
+        cause: impl Into<String>,
+    ) -> Self {
+        Self {
+            service: service.to_string(),
+            operation: Some(operation.to_string()),
+            example: Some(example.to_string()),
+            part: Some(part.to_string()),
+            cause: cause.into(),
+        }
+    }
+}
+
+impl fmt::Display for SpecGenerationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} document", self.service)?;
+        if let Some(operation) = &self.operation {
+            write!(f, ", `{operation}`")?;
+        }
+        if let Some(example) = &self.example {
+            write!(f, ", example `{example}`")?;
+        }
+        if let Some(part) = &self.part {
+            write!(f, ", {part}")?;
+        }
+        write!(f, ": {}", self.cause)
+    }
+}
+
+impl std::error::Error for SpecGenerationError {}
+
 #[cfg(test)]
 #[allow(dead_code)]
 #[path = "components.rs"]
@@ -13,6 +82,7 @@ mod components;
 
 #[cfg(test)]
 mod tests {
+    use super::SpecGenerationError;
     use super::components::{COMPONENTS_PREFIX, Components, Dialect, Generators};
     use schemars::JsonSchema;
     use serde::{Deserialize, Serialize};
@@ -104,5 +174,18 @@ mod tests {
         serialize.insert("A".into(), json!({ "type": "boolean" }));
         let error = Components::merge(deserialize, serialize).err().unwrap();
         assert!(error.contains("A.Serialize"), "{error}");
+    }
+
+    #[test]
+    fn generation_errors_say_where_without_values() {
+        let error = SpecGenerationError::example("Users", "create_user", "basic", "params", "boom");
+        assert_eq!(
+            error.to_string(),
+            "Users document, `create_user`, example `basic`, params: boom"
+        );
+        assert_eq!(
+            SpecGenerationError::document("Users", "clash").to_string(),
+            "Users document: clash"
+        );
     }
 }

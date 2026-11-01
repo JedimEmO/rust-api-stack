@@ -11,8 +11,12 @@ Embedding the source keeps one implementation without adding a dependency
 the consumer would have to declare.
 
 `SOURCE` holds `src/components.rs` as text; the crate's own tests compile the same file.
-The embedded code needs `schemars` 1.2 or later and `serde_json` in the consumer's crate,
+The embedded code needs `schemars` 1.2 or later, `serde` and `serde_json` in the consumer's crate,
 which the generated document functions already require.
+
+The crate also exports one ordinary type, `SpecGenerationError`,
+which the generated `try_generate_*` functions return.
+`ras-jsonrpc-types` and `ras-rest-core` re-export it, so consumers reach it through a crate they already use.
 
 ## What it does
 
@@ -31,3 +35,7 @@ references from the serialization side are rewritten to match.
 Two different types that share a schemars name, one only read and one only sent,
 also end up as `<name>` and `<name>.Serialize`.
 The references are right; the name only suggests a closer relation than there is.
+
+For JSON-RPC the embedded code also decides how a request's `params` are described
+(named descriptors, or one raw descriptor), checks that a request example reads back unchanged,
+and turns authored examples into example pairings, `x-ras-error-examples` and the method's `errors` list.

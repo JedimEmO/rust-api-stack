@@ -91,10 +91,46 @@ jsonrpc_service!({
 
         // Task management
         WITH_PERMISSIONS([]) list_tasks(()) -> TaskListResponse,
-        WITH_PERMISSIONS([]) create_task(CreateTaskRequest) -> Task,
+        /// Create a task for the signed-in user.
+        WITH_PERMISSIONS([]) create_task(CreateTaskRequest) -> Task {
+            examples: [
+                /// A high-priority task.
+                urgent {
+                    params: CreateTaskRequest {
+                        title: "Ship the example".to_string(),
+                        description: "Exercise the generated client".to_string(),
+                        priority: TaskPriority::High,
+                    },
+                    result: Task {
+                        id: "task-1".to_string(),
+                        title: "Ship the example".to_string(),
+                        description: "Exercise the generated client".to_string(),
+                        completed: false,
+                        priority: TaskPriority::High,
+                        created_at: "2026-05-23T12:00:00Z".to_string(),
+                        updated_at: "2026-05-23T12:00:00Z".to_string(),
+                    },
+                },
+                /// Titles are unique per user.
+                duplicate_title {
+                    params: CreateTaskRequest {
+                        title: "Ship the example".to_string(),
+                        description: String::new(),
+                        priority: TaskPriority::Low,
+                    },
+                    error: { code: 1001, message: "A task with this title already exists" },
+                },
+            ],
+        },
         WITH_PERMISSIONS([]) update_task(UpdateTaskRequest) -> Task,
         WITH_PERMISSIONS([]) delete_task(String) -> bool,
-        WITH_PERMISSIONS([]) get_task(String) -> Option<Task>,
+        /// Look up one task by id.
+        WITH_PERMISSIONS([]) get_task(String) -> Option<Task> {
+            examples: [
+                /// An id that matches no task.
+                unknown { params: "task-404".to_string(), result: None },
+            ],
+        },
 
         // User profile
         WITH_PERMISSIONS([]) get_profile(()) -> UserProfile,
@@ -110,6 +146,23 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn openrpc_document_carries_the_authored_examples() {
+        let doc = try_generate_myservice_openrpc().expect("examples serialize faithfully");
+        let create_task = doc["methods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|method| method["name"] == "create_task")
+            .unwrap();
+        assert_eq!(create_task["paramStructure"], "by-name");
+        assert_eq!(create_task["examples"][0]["name"], "urgent");
+        assert_eq!(
+            create_task["x-ras-error-examples"][0]["error"],
+            json!({ "code": 1001, "message": "A task with this title already exists" })
+        );
+    }
 
     #[test]
     fn sign_in_request_serializes_with_stable_variant_name() {

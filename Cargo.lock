@@ -3101,6 +3101,7 @@ dependencies = [
 name = "ras-jsonrpc-types"
 version = "0.2.0"
 dependencies = [
+ "ras-spec-components",
  "serde",
  "serde_json",
 ]
@@ -3160,6 +3161,7 @@ name = "ras-rest-core"
 version = "0.2.0"
 dependencies = [
  "ras-auth-core",
+ "ras-spec-components",
  "ras-version-core",
  "serde",
  "thiserror 2.0.18",

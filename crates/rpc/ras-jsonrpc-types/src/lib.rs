@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 mod handler_error;
 pub use handler_error::{HandlerErrorOutcome, PublicRpcError, handler_code_allowed};
+pub use ras_spec_components::SpecGenerationError;
 
 /// JSON-RPC 2.0 request structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]

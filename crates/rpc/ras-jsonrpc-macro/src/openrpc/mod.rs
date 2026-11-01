@@ -32,6 +32,8 @@ pub fn generate_openrpc_code(
     let service_name = &service_def.service_name;
     let service_name_lower = service_name.to_string().to_lowercase();
     let openrpc_fn_name = quote::format_ident!("generate_{}_openrpc", service_name_lower);
+    let try_openrpc_fn_name = quote::format_ident!("try_generate_{}_openrpc", service_name_lower);
+    let service_str = service_name.to_string();
     let openrpc_to_file_fn_name =
         quote::format_ident!("generate_{}_openrpc_to_file", service_name_lower);
     let method_info_struct_name = quote::format_ident!("{}OpenRpcMethodInfo", service_name);
@@ -51,8 +53,9 @@ pub fn generate_openrpc_code(
     };
 
     let embedded = embedded_components(&components_mod);
-    let method_infos = methods::generate_method_infos(service_def, &method_info_struct_name);
-    let methods = methods::generate_methods(&components_mod);
+    let method_infos =
+        methods::generate_method_infos(service_def, &method_info_struct_name, &components_mod);
+    let methods = methods::generate_methods(&service_str, &components_mod);
 
     quote! {
         #embedded
@@ -70,13 +73,24 @@ pub fn generate_openrpc_code(
             /// `None` for a `()` request, which takes no parameters.
             params_schema: Option<serde_json::Value>,
             result_schema: serde_json::Value,
+            /// Authored examples; only the canonical method has them.
+            examples: Vec<#components_mod::Example>,
             version: Option<String>,
             canonical_version: Option<String>,
             canonical_method: String,
         }
 
-        /// Generate OpenRPC document for this service
+        /// Generate the OpenRPC document for this service.
+        ///
+        /// Panics when an authored example cannot be serialized; see the
+        /// fallible variant next to it.
         pub fn #openrpc_fn_name() -> serde_json::Value {
+            #try_openrpc_fn_name().unwrap_or_else(|error| panic!("{error}"))
+        }
+
+        /// Generate the OpenRPC document for this service, or say which example
+        /// or part of the document could not be built.
+        pub fn #try_openrpc_fn_name() -> Result<serde_json::Value, ras_jsonrpc_types::SpecGenerationError> {
             use serde_json::json;
 
             let mut generators = #components_mod::Generators::new(#components_mod::Dialect::OpenRpc);
@@ -85,9 +99,9 @@ pub fn generate_openrpc_code(
                 #(#method_infos),*
             ];
 
-            let components = generators.into_components().unwrap_or_else(|error| {
-                panic!("OpenRPC document for {}: {}", stringify!(#service_name), error)
-            });
+            let components = generators.into_components().map_err(|error| {
+                ras_jsonrpc_types::SpecGenerationError::document(#service_str, error)
+            })?;
             for method in &mut methods {
                 components.fix_serialized(&mut method.result_schema);
             }
@@ -95,7 +109,7 @@ pub fn generate_openrpc_code(
 
             #methods
 
-            json!({
+            Ok(json!({
                 "openrpc": "1.3.2",
                 "info": {
                     "title": format!("{} JSON-RPC API", stringify!(#service_name)),
@@ -140,12 +154,12 @@ pub fn generate_openrpc_code(
                         }
                     }
                 }
-            })
+            }))
         }
 
         /// Write OpenRPC document to the target directory
         pub fn #openrpc_to_file_fn_name() -> std::io::Result<()> {
-            let doc = #openrpc_fn_name();
+            let doc = #try_openrpc_fn_name().map_err(std::io::Error::other)?;
             let output_path = #output_path_code;
 
             if let Some(parent) = std::path::Path::new(&output_path).parent() {
