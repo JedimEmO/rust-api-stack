@@ -7,9 +7,10 @@
 //! for notifying or calling one client) and the client side (a typed `<Name>Client` with
 //! `on_<name>` handler registration, and a `<Name>ClientBuilder`).
 //!
-//! The generated code runs on `ras-jsonrpc-bidirectional-server` and
-//! `ras-jsonrpc-bidirectional-client`, and names them and their supporting crates by path, so the
-//! API crate must depend on them directly.
+//! The generated server code runs on `ras-jsonrpc-bidirectional-server` and the client code on
+//! `ras-jsonrpc-bidirectional-client`, and reaches every other crate it uses through them. The
+//! API crate depends on those two, usually behind its `server` and `client` features, and on
+//! `serde` for its own payload derives.
 //!
 //! # Cargo features
 //!
@@ -64,9 +65,9 @@ mod tests;
 /// `WITH_PERMISSIONS` requires a user holding every permission of at least one `|`-separated
 /// group; `WITH_PERMISSIONS([])` admits any authenticated user.
 ///
-/// `server_to_client_calls` entries need no auth requirement. `UNAUTHORIZED` and
-/// `WITH_PERMISSIONS` are accepted there but not enforced, since the call is outbound;
-/// `OPTIONAL_AUTH` is a compile error.
+/// `server_to_client_calls` entries need no auth requirement, since the server makes the call.
+/// `UNAUTHORIZED` is accepted there and means the same as no keyword; `OPTIONAL_AUTH` and
+/// `WITH_PERMISSIONS` are compile errors.
 ///
 /// Payload types must implement `Serialize` and `Deserialize`. The generated client also needs
 /// `Debug` on request and response types, and `Debug + Clone` on notification types.
@@ -225,7 +226,18 @@ fn parse_server_to_client_call(input: syn::parse::ParseStream) -> syn::Result<Me
                      on client_to_server methods).",
                 ));
             }
-            "UNAUTHORIZED" | "WITH_PERMISSIONS" => {
+            // The server makes the call, so nothing on the server side could check the
+            // permissions; accepting the keyword would promise a check that never runs.
+            "WITH_PERMISSIONS" => {
+                return Err(syn::Error::new(
+                    ident.span(),
+                    "WITH_PERMISSIONS is not supported on server_to_client calls: the server \
+                     makes the call, so there is no caller whose permissions could be checked. \
+                     Check permissions in the server code that makes the call, and drop the \
+                     auth keyword here.",
+                ));
+            }
+            "UNAUTHORIZED" => {
                 return input.parse::<MethodDefinition>();
             }
             _ => {}

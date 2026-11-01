@@ -18,13 +18,10 @@ edition = "2024"
 ras-rest-macro = { version = "0.4.0", default-features = false }
 ras-file-macro = { version = "0.3.0", default-features = false }
 ras-jsonrpc-bidirectional-macro = { version = "0.3.0", default-features = false }
-ras-jsonrpc-types = "0.3.0"
-ras-jsonrpc-bidirectional-types = "0.3.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 schemars = { version = "1.2", optional = true }
 async-trait = { version = "0.1", optional = true }
-tokio = { version = "1.0", features = ["sync"], optional = true }
 ras-transport-core = { version = "0.2.0", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -60,7 +57,6 @@ client = [
     "ras-jsonrpc-bidirectional-macro/client",
     "ras-transport-core/reqwest",
     "dep:ras-jsonrpc-bidirectional-client",
-    "dep:tokio",
 ]
 fs = ["ras-file-macro/fs", "ras-transport-core/fs"]
 ```
@@ -71,8 +67,8 @@ The macro crates' features decide which code is generated;
 the API crate's features are a convenient way to select them from downstream crates.
 Notice that the bidirectional client appears twice:
 the native WebSocket client by default, and its `wasm` feature in browser builds.
-The generated bidirectional client also uses `tokio::sync` channels,
-which is why `client` turns on `tokio` with only the `sync` feature.
+The bidirectional code reaches its other dependencies through the server and client crates,
+so neither side needs more than those two.
 
 Enable `workspace-api/fs` for the native file-client helpers that stream upload
 parts from disk.

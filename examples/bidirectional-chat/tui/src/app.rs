@@ -179,6 +179,12 @@ impl AppState {
     }
 }
 
+/// The room list index a key selects: `1` is the first room, and `0` or any
+/// other key selects nothing.
+pub fn room_index_for_key(key: char) -> Option<usize> {
+    key.to_digit(10)?.checked_sub(1).map(|index| index as usize)
+}
+
 pub struct ChatClient {
     client: Option<ChatServiceClient>,
     event_tx: mpsc::UnboundedSender<AppEvent>,
@@ -345,6 +351,14 @@ impl ChatClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn room_keys_are_one_based_and_zero_selects_nothing() {
+        assert_eq!(room_index_for_key('1'), Some(0));
+        assert_eq!(room_index_for_key('9'), Some(8));
+        assert_eq!(room_index_for_key('0'), None);
+        assert_eq!(room_index_for_key('x'), None);
+    }
 
     fn message(room_id: &str, text: &str) -> Message {
         Message {

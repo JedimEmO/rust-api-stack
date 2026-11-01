@@ -43,9 +43,11 @@ jsonrpc_bidirectional_service!({
 `client_to_server` lists the methods the client calls, each with an auth requirement.
 `server_to_client` lists notifications, which get no response.
 `server_to_client_calls` lists methods the server calls on the client and waits for.
+They take no auth requirement, because the server is the caller.
 All three lists are required, in this order, and may be empty.
 
 On the server side this generates the `ChatServiceService` trait to implement,
+with one method per client call and a default-deny `authorize_subscribe` for topics,
 `ChatServiceBuilder` to turn it into an Axum-ready WebSocket service,
 and `ChatServiceClientHandle` to notify or call one connected client.
 On the client side it generates `ChatServiceClient`,
@@ -61,11 +63,10 @@ The macro belongs in a shared API crate that the server and the clients both dep
 ras-jsonrpc-bidirectional-macro = { version = "0.3", default-features = false }
 ```
 
-The generated code calls into other crates by path,
-so the API crate also needs `ras-auth-core`, `ras-jsonrpc-types`,
-`ras-jsonrpc-bidirectional-types`, `async-trait`, `serde`, `serde_json` and `tokio`,
-plus `ras-jsonrpc-bidirectional-server` and `ras-jsonrpc-bidirectional-client`
-behind its `server` and `client` features.
+The generated server code reaches everything it uses through `ras-jsonrpc-bidirectional-server`,
+and the client code through `ras-jsonrpc-bidirectional-client`.
+So the API crate needs those two, behind its `server` and `client` features,
+and `serde` for its own payload types.
 The guide has the complete `Cargo.toml`.
 
 ## Cargo features

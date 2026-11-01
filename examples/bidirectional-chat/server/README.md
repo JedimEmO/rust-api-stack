@@ -44,7 +44,7 @@ These environment variables override the configuration file directly:
 - `HOST`, an IP address such as `0.0.0.0`, and `PORT`
 - `JWT_SECRET`, at least 32 bytes and free of placeholder words; generate one with `openssl rand -hex 32`
 - `CHAT_DATA_DIR`
-- `RUST_LOG`, which must be a plain level such as `debug`; filter strings fail validation
+- `RUST_LOG`, a plain level such as `debug` or a filter such as `info,ras_jsonrpc_bidirectional_server=debug`
 
 Other values use the `CHAT__SECTION__FIELD` form:
 

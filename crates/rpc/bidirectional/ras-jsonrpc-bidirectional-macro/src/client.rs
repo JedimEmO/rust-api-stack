@@ -26,125 +26,74 @@ pub fn generate_client_code(
     let server_to_client_notification_name =
         quote::format_ident!("{}ServerToClientNotification", service_name);
 
-    // Generate client method implementations for client_to_server calls
+    let client_crate = quote! { ::ras_jsonrpc_bidirectional_client };
+    let private = quote! { #client_crate::__private };
+    let serde_path = "::ras_jsonrpc_bidirectional_client::__private::serde";
+
+    // One typed method per client_to_server call.
     let client_methods = service_def.client_to_server.iter().map(|method| {
         let method_name = &method.name;
         let method_str = method_name.to_string();
         let request_type = &method.request_type;
         let response_type = &method.response_type;
+        let doc = format!("Call `{method_str}` on the server.");
 
         quote! {
-            /// Call the #method_name method on the server
-            pub async fn #method_name(&self, request: #request_type) -> ras_jsonrpc_bidirectional_client::error::ClientResult<#response_type> {
-                let response = self.client.call(#method_str, Some(serde_json::to_value(request)?)).await?;
-                match response.result {
-                    Some(result) => {
-                        Ok(serde_json::from_value(result)?)
-                    }
-                    None => {
-                        // Check if there was an error
-                        if let Some(error) = response.error {
-                            Err(ras_jsonrpc_bidirectional_client::ClientError::Rpc(error))
-                        } else {
-                            Err(ras_jsonrpc_bidirectional_client::ClientError::internal("Response has no result or error"))
-                        }
-                    }
-                }
+            #[doc = #doc]
+            pub async fn #method_name(&self, request: #request_type) -> #client_crate::error::ClientResult<#response_type> {
+                #private::call_method(&self.client, #method_str, request).await
             }
         }
     });
 
-    // Generate notification handler registration methods for server_to_client notifications
+    // One `on_<name>` registration per server_to_client notification.
     let notification_handlers = service_def.server_to_client.iter().map(|notification| {
         let notification_name = &notification.name;
         let params_type = &notification.params_type;
         let handler_method_name = quote::format_ident!("on_{}", notification_name);
         let notification_str = notification_name.to_string();
+        let doc = format!(
+            "Handle the `{notification_str}` notification. Params that do not decode are logged \
+             and dropped."
+        );
 
         quote! {
-            /// Register a handler for #notification_name notifications from the server
+            #[doc = #doc]
             pub fn #handler_method_name<F>(&mut self, handler: F)
             where
                 F: Fn(#params_type) + Send + Sync + 'static,
             {
-                let handler = std::sync::Arc::new(move |method: &str, params: &serde_json::Value| {
-                    if method == #notification_str {
-                        match serde_json::from_value::<#params_type>(params.clone()) {
-                            Ok(typed_params) => handler(typed_params),
-                            Err(e) => {
-                                eprintln!("Failed to deserialize notification parameters: {}", e);
-                            }
-                        }
-                    }
-                });
-                self.client.on_notification(#notification_str, handler);
+                self.client.on_notification(
+                    #notification_str,
+                    #private::notification_handler::<#params_type, _>(#notification_str, handler),
+                );
             }
         }
     });
 
-    // Generate RPC handler registration methods for server_to_client calls
+    // One `on_<name>` registration per server_to_client call.
     let rpc_handlers = service_def.server_to_client_calls.iter().map(|method| {
         let method_name = &method.name;
         let request_type = &method.request_type;
         let response_type = &method.response_type;
         let handler_method_name = quote::format_ident!("on_{}", method_name);
         let method_str = method_name.to_string();
+        let doc = format!(
+            "Answer the server's `{method_str}` call. An `Err` reaches the server as code \
+             `-32000` with the string as its message."
+        );
 
         quote! {
-            /// Register a handler for #method_name RPC calls from the server
+            #[doc = #doc]
             pub fn #handler_method_name<F, Fut>(&mut self, handler: F)
             where
                 F: Fn(#request_type) -> Fut + Send + Sync + 'static,
-                Fut: std::future::Future<Output = Result<#response_type, String>> + Send + 'static,
+                Fut: ::std::future::Future<Output = ::std::result::Result<#response_type, ::std::string::String>> + Send + 'static,
             {
-                let callback = std::sync::Arc::new(handler);
-                let handler = std::sync::Arc::new(move |request: ras_jsonrpc_types::JsonRpcRequest| {
-                    let callback = callback.clone();
-                    Box::pin(async move {
-                        // Parse request parameters
-                        let params: #request_type = if let Some(params) = request.params {
-                            match serde_json::from_value(params) {
-                                Ok(p) => p,
-                                Err(e) => {
-                                    return ras_jsonrpc_types::JsonRpcResponse::error(
-                                        ras_jsonrpc_types::JsonRpcError::new(-32602, format!("Invalid params: {}", e), None),
-                                        request.id
-                                    );
-                                }
-                            }
-                        } else {
-                            match serde_json::from_value(serde_json::Value::Null) {
-                                Ok(p) => p,
-                                Err(e) => {
-                                    return ras_jsonrpc_types::JsonRpcResponse::error(
-                                        ras_jsonrpc_types::JsonRpcError::new(-32602, format!("Invalid params: {}", e), None),
-                                        request.id
-                                    );
-                                }
-                            }
-                        };
-
-                        // Call handler
-                        match callback(params).await {
-                            Ok(result) => {
-                                match serde_json::to_value(result) {
-                                    Ok(result_value) => ras_jsonrpc_types::JsonRpcResponse::success(result_value, request.id),
-                                    Err(e) => ras_jsonrpc_types::JsonRpcResponse::error(
-                                        ras_jsonrpc_types::JsonRpcError::new(-32603, format!("Failed to serialize result: {}", e), None),
-                                        request.id
-                                    ),
-                                }
-                            }
-                            Err(error_msg) => {
-                                ras_jsonrpc_types::JsonRpcResponse::error(
-                                    ras_jsonrpc_types::JsonRpcError::new(-32000, error_msg, None),
-                                    request.id
-                                )
-                            }
-                        }
-                    }) as std::pin::Pin<Box<dyn std::future::Future<Output = ras_jsonrpc_types::JsonRpcResponse> + Send>>
-                });
-                self.client.on_rpc_request(#method_str, handler);
+                self.client.on_rpc_request(
+                    #method_str,
+                    #private::rpc_handler::<#request_type, #response_type, _, _>(handler),
+                );
             }
         }
     });
@@ -159,7 +108,7 @@ pub fn generate_client_code(
         quote! {
             #variant_name {
                 request: #request_type,
-                response_sender: tokio::sync::oneshot::Sender<Result<#response_type, ras_jsonrpc_bidirectional_client::ClientError>>,
+                response_sender: #private::tokio::sync::oneshot::Sender<::std::result::Result<#response_type, #client_crate::ClientError>>,
             },
         }
     });
@@ -178,22 +127,22 @@ pub fn generate_client_code(
     quote! {
         /// Generated client for the bidirectional service
         pub struct #client_name {
-            client: ras_jsonrpc_bidirectional_client::Client,
+            client: #client_crate::Client,
         }
 
         impl #client_name {
             /// Create a new client from a pre-configured Client
-            pub fn new(client: ras_jsonrpc_bidirectional_client::Client) -> Self {
+            pub fn new(client: #client_crate::Client) -> Self {
                 Self { client }
             }
 
             /// Get the underlying client
-            pub fn client(&self) -> &ras_jsonrpc_bidirectional_client::Client {
+            pub fn client(&self) -> &#client_crate::Client {
                 &self.client
             }
 
             /// Get a mutable reference to the underlying client
-            pub fn client_mut(&mut self) -> &mut ras_jsonrpc_bidirectional_client::Client {
+            pub fn client_mut(&mut self) -> &mut #client_crate::Client {
                 &mut self.client
             }
 
@@ -204,12 +153,12 @@ pub fn generate_client_code(
             #(#rpc_handlers)*
 
             /// Connect to the WebSocket server
-            pub async fn connect(&self) -> ras_jsonrpc_bidirectional_client::error::ClientResult<()> {
+            pub async fn connect(&self) -> #client_crate::error::ClientResult<()> {
                 self.client.connect().await
             }
 
             /// Disconnect from the WebSocket server
-            pub async fn disconnect(&self) -> ras_jsonrpc_bidirectional_client::error::ClientResult<()> {
+            pub async fn disconnect(&self) -> #client_crate::error::ClientResult<()> {
                 self.client.disconnect().await
             }
 
@@ -219,26 +168,26 @@ pub fn generate_client_code(
             }
 
             /// Subscribe to a topic for broadcast messages
-            pub async fn subscribe(&self, topic: &str, handler: ras_jsonrpc_bidirectional_client::NotificationHandler) -> ras_jsonrpc_bidirectional_client::error::ClientResult<()> {
+            pub async fn subscribe(&self, topic: &str, handler: #client_crate::NotificationHandler) -> #client_crate::error::ClientResult<()> {
                 self.client.subscribe(topic, handler).await
             }
 
             /// Unsubscribe from a topic
-            pub async fn unsubscribe(&self, topic: &str) -> ras_jsonrpc_bidirectional_client::error::ClientResult<()> {
+            pub async fn unsubscribe(&self, topic: &str) -> #client_crate::error::ClientResult<()> {
                 self.client.unsubscribe(topic).await
             }
         }
 
         /// Builder for the bidirectional client
         pub struct #client_builder_name {
-            url: String,
-            jwt_token: Option<String>,
-            timeout: Option<std::time::Duration>,
+            url: ::std::string::String,
+            jwt_token: ::std::option::Option<::std::string::String>,
+            timeout: ::std::option::Option<::std::time::Duration>,
         }
 
         impl #client_builder_name {
             /// Create a new client builder
-            pub fn new(url: impl Into<String>) -> Self {
+            pub fn new(url: impl Into<::std::string::String>) -> Self {
                 Self {
                     url: url.into(),
                     jwt_token: None,
@@ -247,20 +196,20 @@ pub fn generate_client_code(
             }
 
             /// Set JWT token for authentication
-            pub fn with_jwt_token(mut self, token: String) -> Self {
+            pub fn with_jwt_token(mut self, token: ::std::string::String) -> Self {
                 self.jwt_token = Some(token);
                 self
             }
 
             /// Set request timeout
-            pub fn with_request_timeout(mut self, timeout: std::time::Duration) -> Self {
+            pub fn with_request_timeout(mut self, timeout: ::std::time::Duration) -> Self {
                 self.timeout = Some(timeout);
                 self
             }
 
             /// Build the client
-            pub async fn build(self) -> ras_jsonrpc_bidirectional_client::error::ClientResult<#client_name> {
-                let mut builder = ras_jsonrpc_bidirectional_client::ClientBuilder::new(&self.url);
+            pub async fn build(self) -> #client_crate::error::ClientResult<#client_name> {
+                let mut builder = #client_crate::ClientBuilder::new(&self.url);
 
                 if let Some(token) = self.jwt_token {
                     builder = builder.with_jwt_token(token);
@@ -282,7 +231,8 @@ pub fn generate_client_code(
         }
 
         /// Type-safe enum for server-to-client notifications
-        #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+        #[derive(Debug, Clone, #private::serde::Serialize, #private::serde::Deserialize)]
+        #[serde(crate = #serde_path)]
         pub enum #server_to_client_notification_name {
             #(#server_to_client_notifications)*
         }

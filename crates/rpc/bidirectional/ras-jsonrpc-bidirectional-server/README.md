@@ -14,6 +14,9 @@ The [`jsonrpc_bidirectional_service!`](../ras-jsonrpc-bidirectional-macro) macro
 a handler and a builder on top of it;
 the [guide](../../../../documentation/src/macros/bidirectional-jsonrpc-service.md)
 shows how to define, mount and configure such a service.
+This crate re-exports `async_trait`, `ConnectionId`, `ConnectionManager`, `AuthenticatedUser`
+and `Caller`, the names a generated `<Name>Service` implementation needs,
+so a server depends on this crate and the API crate and nothing else for the WebSocket side.
 This README covers the parts you use by hand.
 
 ## A server without the macro
@@ -79,11 +82,14 @@ whichever registration handled it.
 A handler error reaches the client as `-32603 "Internal error"` with no detail.
 The exception is `ServerError::Rpc` with a code the handler may use:
 any code outside the reserved range `-32768..=-32000`, or `-32602`.
+Return `ServerError::InvalidParams` when the params do not decode;
+the client gets `-32602 "Invalid params"`, which is also what the generated handler sends.
 `ServerError` is `#[non_exhaustive]`.
 
 For full control, implement `MessageHandler` yourself.
 Its `authorize_subscribe` decides which topics a connection may subscribe to,
 and it refuses every topic unless you override it.
+The handler the macro generates passes the question on to the service's own `authorize_subscribe`.
 
 ## Configuring the service
 
@@ -145,7 +151,7 @@ from `ras-jsonrpc-bidirectional-types`.
 Handlers receive it, and the server sends through it:
 
 ```rust
-use ras_jsonrpc_bidirectional_types::ConnectionManager;
+use ras_jsonrpc_bidirectional_server::ConnectionManager;
 
 manager.send_to_connection(connection_id, message).await?;
 manager.broadcast_to_topic("updates", message).await?;

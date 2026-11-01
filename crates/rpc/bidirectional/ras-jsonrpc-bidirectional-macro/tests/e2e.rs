@@ -49,8 +49,33 @@ jsonrpc_bidirectional_service!({
         ping(PushNote),
     ],
     server_to_client_calls: [
+        confirm(String) -> bool,
     ]
 });
+
+// A service that keeps the default subscription policy.
+jsonrpc_bidirectional_service!({
+    service_name: Quiet,
+    client_to_server: [
+        UNAUTHORIZED noop(()) -> (),
+    ],
+    server_to_client: [],
+    server_to_client_calls: []
+});
+
+struct QuietImpl;
+
+#[async_trait]
+impl QuietService for QuietImpl {
+    async fn noop(
+        &self,
+        _client: ConnectionId,
+        _conns: &dyn ConnectionManager,
+        _request: (),
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        Ok(())
+    }
+}
 
 #[derive(Clone)]
 struct DemoImpl;
@@ -109,12 +134,15 @@ impl DemoService for DemoImpl {
         })
     }
 
-    async fn notify_ping(
+    async fn authorize_subscribe(
         &self,
-        _connection_id: ConnectionId,
-        _params: PushNote,
-    ) -> ras_jsonrpc_bidirectional_types::Result<()> {
-        Ok(())
+        _client: ConnectionId,
+        _conns: &dyn ConnectionManager,
+        user: Option<&AuthenticatedUser>,
+        topic: &str,
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+        // Signed-in connections may follow `news`; nothing else is open.
+        Ok(user.is_some() && topic == "news")
     }
 }
 
@@ -443,4 +471,150 @@ async fn generated_handler_sends_response_and_notification_without_socket() {
         .expect("server notification should be sent");
     assert_eq!(notification.method, "ping");
     assert_eq!(notification.params["kind"], "after-echo");
+}
+
+#[tokio::test]
+async fn bad_params_get_the_invalid_params_code() {
+    let messages = run_generated_handler(
+        JsonRpcRequest::new(
+            "echo".into(),
+            Some(serde_json::json!({ "not_msg": 1 })),
+            Some(7.into()),
+        ),
+        Some(test_user("user-1", &["user"])),
+        None,
+    )
+    .await;
+
+    let error = response_from(&messages)
+        .error
+        .as_ref()
+        .expect("invalid params must be rejected");
+    assert_eq!(error.code, -32602);
+}
+
+async fn context_for(user: Option<AuthenticatedUser>) -> Arc<ConnectionContext> {
+    let connection_id = ConnectionId::new();
+    let (message_tx, _message_rx) = mpsc::channel(8);
+    let context = Arc::new(ConnectionContext::new(
+        connection_id,
+        ChannelMessageSender::new(connection_id, message_tx),
+    ));
+    if let Some(user) = user {
+        context.set_user(user).await;
+    }
+    context
+}
+
+#[tokio::test]
+async fn generated_handler_asks_the_service_to_authorize_subscriptions() {
+    use ras_jsonrpc_bidirectional_server::MessageHandler;
+
+    let handler = DemoHandler::new(
+        Arc::new(DemoImpl),
+        Arc::new(DefaultConnectionManager::new()),
+    );
+
+    let signed_in = context_for(Some(test_user("user-1", &[]))).await;
+    assert!(
+        handler
+            .authorize_subscribe("news", &signed_in)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !handler
+            .authorize_subscribe("admin", &signed_in)
+            .await
+            .unwrap()
+    );
+
+    let anonymous = context_for(None).await;
+    assert!(
+        !handler
+            .authorize_subscribe("news", &anonymous)
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn generated_handler_denies_subscriptions_by_default() {
+    use ras_jsonrpc_bidirectional_server::MessageHandler;
+
+    let handler = QuietHandler::new(
+        Arc::new(QuietImpl),
+        Arc::new(DefaultConnectionManager::new()),
+    );
+    let context = context_for(Some(test_user("user-1", &["admin"]))).await;
+    assert!(!handler.authorize_subscribe("news", &context).await.unwrap());
+}
+
+#[tokio::test]
+async fn generated_builder_sets_revalidation_and_shares_the_manager() {
+    use ras_jsonrpc_bidirectional_server::WebSocketService;
+
+    let manager = Arc::new(DefaultConnectionManager::new());
+    let service = DemoBuilder::new(DemoImpl, WildcardProvider)
+        .auth_revalidation_interval(std::time::Duration::from_secs(5))
+        .build_with_manager(manager.clone());
+
+    assert_eq!(
+        service.auth_revalidation_interval(),
+        std::time::Duration::from_secs(5)
+    );
+    assert!(Arc::ptr_eq(&service.connection_manager(), &manager));
+    assert!(Arc::ptr_eq(
+        service.handler().connection_manager(),
+        &manager
+    ));
+}
+
+#[tokio::test]
+async fn client_handle_call_timeout_is_configurable() {
+    let manager = Arc::new(DefaultConnectionManager::new());
+    let connection_id = ConnectionId::new();
+    // Keep the receiver alive but never answer, so the call can only time out.
+    let (message_tx, _message_rx) = mpsc::channel(8);
+    manager
+        .add_connection_with_sender(
+            ConnectionInfo::new(connection_id),
+            Box::new(ChannelMessageSender::new(connection_id, message_tx)),
+        )
+        .await
+        .unwrap();
+
+    let handle = DemoClientHandle::new(connection_id, manager.as_ref());
+    assert_eq!(handle.call_timeout(), std::time::Duration::from_secs(30));
+
+    let handle = handle.with_call_timeout(std::time::Duration::from_millis(20));
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        handle.confirm("leave?".to_string()),
+    )
+    .await
+    .expect("the configured timeout must fire well before five seconds");
+    assert!(matches!(
+        result,
+        Err(ras_jsonrpc_bidirectional_types::BidirectionalError::Timeout)
+    ));
+}
+
+#[tokio::test]
+async fn handler_hands_out_client_handles_with_its_call_timeout() {
+    let manager = Arc::new(DefaultConnectionManager::new());
+    let connection_id = ConnectionId::new();
+    let (message_tx, _message_rx) = mpsc::channel(8);
+    manager
+        .add_connection_with_sender(
+            ConnectionInfo::new(connection_id),
+            Box::new(ChannelMessageSender::new(connection_id, message_tx)),
+        )
+        .await
+        .unwrap();
+
+    let handler = DemoHandler::new(Arc::new(DemoImpl), manager)
+        .with_client_call_timeout(std::time::Duration::from_secs(3));
+    let handle = handler.get_client(connection_id).await.unwrap();
+    assert_eq!(handle.call_timeout(), std::time::Duration::from_secs(3));
 }

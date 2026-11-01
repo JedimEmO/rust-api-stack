@@ -12,7 +12,12 @@
 //! - [`service::websocket_handler`], the Axum handler that serves a [`WebSocketService`];
 //! - [`DefaultConnectionManager`], which tracks connections and topic subscriptions and sends or
 //!   broadcasts to them;
-//! - [`ServerError`], whose [`ServerError::Rpc`] variant carries an error the client may see.
+//! - [`ServerError`], whose [`ServerError::Rpc`] variant carries an error the client may see,
+//!   and whose [`ServerError::InvalidParams`] is sent as `-32602`.
+//!
+//! The crate re-exports [`async_trait`](macro@async_trait), [`ConnectionId`], [`ConnectionManager`],
+//! [`AuthenticatedUser`] and [`Caller`], the names an implementation of a generated
+//! `<Name>Service` trait needs.
 //!
 //! The connection is authenticated during the upgrade, from an `Authorization: Bearer` header, a
 //! `token.<jwt>` WebSocket subprotocol for browsers, or an `X-Auth-Token` header. A JSON-RPC
@@ -31,6 +36,10 @@ pub mod router;
 pub mod service;
 mod subscriptions;
 pub mod upgrade;
+
+#[doc(hidden)]
+#[path = "private.rs"]
+pub mod __private;
 
 pub use connection::{
     ChannelMessageSender, ConnectionContext, OutboundMessage, SubscriptionPolicy,
@@ -52,7 +61,14 @@ pub use ras_jsonrpc_bidirectional_types::{
 };
 
 // Re-export auth types for convenience
-pub use ras_auth_core::{AuthError, AuthProvider, AuthenticatedUser};
+pub use ras_auth_core::{AuthError, AuthProvider, AuthenticatedUser, Caller};
+
+// Types that appear in the signatures of a generated `<Name>Service` trait.
+pub use ras_jsonrpc_bidirectional_types::ConnectionManager;
+
+/// The attribute a `<Name>Service` implementation needs, re-exported so the implementing crate
+/// does not have to depend on `async-trait` itself.
+pub use async_trait::async_trait;
 
 // Re-export JSON-RPC types
 pub use ras_jsonrpc_types::{JsonRpcRequest, JsonRpcResponse};

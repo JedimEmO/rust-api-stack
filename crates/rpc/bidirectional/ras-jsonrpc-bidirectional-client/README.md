@@ -10,6 +10,9 @@ When the API is defined with the
 [`jsonrpc_bidirectional_service!`](../ras-jsonrpc-bidirectional-macro) macro,
 the generated `<Name>Client` wraps this client and gives each method a typed signature;
 see the [guide](../../../../documentation/src/macros/bidirectional-jsonrpc-service.md).
+The generated code reaches `serde`, `serde_json` and `tokio` through this crate,
+so the API crate does not depend on them for the client side.
+A notification whose params do not decode into the declared type is logged as a warning and dropped.
 This README covers the untyped client underneath.
 
 ## Installing

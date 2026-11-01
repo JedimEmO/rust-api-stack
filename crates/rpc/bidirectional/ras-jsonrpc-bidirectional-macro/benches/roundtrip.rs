@@ -71,14 +71,6 @@ impl BenchSvcService for BenchImpl {
     ) -> Result<EchoOut, Box<dyn std::error::Error + Send + Sync>> {
         Ok(EchoOut { msg: req.msg })
     }
-
-    async fn notify_unused(
-        &self,
-        _connection_id: ConnectionId,
-        _params: Ignored,
-    ) -> ras_jsonrpc_bidirectional_types::Result<()> {
-        Ok(())
-    }
 }
 
 struct InMemorySocket {

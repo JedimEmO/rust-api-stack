@@ -20,30 +20,22 @@ and a native, TUI or browser client enables `client`.
 
 ```toml
 [dependencies]
-async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tokio = { version = "1", features = ["sync"] }
-ras-auth-core = "0.3"
-ras-jsonrpc-types = "0.3"
-ras-jsonrpc-bidirectional-types = "0.3"
 ras-jsonrpc-bidirectional-macro = { version = "0.3", default-features = false }
 ras-jsonrpc-bidirectional-server = { version = "0.4", optional = true }
 ras-jsonrpc-bidirectional-client = { version = "0.4", optional = true }
-# Only needed when the service declares `server_to_client_calls`.
-uuid = { version = "1", features = ["v4"], optional = true }
 
 [features]
 default = []
-server = ["dep:ras-jsonrpc-bidirectional-server", "tokio/time", "dep:uuid"]
+server = ["dep:ras-jsonrpc-bidirectional-server"]
 client = ["dep:ras-jsonrpc-bidirectional-client"]
 ```
 
-The generated code names these crates by path,
-so each of them must be a direct dependency of the API crate.
-`tokio` appears because the generated client types use `tokio` channels.
-`tokio/time` and `uuid` serve server-to-client calls,
-which wait on a timer and need a fresh request id.
+The generated server code reaches everything it uses through `ras-jsonrpc-bidirectional-server`,
+and the generated client code through `ras-jsonrpc-bidirectional-client`,
+so those two crates are the only runtime dependencies.
+`serde` is there for your own payload derives.
+A browser client depends on the client crate with `default-features = false, features = ["wasm"]`.
 
 Write `feature_gated: true` in the definition, as in the next section.
 The generated server code is then wrapped in `#[cfg(feature = "server")]`
@@ -127,11 +119,11 @@ in the same syntax as `jsonrpc_service!`
   with all permissions of at least one group.
   `WITH_PERMISSIONS([])` accepts any authenticated user.
 
-A `server_to_client_calls` entry needs no auth requirement.
-`UNAUTHORIZED` and `WITH_PERMISSIONS(...)` are accepted there,
-but nothing checks them, because the call goes out from the server;
-they only appear in the permission manifest.
-`OPTIONAL_AUTH` there is a compile error.
+A `server_to_client_calls` entry needs no auth requirement,
+because the server makes the call and there is no caller to check.
+`UNAUTHORIZED` is accepted there and means the same as no keyword.
+`WITH_PERMISSIONS(...)` and `OPTIONAL_AUTH` there are compile errors;
+decide who may be called in the server code that makes the call.
 
 Payload types must implement `Serialize` and `Deserialize`.
 With the client generated, request and response types must also implement `Debug`,
@@ -144,10 +136,10 @@ For `service_name: ChatService` the macro generates the following items.
 
 | Item | Side | What it is |
 |---|---|---|
-| `ChatServiceService` | server | The trait you implement: one method per `client_to_server` entry, one `notify_<name>` per notification, and connection callbacks. |
-| `ChatServiceHandler<T, M>` | server | Dispatches requests to your trait implementation; implements `MessageHandler`. |
+| `ChatServiceService` | server | The trait you implement: one method per `client_to_server` entry, connection callbacks, and `authorize_subscribe`. |
+| `ChatServiceHandler<T, M>` | server | Dispatches requests to your trait implementation; implements `MessageHandler`. Also has `notify_<name>(connection_id, params)` per notification. |
 | `ChatServiceBuilder<T, A>` | server | Builds the WebSocket service from your implementation and an auth provider. |
-| `ChatServiceClientHandle<'a>` | server | Typed handle to one connected client, for notifications and server-to-client calls. |
+| `ChatServiceClientHandle<'a>` | server | Typed handle to one connected client: one method per notification and per server-to-client call. |
 | `ChatServiceClient` | client | Typed methods, `on_<name>` registration, `connect`, `disconnect`, `subscribe`. |
 | `ChatServiceClientBuilder` | client | Builds a `ChatServiceClient` from a URL, a token and a request timeout. |
 | `ChatServiceClientToServerMessage` | client | Enum with one variant per `client_to_server` method. |
@@ -163,17 +155,19 @@ A `WITH_PERMISSIONS` method also receives `&AuthenticatedUser`,
 and an `OPTIONAL_AUTH` method receives a `Caller` in the same position.
 
 ```rust,ignore
-use ras_jsonrpc_bidirectional_types::{ConnectionId, ConnectionManager};
+use ras_jsonrpc_bidirectional_server::{
+    AuthenticatedUser, ConnectionId, ConnectionManager, async_trait,
+};
 
 struct ChatServiceImpl;
 
-#[async_trait::async_trait]
+#[async_trait]
 impl ChatServiceService for ChatServiceImpl {
     async fn send_message(
         &self,
         client_id: ConnectionId,
         connection_manager: &dyn ConnectionManager,
-        _user: &ras_auth_core::AuthenticatedUser,
+        _user: &AuthenticatedUser,
         request: SendMessageRequest,
     ) -> Result<SendMessageResponse, Box<dyn std::error::Error + Send + Sync>> {
         // Echo the message back to the sender as a notification.
@@ -185,27 +179,23 @@ impl ChatServiceService for ChatServiceImpl {
             .await?;
         Ok(SendMessageResponse { message_id: "1".into() })
     }
-
-    async fn notify_message_received(
-        &self,
-        _connection_id: ConnectionId,
-        _params: MessageReceived,
-    ) -> ras_jsonrpc_bidirectional_types::Result<()> {
-        Ok(())
-    }
 }
 ```
 
-Notice the `notify_message_received` method.
-The trait declares one per notification, with no default body,
-but the generated code never calls it,
-so an empty body is enough.
-To send a notification, use `ChatServiceClientHandle`, as above,
+The trait is an `async_trait` trait.
+The server crate re-exports the attribute,
+along with `ConnectionId`, `ConnectionManager`, `AuthenticatedUser` and `Caller`,
+so the server needs no extra dependency to implement it.
+
+Notifications have no trait method; the server sends them when it chooses to.
+Use `ChatServiceClientHandle`, as above,
+`ChatServiceHandler::notify_<name>` when you hold the handler,
 or build a `ServerNotification` and pass it to `connection_manager.send_to_connection`
 or `broadcast_to_topic`.
 
-The trait also has `on_client_connected`, `on_client_disconnected` and `on_client_authenticated`,
-which do nothing unless you override them.
+The trait also has `on_client_connected`, `on_client_disconnected`, `on_client_authenticated`
+and `authorize_subscribe`, which have default bodies;
+see [Topic subscriptions](#topic-subscriptions) for the last one.
 
 ### Mount the server
 
@@ -241,13 +231,19 @@ which refuses the upgrade of any connection without valid credentials.
 `WITH_PERMISSIONS` methods still reject them.
 An invalid token is treated like a missing one, as public HTTP routes ignore it.
 
-The generated builder creates its own connection manager.
+`build()` creates a new `DefaultConnectionManager`.
 To share one manager with other parts of the server, for example to broadcast from a background task,
-build the handler yourself with `ChatServiceHandler::new(service, manager)`
-and `.with_auth_provider(...)`,
-and pass it to `WebSocketServiceBuilder` with `build_with_manager`.
+create it yourself and pass it to `build_with_manager`:
+
+```rust,ignore
+let manager = Arc::new(DefaultConnectionManager::new());
+let websocket_service = ChatServiceBuilder::new(ChatServiceImpl, MyAuthProvider)
+    .build_with_manager(manager.clone());
+```
+
 [examples/bidirectional-chat](https://github.com/JedimEmO/rust-api-stack/tree/master/examples/bidirectional-chat)
 does this.
+`build_with_manager` accepts any `ConnectionManager`, not only the default one.
 
 ### Errors the client sees
 
@@ -267,6 +263,9 @@ The generated server carries such an error as `ServerError::Rpc`.
 A hand-written `MessageRouter` handler can return `ServerError::Rpc` too;
 the router applies the same code rule before sending it.
 
+Params that do not decode into the method's request type get `-32602 "Invalid params"`.
+The generated handler raises `ServerError::InvalidParams` for them.
+
 A request without an `id` is a JSON-RPC notification,
 and the server never answers it, not even with an error.
 
@@ -274,6 +273,24 @@ This rule covers calls from the client to the server.
 In the other direction, a client handler for a server-to-client call returns `Result<T, String>`.
 An `Err` reaches the server as code `-32000` with the string as its message,
 and the `ChatServiceClientHandle` method returns it as `BidirectionalError::RpcError`.
+
+### Calling the client
+
+A `ChatServiceClientHandle` method for a server-to-client call waits for the client's answer.
+After 30 seconds without one it returns `BidirectionalError::Timeout`
+and forgets the request, so a late answer is dropped.
+Set another limit on the handle with `with_call_timeout`.
+The handles that `ChatServiceHandler::get_client` and `get_all_clients` return
+use the handler's timeout,
+which `ChatServiceBuilder::client_call_timeout` sets.
+For a call declared as `confirm_leave(ConfirmLeave) -> bool`:
+
+```rust,ignore
+let confirmed = ChatServiceClientHandle::new(client_id, connection_manager)
+    .with_call_timeout(Duration::from_secs(5))
+    .confirm_leave(ConfirmLeave { room: "general".into() })
+    .await?;
+```
 
 ### Connection security defaults
 
@@ -290,14 +307,37 @@ or by implementing the matching `WebSocketService` method:
 | `on_permission_change` | `DropSubscriptions` | On successful re-validation every held subscription is re-run through `authorize_subscribe`; topics no longer authorized are dropped, and any topic message already queued for the socket is discarded at send time. `Close` closes the socket instead so the client must reconnect. |
 | `max_connections` | 10 000 | Enforced atomically with a semaphore permit held for the connection's lifetime. `None` lifts the cap. |
 
-The generated `ChatServiceBuilder` offers all of these except `auth_revalidation_interval`.
+The generated `ChatServiceBuilder` has a method for each of these.
 
-Topic subscriptions are default-deny.
-A `MessageHandler` allows the topics a connection is entitled to
-by overriding `authorize_subscribe`.
-The generated handler keeps the default,
-so it refuses every `Subscribe` from a client;
-to accept them, wrap it in your own `MessageHandler` that delegates to it.
+### Topic subscriptions
+
+A client can subscribe to topics,
+and the server can then broadcast to every connection on a topic with `broadcast_to_topic`.
+Subscriptions are default-deny,
+so the generated handler refuses every `Subscribe` until you decide which topics are open.
+Override `authorize_subscribe` on your service:
+
+```rust,ignore
+async fn authorize_subscribe(
+    &self,
+    _client_id: ConnectionId,
+    _connection_manager: &dyn ConnectionManager,
+    user: Option<&AuthenticatedUser>,
+    topic: &str,
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    Ok(match topic.strip_prefix("room:") {
+        Some(_) => user.is_some_and(|user| user.permissions.contains("user")),
+        None => false,
+    })
+}
+```
+
+`user` is `None` on an anonymous connection.
+A refused topic is skipped and the connection stays open;
+an `Err` closes the connection.
+The decision is asked again for every held topic each time the connection's token is re-validated,
+so a revoked permission drops the subscription.
+
 The limits above are enforced inside `ConnectionContext::subscribe`,
 so they hold for any handler that subscribes through it.
 It returns an error on refusal; the default `handle_subscribe` logs the error and continues.

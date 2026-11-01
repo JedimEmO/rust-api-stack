@@ -84,8 +84,9 @@ WITH_PERMISSIONS([])
 It requires a valid credential but no specific permission.
 
 The JSON-RPC, REST, file and bidirectional JSON-RPC macros accept the same syntax.
-The one exception is a bidirectional `server_to_client_calls` entry,
-which rejects `OPTIONAL_AUTH` because there is no inbound caller to identify.
+The one exception is a bidirectional `server_to_client_calls` entry.
+The server makes that call, so there is no caller to identify or check,
+and `OPTIONAL_AUTH` and `WITH_PERMISSIONS` there are compile errors.
 
 ## What gets documented
 

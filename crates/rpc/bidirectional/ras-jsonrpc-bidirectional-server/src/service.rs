@@ -29,6 +29,9 @@ const DEFAULT_MAX_MESSAGE_SIZE: usize = 1024 * 1024;
 /// deployment cannot be driven to memory exhaustion by connection count;
 /// pass `max_connections(None)` explicitly to lift it.
 pub const DEFAULT_MAX_CONNECTIONS: usize = 10_000;
+/// How long a generated `<Name>ClientHandle` waits for a client to answer a
+/// server-to-client call, unless the handle or the generated builder sets another value.
+pub const DEFAULT_CLIENT_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Trait for services that handle WebSocket JSON-RPC communication
 #[allow(async_fn_in_trait)]

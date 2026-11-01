@@ -81,7 +81,7 @@ The constant is named after the operation:
 | `rest_service!` | the handler name, such as `post_users` for `POST users` |
 | `jsonrpc_service!` | the method name |
 | `file_service!` | the endpoint name |
-| `jsonrpc_bidirectional_service!` | `client_to_server_<method>` or `server_to_client_call_<method>` |
+| `jsonrpc_bidirectional_service!` | `client_to_server_<method>`; server-to-client calls take no permissions, so they have no constant |
 
 A versioned operation also gets one constant per old version, with the version appended.
 
