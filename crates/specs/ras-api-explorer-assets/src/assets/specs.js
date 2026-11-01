@@ -32,7 +32,8 @@
                         pathParams: params.filter((param) => param.in === "path"),
                         queryParams: params.filter((param) => param.in === "query"),
                         requestSchema,
-                        responseSchema
+                        responseSchema,
+                        examples: normalizeRestExamples(operation)
                     });
                 });
             });
@@ -57,7 +58,8 @@
                     authRequired: Boolean(auth && auth.required !== false),
                     permissions: normalizePermissions(method["x-permissions"]),
                     paramsSchema,
-                    responseSchema: method.result?.schema || null
+                    responseSchema: method.result?.schema || null,
+                    examples: normalizeRpcExamples(method)
                 };
             });
         }

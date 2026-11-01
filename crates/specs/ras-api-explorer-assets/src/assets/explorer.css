@@ -267,6 +267,36 @@
             color: var(--muted);
             font-size: 0.82rem;
         }
+        .examples {
+            display: grid;
+            gap: 0.5rem;
+        }
+        .example-row {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--panel-2);
+            padding: 0.5rem 0.75rem;
+            display: grid;
+            gap: 0.35rem;
+        }
+        .example-row.active {
+            border-color: var(--accent);
+        }
+        .example-row .row .badge {
+            margin-left: 0;
+        }
+        .example-row .row button {
+            margin-left: auto;
+        }
+        #expected-output {
+            margin: 0;
+            padding: 0.5rem 0.75rem;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--panel-2);
+            white-space: pre-wrap;
+            min-height: 1.5rem;
+        }
         .schema-docs {
             border: 1px solid var(--border);
             border-radius: 8px;

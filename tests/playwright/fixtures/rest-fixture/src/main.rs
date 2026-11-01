@@ -25,6 +25,18 @@ pub struct Widget {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RenameGadget {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Gadget {
+    pub id: String,
+    pub name: String,
+    pub notified: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct WidgetsResponse {
     pub widgets: Vec<Widget>,
     pub total: usize,
@@ -95,6 +107,24 @@ rest_service!({
         },
         POST WITH_PERMISSIONS(["admin"]) widgets(CreateWidgetRequest) -> Widget,
         GET WITH_PERMISSIONS(["user"]) profile() -> ProfileResponse,
+        /// Rename a gadget.
+        POST UNAUTHORIZED gadgets/{id: String}/rename ? notify: Option<bool> (RenameGadget) -> Gadget {
+            examples: [
+                /// Rename and tell the owner.
+                notify_owner {
+                    path: { id: "g-1".to_string() },
+                    query: { notify: Some(true) },
+                    body: RenameGadget { name: "Sprocket".to_string() },
+                    response: Gadget { id: "g-1".to_string(), name: "Sprocket".to_string(), notified: true },
+                },
+                /// No gadget has this id.
+                missing {
+                    path: { id: "g-404".to_string() },
+                    body: RenameGadget { name: "Sprocket".to_string() },
+                    error: { status: 404, message: "Gadget not found" },
+                },
+            ],
+        },
     ]
 });
 
@@ -160,6 +190,22 @@ impl ExplorerRestFixtureTrait for FixtureService {
     async fn get_health(&self) -> RestResult<HealthResponse> {
         Ok(RestResponse::ok(HealthResponse {
             status: "ok".to_string(),
+        }))
+    }
+
+    async fn post_gadgets_by_id_rename(
+        &self,
+        id: String,
+        notify: Option<bool>,
+        body: RenameGadget,
+    ) -> RestResult<Gadget> {
+        if id == "g-404" {
+            return Err(ras_rest_core::RestError::not_found("Gadget not found"));
+        }
+        Ok(RestResponse::ok(Gadget {
+            id,
+            name: body.name,
+            notified: notify.unwrap_or(false),
         }))
     }
 

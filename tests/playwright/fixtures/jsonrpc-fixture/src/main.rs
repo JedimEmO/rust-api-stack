@@ -80,6 +80,18 @@ pub struct PlaceOrderRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ReserveTable {
+    pub guests: u32,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Reservation {
+    pub table: u32,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TreeNode {
     pub label: String,
     pub children: Vec<TreeNode>,
@@ -122,6 +134,21 @@ jsonrpc_service!({
         WITH_PERMISSIONS(["user"]) current_profile(()) -> ProfileResponse,
         UNAUTHORIZED place_order(PlaceOrderRequest) -> PlaceOrderRequest,
         UNAUTHORIZED grow_tree(TreeNode) -> TreeNode,
+        /// Reserve a table.
+        UNAUTHORIZED reserve_table(ReserveTable) -> Reservation {
+            examples: [
+                /// A table for two.
+                for_two {
+                    params: ReserveTable { guests: 2, name: "Ada".to_string() },
+                    result: Reservation { table: 4, name: "Ada".to_string() },
+                },
+                /// The largest table seats twelve.
+                too_many_guests {
+                    params: ReserveTable { guests: 40, name: "Bob".to_string() },
+                    error: { code: 1001, message: "No table for that many guests", data: serde_json::json!({ "max_guests": 12 }) },
+                },
+            ],
+        },
     ]
 });
 
@@ -238,6 +265,24 @@ impl ExplorerRpcFixtureTrait for ExplorerRpcFixtureImpl {
     ) -> std::result::Result<TreeNode, Box<dyn std::error::Error + Send + Sync>> {
         Ok(request)
     }
+
+    async fn reserve_table(
+        &self,
+        request: ReserveTable,
+    ) -> std::result::Result<Reservation, Box<dyn std::error::Error + Send + Sync>> {
+        if request.guests > 12 {
+            return Err(ras_jsonrpc_types::PublicRpcError::new(
+                1001,
+                "No table for that many guests",
+            )
+            .with_data(serde_json::json!({ "max_guests": 12 }))
+            .into());
+        }
+        Ok(Reservation {
+            table: 4,
+            name: request.name,
+        })
+    }
 }
 
 #[tokio::main]
@@ -332,6 +377,7 @@ mod tests {
                 "place_order",
                 "rename_widget.v1",
                 "rename_widget.v2",
+                "reserve_table",
             ])
         );
     }

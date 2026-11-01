@@ -126,7 +126,10 @@
                 auth.appendChild(badge);
             });
             form.appendChild(auth);
+            const examples = renderExamples(operation);
+            if (examples) form.appendChild(examples);
             form.appendChild(operation.protocol === "rest" ? renderRestForm(operation) : renderRpcForm(operation));
+            applyDefaultExample(operation);
             updateRequestUrl();
         }
 

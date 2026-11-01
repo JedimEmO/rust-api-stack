@@ -164,6 +164,38 @@ test.describe('REST API explorer', () => {
     expect(sessionStorageValues).toContain('admin-token');
   });
 
+  test('fills path, query and body from examples and clears what an example leaves out', async ({ page }) => {
+    await selectOperation(page, 'POST', '/gadgets/{id}/rename');
+    const examples = page.locator('#request-form .examples');
+    await expect(examples).toContainText('notify_owner');
+    await expect(examples).toContainText('Rename and tell the owner.');
+    await expect(examples).toContainText('missing');
+
+    await expect(page.locator('[data-path-param="id"]')).toHaveValue('g-1');
+    await expect(page.locator('[data-query-param="notify"]')).toHaveValue('true');
+    expect(JSON.parse(await page.locator('#body-editor').inputValue())).toEqual({ name: 'Sprocket' });
+    await expect(page.locator('#request-url')).toContainText('/api/v1/gadgets/g-1/rename?notify=true');
+    await expect(page.locator('#expected-output')).toContainText('200');
+
+    const renamed = page.waitForRequest((request) => request.url().includes('/gadgets/g-1/rename'));
+    await send(page);
+    expect((await renamed).postDataJSON()).toEqual({ name: 'Sprocket' });
+    await expect(page.locator('#response-status')).toContainText('200');
+    await expect(page.locator('#response-output')).toContainText('"notified": true');
+
+    await page.getByRole('button', { name: 'Use example missing' }).click();
+    await expect(page.locator('[data-path-param="id"]')).toHaveValue('g-404');
+    await expect(page.locator('[data-query-param="notify"]')).toHaveValue('');
+    await expect(page.locator('#request-url')).toContainText('/api/v1/gadgets/g-404/rename');
+    await expect(page.locator('#request-url')).not.toContainText('notify');
+    await expect(page.locator('#expected-output')).toContainText('404');
+    await expect(page.locator('#expected-output')).toContainText('Gadget not found');
+
+    await send(page);
+    await expect(page.locator('#response-status')).toContainText('404');
+    await expect(page.locator('#response-output')).toContainText('Gadget not found');
+  });
+
   test('persists theme preference in localStorage', async ({ page }) => {
     await page.locator('#theme-toggle').click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');

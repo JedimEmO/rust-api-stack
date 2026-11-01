@@ -242,7 +242,12 @@ fn success_statuses_get_their_own_responses() {
     assert!(created["content"]["application/json"]["schema"].is_object());
 
     let delete = &doc["paths"]["/items/{id}"]["delete"]["responses"];
-    assert_eq!(delete["204"], json!({ "description": "No content" }));
+    assert_eq!(delete["204"]["description"], "No content");
+    assert!(delete["204"].get("content").is_none());
+    assert_eq!(
+        delete["204"]["x-ras-examples"]["deleted"]["value"],
+        Value::Null
+    );
     assert_eq!(
         delete["410"]["content"]["application/json"]["examples"]["gone"]["value"],
         json!({ "error": "Already deleted" })

@@ -167,6 +167,31 @@ test.describe('JSON-RPC API explorer', () => {
     expect(tree.children).toEqual([{}]);
   });
 
+  test('lists examples, opens with the first success example, and sends the one chosen', async ({ page }) => {
+    await selectMethod(page, 'reserve_table');
+    const examples = page.locator('#request-form .examples');
+    await expect(examples).toContainText('for_two');
+    await expect(examples).toContainText('A table for two.');
+    await expect(examples).toContainText('too_many_guests');
+    await expect(examples).toContainText('The largest table seats twelve.');
+
+    expect(JSON.parse(await page.locator('#params-editor').inputValue())).toEqual({ guests: 2, name: 'Ada' });
+    await expect(page.locator('#expected-output')).toContainText('"table": 4');
+    await send(page);
+    await expect(page.locator('#response-status')).toContainText('200');
+    await expect(page.locator('#response-output')).toContainText('"table": 4');
+
+    await page.getByRole('button', { name: 'Use example too_many_guests' }).click();
+    expect(JSON.parse(await page.locator('#params-editor').inputValue())).toEqual({ guests: 40, name: 'Bob' });
+    await expect(page.locator('#expected-output')).toContainText('1001');
+    await expect(page.locator('#expected-output')).toContainText('"max_guests": 12');
+
+    const outgoing = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith('/rpc'));
+    await send(page);
+    expect((await outgoing).postDataJSON().params).toEqual({ guests: 40, name: 'Bob' });
+    await expect(page.locator('#response-output')).toContainText('No table for that many guests');
+  });
+
   test('persists theme preference in localStorage', async ({ page }) => {
     await page.locator('#theme-toggle').click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');

@@ -629,6 +629,13 @@ pub fn apply_rest_examples(
                 if !responses["204"].is_object() {
                     responses["204"] = ::serde_json::json!({ "description": "No content" });
                 }
+                // A 204 has no content to hang the example on; the extension
+                // keeps its name and docs with the status.
+                let object = example.object(Value::Null);
+                if !responses["204"]["x-ras-examples"].is_object() {
+                    responses["204"]["x-ras-examples"] = Value::Object(Map::new());
+                }
+                responses["204"]["x-ras-examples"][example.name.as_str()] = object;
             }
             None => {
                 let response = &mut responses[status.as_str()];
