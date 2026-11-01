@@ -32,6 +32,7 @@ pub(super) fn generate_method_infos(
 
             let request_type = &method.request_type;
             let response_type = &method.response_type;
+            let params_schema = params_schema_tokens(request_type);
             let (summary, description) = match &method.docs {
                 Some(docs) => {
                     let summary = &docs.summary;
@@ -55,6 +56,8 @@ pub(super) fn generate_method_infos(
                     permission_groups: #permission_groups_tokens,
                     request_type_name: stringify!(#request_type).to_string(),
                     response_type_name: stringify!(#response_type).to_string(),
+                    params_schema: #params_schema,
+                    result_schema: generators.response::<#response_type>(),
                     version: #canonical_version_tokens,
                     canonical_version: #canonical_version_tokens,
                     canonical_method: #canonical_method_name.to_string(),
@@ -66,6 +69,7 @@ pub(super) fn generate_method_infos(
                 let version_label = &version.version;
                 let request_type = &version.request_type;
                 let response_type = &version.response_type;
+                let params_schema = params_schema_tokens(request_type);
                 let canonical_version = canonical_version
                     .clone()
                     .unwrap_or_else(|| "current".to_string());
@@ -86,6 +90,8 @@ pub(super) fn generate_method_infos(
                         permission_groups: #permission_groups_tokens,
                         request_type_name: stringify!(#request_type).to_string(),
                         response_type_name: stringify!(#response_type).to_string(),
+                        params_schema: #params_schema,
+                        result_schema: generators.response::<#response_type>(),
                         version: Some(#version_label.to_string()),
                         canonical_version: Some(#canonical_version.to_string()),
                         canonical_method: #canonical_method_name.to_string(),
@@ -100,26 +106,17 @@ pub(super) fn generate_method_infos(
     method_infos
 }
 
-pub(super) fn generate_methods(generate_example_fn_name: &Ident) -> TokenStream {
+pub(super) fn generate_methods() -> TokenStream {
     quote! {
-            let openrpc_methods: Vec<serde_json::Value> = methods.iter().map(|method| {
+            let openrpc_methods: Vec<serde_json::Value> = methods.into_iter().map(|method| {
                 let mut params = vec![];
 
-                if method.request_type_name != "()" {
-                    let sanitized_request_type = method.request_type_name.replace(" ", "");
-                    let example = if let Some(schema) = schemas.get(&sanitized_request_type) {
-                        #generate_example_fn_name(schema, &schemas)
-                    } else {
-                        json!({"example": "value"})
-                    };
-
+                if let Some(schema) = method.params_schema {
                     params.push(json!({
                         "name": "params",
                         "summary": format!("Request parameters of type {}", method.request_type_name),
                         "required": true,
-                        "schema": {
-                            "$ref": format!("#/components/schemas/{}", sanitized_request_type)
-                        }
+                        "schema": schema
                     }));
                 }
 
@@ -155,36 +152,6 @@ pub(super) fn generate_methods(generate_example_fn_name: &Ident) -> TokenStream 
                     extensions.insert("x-ras-canonical-method".to_string(), json!(method.canonical_method));
                 }
 
-                let mut examples = vec![];
-                if method.request_type_name != "()" {
-                    let sanitized_request_type = method.request_type_name.replace(" ", "");
-                    let sanitized_response_type = method.response_type_name.replace(" ", "");
-
-                    let request_example = if let Some(schema) = schemas.get(&sanitized_request_type) {
-                        #generate_example_fn_name(schema, &schemas)
-                    } else {
-                        json!({"example": "value"})
-                    };
-
-                    let response_example = if method.response_type_name != "()" {
-                        if let Some(schema) = schemas.get(&sanitized_response_type) {
-                            #generate_example_fn_name(schema, &schemas)
-                        } else {
-                            json!({"example": "response"})
-                        }
-                    } else {
-                        json!(null)
-                    };
-
-                    examples.push(json!({
-                        "name": format!("{}_example", method.name),
-                        "description": format!("Example call to {}", method.name),
-                        "params": [{"name": "params", "value": request_example}],
-                        "result": {"name": "result", "value": response_example}
-                    }));
-                }
-
-                let sanitized_response_type = method.response_type_name.replace(" ", "");
                 let method_summary = method
                     .summary
                     .clone()
@@ -197,14 +164,9 @@ pub(super) fn generate_methods(generate_example_fn_name: &Ident) -> TokenStream 
                     "result": {
                         "name": "result",
                         "description": format!("Response of type {}", method.response_type_name),
-                        "schema": {
-                            "$ref": format!("#/components/schemas/{}", sanitized_response_type)
-                        }
+                        "schema": method.result_schema
                     }
                 });
-
-                // Note: Examples are intentionally omitted as they're optional in OpenRPC
-                // and can cause validation issues with some validators
 
                 if let Some(obj) = method_obj.as_object_mut() {
                     if let Some(description) = &method.description {
@@ -219,6 +181,15 @@ pub(super) fn generate_methods(generate_example_fn_name: &Ident) -> TokenStream 
                 method_obj
             }).collect();
 
+    }
+}
+
+/// The `params_schema` field: `None` for `()`, which takes no parameters.
+fn params_schema_tokens(request_type: &syn::Type) -> TokenStream {
+    if quote!(#request_type).to_string() == "()" {
+        quote! { None }
+    } else {
+        quote! { Some(generators.request::<#request_type>()) }
     }
 }
 

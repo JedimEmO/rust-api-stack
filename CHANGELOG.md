@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed - 2026-11-01 (generated document schemas)
+- **Response schemas describe what the server sends** (`ras-jsonrpc-macro`, `ras-rest-macro`, breaking for document consumers). Request and parameter schemas use schemars' deserialization contract and response schemas its serialization contract. A type whose two forms differ gets a second component, `<Name>.Serialize`. That includes any struct with an `Option` field without `skip_serializing_if`, because the field is always sent and so required in responses.
+- **Component schemas follow the document's dialect** (`ras-jsonrpc-macro`, `ras-rest-macro`, breaking for document consumers). OpenAPI documents use schemars' OpenAPI 3.0 settings and validate against the official OpenAPI 3.0 schema; OpenRPC documents use JSON Schema draft 7. Request and response schemas are inline or a `$ref` into `components.schemas`, keyed by schemars' type name instead of the Rust type as written: `Vec<User>` no longer gets a component of its own, REST names no longer carry module paths (`crate_User` is now `User`), and two types with the same name are numbered (`Account`, `Account2`). The hand-written nullable and reference rewriting passes are gone.
+- **schemars 1.2 or later is required** in crates that generate OpenRPC or OpenAPI documents. The workspace requirement and the documented setup moved from `1.0.0-alpha.20` to `1.2`.
+- **New `ras-spec-components` crate** (`crates/specs`). It holds the component assembly that both macros embed in generated document functions as source, so consumers need no new dependency. Publish it before either macro.
+
+### Fixed - 2026-11-01 (generated document schemas)
+- A recursive type refers to its own component instead of `#`, which pointed at the whole document (`ras-jsonrpc-macro`, `ras-rest-macro`).
+- `jsonrpc_service!` no longer fails to compile when a request or response type contains a comma, such as `HashMap<String, u32>` (`ras-jsonrpc-macro`).
+- OpenAPI component schemas no longer contain `const` (from internally tagged enums) or `"type": "null"`; a `()` response is described as a nullable enum of `null` (`ras-rest-macro`).
+- The API explorer follows references wrapped in `allOf` with a description, shows component names without the `.Serialize` suffix, and no longer recurses forever when guessing a value for a recursive type (`ras-api-explorer-assets`).
+
+### Maintenance - 2026-11-01 (generated document schemas)
+- New unpublished test-support crate `ras-spec-conformance` validates generated documents against the vendored OpenRPC 1.3 meta-schema and OpenAPI 3.0 schema. The macro test suites use it, including new `spec_conformance` tests for nested, recursive, generic, same-named and asymmetrically renamed types.
+- `deny.toml` allows MIT-0 for `borrow-or-share` only, which `jsonschema` brings in for that test crate.
+- The OpenRPC generator's unused placeholder-example code is removed (`ras-jsonrpc-macro`).
+
 ### Changed - 2026-09-05 (responsibility boundaries refactor)
 - **`tokio-tungstenite` aligned with Axum** (`ras-jsonrpc-bidirectional-client`, `-server`, `-types`, `-macro`). The workspace pin moved from 0.26 to 0.29, the version Axum 0.8 already used, so the lockfile carries a single copy of `tungstenite` and `tokio-tungstenite`. No source changes were needed.
 - **New `ras-api-explorer-assets` crate** (`crates/specs`). The browser API explorer that `ras-rest-macro` and `ras-jsonrpc-macro` embed now lives in its own dependency-free crate as standalone HTML, CSS and JavaScript files assembled at compile time into `TEMPLATE`, with the configuration placeholder exported as `CONFIG_PLACEHOLDER`. Previously the JSON-RPC macro read the template from the REST macro's source tree with a relative `include_str!`, which broke outside the workspace. Publish this crate before either macro. The served explorer differs from the previous one only in whitespace around the style and script wrapper tags.

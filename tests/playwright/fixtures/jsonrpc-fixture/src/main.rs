@@ -65,6 +65,26 @@ pub struct RenameWidgetResponseV2 {
     pub notified: bool,
 }
 
+/// A delivery address.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Address {
+    pub street: String,
+    pub city: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PlaceOrderRequest {
+    pub item: String,
+    /// Where the order is shipped.
+    pub delivery: Address,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TreeNode {
+    pub label: String,
+    pub children: Vec<TreeNode>,
+}
+
 jsonrpc_service!({
     service_name: ExplorerRpcFixture,
     openrpc: true,
@@ -100,6 +120,8 @@ jsonrpc_service!({
         },
         WITH_PERMISSIONS(["admin"]) create_widget(CreateWidgetRequest) -> Widget,
         WITH_PERMISSIONS(["user"]) current_profile(()) -> ProfileResponse,
+        UNAUTHORIZED place_order(PlaceOrderRequest) -> PlaceOrderRequest,
+        UNAUTHORIZED grow_tree(TreeNode) -> TreeNode,
     ]
 });
 
@@ -202,6 +224,20 @@ impl ExplorerRpcFixtureTrait for ExplorerRpcFixtureImpl {
             permissions: user.permissions.iter().cloned().collect(),
         })
     }
+
+    async fn place_order(
+        &self,
+        request: PlaceOrderRequest,
+    ) -> std::result::Result<PlaceOrderRequest, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(request)
+    }
+
+    async fn grow_tree(
+        &self,
+        request: TreeNode,
+    ) -> std::result::Result<TreeNode, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(request)
+    }
 }
 
 #[tokio::main]
@@ -290,8 +326,10 @@ mod tests {
             BTreeSet::from([
                 "create_widget",
                 "current_profile",
+                "grow_tree",
                 "no_params",
                 "ping",
+                "place_order",
                 "rename_widget.v1",
                 "rename_widget.v2",
             ])

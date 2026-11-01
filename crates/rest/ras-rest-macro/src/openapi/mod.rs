@@ -4,11 +4,25 @@
 //! from the rest_service macro definitions.
 
 use crate::{OpenApiConfig, ServiceDefinition};
-use proc_macro2::TokenStream;
+use proc_macro2::{Ident, TokenStream};
 use quote::quote;
 mod operations;
 mod schema;
 pub use schema::generate_schema_impl_checks;
+
+/// Emits the shared component-assembly code as a private module named `module`.
+fn embedded_components(module: &Ident) -> TokenStream {
+    let mut file: syn::File = syn::parse_str(ras_spec_components::SOURCE)
+        .expect("ras-spec-components source is valid Rust");
+    file.attrs.clear();
+    quote! {
+        #[doc(hidden)]
+        #[allow(dead_code, unused_imports, missing_docs, clippy::all)]
+        mod #module {
+            #file
+        }
+    }
+}
 
 /// Generates OpenAPI document creation code
 pub fn generate_openapi_code(
@@ -25,6 +39,10 @@ pub fn generate_openapi_code(
         service_name.to_string().to_lowercase()
     );
     let endpoint_info_struct_name = quote::format_ident!("{}OpenApiEndpointInfo", service_name);
+    let components_mod = quote::format_ident!(
+        "__ras_openapi_components_{}",
+        service_name.to_string().to_lowercase()
+    );
 
     let output_path_code = match config {
         OpenApiConfig::Enabled => {
@@ -40,15 +58,14 @@ pub fn generate_openapi_code(
         }
     };
 
-    let unique_types = schema::collect_types(service_def);
-    let (schema_fns, schema_insertions) = schema::generate_schemas(service_name, &unique_types);
+    let embedded = embedded_components(&components_mod);
     let endpoint_infos =
         operations::generate_endpoint_infos(service_def, &endpoint_info_struct_name);
-    let normalization = schema::generate_normalization();
     let paths = operations::generate_paths();
 
     quote! {
-        #[derive(serde::Serialize)]
+        #embedded
+
         struct #endpoint_info_struct_name {
             method: String,
             path: String,
@@ -58,39 +75,38 @@ pub fn generate_openapi_code(
             auth_optional: bool,
             permissions: Vec<String>,
             permission_groups: Vec<Vec<String>>,
-            request_type_name: String,
-            response_type_name: String,
-            path_params: Vec<(String, String)>, // (name, type)
-            query_params: Vec<(String, String)>, // (name, type)
+            /// `None` when the endpoint takes no body.
+            request_schema: Option<serde_json::Value>,
+            /// `None` for `()`, which is sent as JSON `null`.
+            response_schema: Option<serde_json::Value>,
+            /// (name, type as written, schema)
+            path_params: Vec<(String, String, serde_json::Value)>,
+            /// (name, type as written, required, schema)
+            query_params: Vec<(String, String, bool, serde_json::Value)>,
             version: Option<String>,
             canonical_version: Option<String>,
             canonical_path: String,
         }
 
-        #normalization
-
-        #(#schema_fns)*
-
         /// Generate OpenAPI 3.0 document for this service
         pub fn #openapi_fn_name() -> serde_json::Value {
             use serde_json::json;
-            use schemars::{schema_for, JsonSchema};
-            use std::collections::HashMap;
 
-            let endpoints: Vec<#endpoint_info_struct_name> = vec![
+            let mut generators = #components_mod::Generators::new(#components_mod::Dialect::OpenApi3);
+
+            let mut endpoints: Vec<#endpoint_info_struct_name> = vec![
                 #(#endpoint_infos),*
             ];
 
-            let mut schemas = HashMap::new();
-
-            #(#schema_insertions)*
-
-            let mut final_schemas = serde_json::Map::new();
-            for (name, mut schema) in schemas {
-                fix_schema_refs(&mut schema, &mut final_schemas);
-                fix_option_types(&mut schema);
-                final_schemas.insert(name, schema);
+            let components = generators.into_components().unwrap_or_else(|error| {
+                panic!("OpenAPI document for {}: {}", stringify!(#service_name), error)
+            });
+            for endpoint in &mut endpoints {
+                if let Some(schema) = endpoint.response_schema.as_mut() {
+                    components.fix_serialized(schema);
+                }
             }
+            let final_schemas = components.schemas;
 
             #paths
 

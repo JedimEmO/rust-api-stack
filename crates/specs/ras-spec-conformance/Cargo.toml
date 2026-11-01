@@ -1,0 +1,16 @@
+[package]
+name = "ras-spec-conformance"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Test support: validates generated OpenRPC and OpenAPI documents against the official schemas"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-api-stack"
+homepage = "https://github.com/JedimEmO/rust-api-stack"
+publish = false
+readme = "README.md"
+
+[dependencies]
+serde_json = { workspace = true }
+# No default features: schemas are vendored, so nothing is fetched over the network.
+jsonschema = { version = "0.58.6", default-features = false }

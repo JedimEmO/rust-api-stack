@@ -23,7 +23,7 @@ ras-transport-core = { version = "0.1.0", optional = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 axum = { version = "0.8", optional = true }
 tokio = { version = "1.0", optional = true }
-schemars = { version = "1.0.0-alpha.20", optional = true }
+schemars = { version = "1.2", optional = true }
 serde_json = { version = "1.0", optional = true }
 
 [features]

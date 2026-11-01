@@ -18,7 +18,7 @@ ras-rest-macro = { version = "0.3.0", default-features = false }
 ras-file-macro = { version = "0.2.0", default-features = false }
 ras-jsonrpc-bidirectional-macro = { version = "0.2.0", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
-schemars = { version = "1.0.0-alpha.20", optional = true }
+schemars = { version = "1.2", optional = true }
 serde_json = { version = "1.0", optional = true }
 async-trait = { version = "0.1", optional = true }
 ras-transport-core = { version = "0.1.0", optional = true }

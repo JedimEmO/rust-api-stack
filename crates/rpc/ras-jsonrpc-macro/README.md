@@ -33,7 +33,7 @@ ras-jsonrpc-core = { version = "0.2.0", optional = true }
 ras-jsonrpc-types = "0.2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-schemars = "1.0.0-alpha.20"
+schemars = "1.2"
 ras-transport-core = { version = "0.1.0", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

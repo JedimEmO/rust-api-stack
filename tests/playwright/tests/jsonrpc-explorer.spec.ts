@@ -150,6 +150,23 @@ test.describe('JSON-RPC API explorer', () => {
     expect(sessionStorageValues).toContain('admin-token');
   });
 
+  test('documents referenced struct fields and guesses nested and recursive params', async ({ page }) => {
+    await selectMethod(page, 'place_order');
+    const deliveryRow = page.locator('#request-form .schema-field').filter({ hasText: 'delivery' }).first();
+    await expect(deliveryRow).toContainText('Where the order is shipped.');
+    const order = JSON.parse(await page.locator('#params-editor').inputValue());
+    expect(order).toEqual({ item: 'example', delivery: { street: 'example', city: 'example' } });
+
+    await send(page);
+    await expect(page.locator('#response-status')).toContainText('200');
+    await expect(page.locator('#response-output')).toContainText('street');
+
+    await selectMethod(page, 'grow_tree');
+    const tree = JSON.parse(await page.locator('#params-editor').inputValue());
+    expect(tree.label).toBe('example');
+    expect(tree.children).toEqual([{}]);
+  });
+
   test('persists theme preference in localStorage', async ({ page }) => {
     await page.locator('#theme-toggle').click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');

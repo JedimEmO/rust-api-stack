@@ -11,7 +11,7 @@ explorer.
 ras-rest-macro = { version = "0.3.0", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-schemars = "1.0.0-alpha.20"
+schemars = "1.2"
 async-trait = { version = "0.1", optional = true }
 ras-transport-core = { version = "0.1.0", optional = true }
 

@@ -28,6 +28,7 @@ async fn test_openapi_generation() {
 
     let openapi_doc = generate_testrestservice_openapi();
     assert_eq!(openapi_doc["openapi"], "3.0.3");
+    ras_spec_conformance::assert_openapi3_conforms(&openapi_doc);
 
     let get_users = &openapi_doc["paths"]["/users"]["get"];
     assert_eq!(get_users["summary"], "List users.");
