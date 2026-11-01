@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed - 2026-11-01 (JSON-RPC notifications)
+- **Notifications get no response** (`ras-jsonrpc-macro`, `ras-jsonrpc-bidirectional-server`). A request without an `id` is run but not answered, as JSON-RPC 2.0 requires. Over HTTP the server answers 204 with no body, or the 401/403 an auth rejection maps to; over WebSocket the connection loop sends nothing, whether the handler succeeded or failed. A body that does not parse, or names the wrong `jsonrpc` version, is still answered.
+- **`"id": null` is a request, not a notification** (`ras-jsonrpc-types`, breaking for code that reads the field). `JsonRpcRequest.id` is `Some(Value::Null)` for an explicit `null` and `None` only when the field is missing; `JsonRpcRequest::is_notification` tells them apart.
+- **Every response carries `id`** (`ras-jsonrpc-types`). `JsonRpcResponse` serializes a missing id as `"id": null` instead of leaving the member out, so parse errors and invalid requests are answered as the protocol requires.
+
+### Maintenance - 2026-11-01 (security advisories)
+- `rustls` 0.23.38 → 0.23.46 (RUSTSEC-2026-0285, RUSTSEC-2026-0346), `tokio` 1.52.3 → 1.53.3 (RUSTSEC-2026-0386) and `webpki-roots` 1.0.6 → 1.0.10 (RUSTSEC-2026-0381) in `Cargo.lock`. `cargo deny check` passes again.
+
 ### Changed - 2026-11-01 (versions for examples and handler errors)
 - Breaking minor bumps: `ras-jsonrpc-macro` 0.4.0, `ras-rest-macro` 0.4.0, `ras-jsonrpc-types` 0.3.0, `ras-jsonrpc-core` 0.3.0 (re-exports `ras-jsonrpc-types`), `ras-transport-core` 0.2.0, `ras-file-macro` 0.3.0 (its generated client returns `TransportError`), `ras-jsonrpc-bidirectional-types` 0.3.0, `ras-jsonrpc-bidirectional-server` 0.4.0, `ras-jsonrpc-bidirectional-client` 0.4.0, `ras-jsonrpc-bidirectional-macro` 0.3.0.
 - Additive patch bumps: `ras-rest-core` 0.2.1, `ras-api-explorer-assets` 0.1.1.

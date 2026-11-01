@@ -504,6 +504,21 @@ impl<H: MessageHandler> WebSocketHandler<H> {
         debug!("Handling JSON-RPC request: {}", request.method);
         let request_id = request.id.clone();
 
+        // A notification (no `id`) gets no response, whatever the handler
+        // returns; a failure is only logged.
+        if request.is_notification() {
+            let method = request.method.clone();
+            match self
+                .handler
+                .handle_request(request, self.context.clone())
+                .await
+            {
+                Ok(_) => {}
+                Err(e) => error!("Error handling notification {}: {}", method, e),
+            }
+            return Ok(());
+        }
+
         match self
             .handler
             .handle_request(request, self.context.clone())

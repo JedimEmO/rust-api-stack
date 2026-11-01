@@ -120,6 +120,16 @@ fn user() -> AuthenticatedUser {
 /// Runs one request through the generated handler and the server's message
 /// loop, and returns the response it sent.
 async fn respond(method: &str, kind: &str) -> JsonRpcResponse {
+    responses(method, kind, Some(json!(1)))
+        .await
+        .into_iter()
+        .next()
+        .expect("a response was sent")
+}
+
+/// Runs one request, or a notification when `id` is `None`, and returns every
+/// response the server sent for it.
+async fn responses(method: &str, kind: &str, id: Option<Value>) -> Vec<JsonRpcResponse> {
     let connection_manager = Arc::new(DefaultConnectionManager::new());
     let handler = Arc::new(ErrorsHandler::new(
         Arc::new(ErrorsImpl),
@@ -138,7 +148,7 @@ async fn respond(method: &str, kind: &str) -> JsonRpcResponse {
         .await
         .expect("connection registers");
 
-    let request = JsonRpcRequest::new(method.into(), Some(json!(kind)), Some(json!(1)));
+    let request = JsonRpcRequest::new(method.into(), Some(json!(kind)), id);
     let text = serde_json::to_string(&BidirectionalMessage::Request(request)).unwrap();
     let mut socket = InMemorySocket {
         incoming: VecDeque::from([WebSocketIoMessage::Text(text)]),
@@ -152,14 +162,24 @@ async fn respond(method: &str, kind: &str) -> JsonRpcResponse {
     socket
         .outgoing
         .into_iter()
-        .find_map(|message| match message {
+        .filter_map(|message| match message {
             WebSocketIoMessage::Text(text) => match serde_json::from_str(&text).ok()? {
                 BidirectionalMessage::Response(response) => Some(response),
                 _ => None,
             },
             _ => None,
         })
-        .expect("a response was sent")
+        .collect()
+}
+
+#[tokio::test]
+async fn notifications_get_no_response() {
+    for method in METHODS {
+        for kind in ["ok", "public", "plain"] {
+            let sent = responses(method, kind, None).await;
+            assert!(sent.is_empty(), "{method} {kind}: {sent:?}");
+        }
+    }
 }
 
 fn assert_hidden(label: &str, response: &JsonRpcResponse) {

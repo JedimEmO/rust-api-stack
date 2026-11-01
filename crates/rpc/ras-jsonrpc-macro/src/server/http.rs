@@ -40,7 +40,8 @@ pub(super) fn generate_http_methods(service_def: &ServiceDefinition) -> proc_mac
                             None,
                         ))
                         .unwrap_or_else(|_| "{}".to_string()),
-                    );
+                    )
+                        .into_response();
                 }
             }
         }
@@ -181,10 +182,12 @@ pub(super) fn generate_http_methods(service_def: &ServiceDefinition) -> proc_mac
                     move |headers: axum::http::HeaderMap, body: String| {
                     let service = service.clone();
                     async move {
+                        use axum::response::IntoResponse;
+
                         // Reject a non-`application/json` body with 415 before parsing.
                         #content_type_gate
 
-                        let response = service.handle_request(headers, body).await;
+                        let (response, notification) = service.handle_request(headers, body).await;
 
                         // Determine HTTP status code based on JSON-RPC error code
                         // Map authentication/authorization errors to appropriate HTTP status codes
@@ -214,11 +217,23 @@ pub(super) fn generate_http_methods(service_def: &ServiceDefinition) -> proc_mac
                             }
                         }
 
+                        // A notification (no `id`) gets no JSON-RPC response. The HTTP
+                        // status still reports an auth rejection; otherwise it is 204.
+                        if notification {
+                            let status = if status_code == axum::http::StatusCode::OK {
+                                axum::http::StatusCode::NO_CONTENT
+                            } else {
+                                status_code
+                            };
+                            return status.into_response();
+                        }
+
                         (
                             status_code,
                             [("Content-Type", "application/json")],
                             serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string())
                         )
+                            .into_response()
                     }
                     }
                 });
@@ -235,7 +250,10 @@ pub(super) fn generate_http_methods(service_def: &ServiceDefinition) -> proc_mac
                 Ok(router)
             }
 
-            async fn handle_request(&self, headers: axum::http::HeaderMap, body: String) -> ras_jsonrpc_types::JsonRpcResponse {
+            /// Returns the response and whether the request was a notification,
+            /// which gets no response. A body that does not parse, or a request
+            /// with the wrong `jsonrpc` version, is never treated as one.
+            async fn handle_request(&self, headers: axum::http::HeaderMap, body: String) -> (ras_jsonrpc_types::JsonRpcResponse, bool) {
                 let request: ras_jsonrpc_types::JsonRpcRequest = match serde_json::from_str(&body) {
                     Ok(req) => req,
                     Err(__ras_json_err) => {
@@ -247,15 +265,21 @@ pub(super) fn generate_http_methods(service_def: &ServiceDefinition) -> proc_mac
                             column = __ras_json_err.column(),
                             "rejected JSON-RPC request: malformed JSON body"
                         );
-                        return ras_jsonrpc_types::JsonRpcResponse::error(ras_jsonrpc_types::JsonRpcError::parse_error(), None);
+                        return (ras_jsonrpc_types::JsonRpcResponse::error(ras_jsonrpc_types::JsonRpcError::parse_error(), None), false);
                     }
                 };
 
-                let request_id = request.id.clone();
-
                 if request.jsonrpc != "2.0" {
-                    return ras_jsonrpc_types::JsonRpcResponse::error(ras_jsonrpc_types::JsonRpcError::invalid_request(), request_id);
+                    let request_id = request.id.clone();
+                    return (ras_jsonrpc_types::JsonRpcResponse::error(ras_jsonrpc_types::JsonRpcError::invalid_request(), request_id), false);
                 }
+
+                let notification = request.is_notification();
+                (self.handle_parsed_request(headers, request).await, notification)
+            }
+
+            async fn handle_parsed_request(&self, headers: axum::http::HeaderMap, request: ras_jsonrpc_types::JsonRpcRequest) -> ras_jsonrpc_types::JsonRpcResponse {
+                let request_id = request.id.clone();
 
                 // Resolve the credential to Ok(Some/None) or Err(error response), then
                 // apply a single downgrade decision: OPTIONAL_AUTH methods are public,

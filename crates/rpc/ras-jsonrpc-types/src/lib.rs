@@ -30,8 +30,24 @@ pub struct JsonRpcRequest {
     pub params: Option<serde_json::Value>,
 
     /// Request identifier for matching responses.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    ///
+    /// `None` when the field is missing, which makes the request a
+    /// notification: the server runs it and sends no response. An explicit
+    /// `"id": null` is `Some(Value::Null)`, a request answered with `"id": null`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub id: Option<serde_json::Value>,
+}
+
+impl JsonRpcRequest {
+    /// Whether this is a notification: a request without an `id` field,
+    /// which gets no response.
+    pub fn is_notification(&self) -> bool {
+        self.id.is_none()
+    }
 }
 
 /// Wraps any present value, `null` included, in `Some`; `default` covers a missing field.
@@ -57,7 +73,9 @@ pub struct JsonRpcResponse {
     pub error: Option<JsonRpcError>,
 
     /// Request identifier for matching with requests.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    ///
+    /// Always serialized, as `null` when the request's id is unknown or `null`,
+    /// because JSON-RPC 2.0 requires the member in every response.
     pub id: Option<serde_json::Value>,
 }
 
@@ -241,6 +259,25 @@ impl JsonRpcError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_and_null_ids_are_distinct() {
+        let notification: JsonRpcRequest =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","method":"m"}"#).unwrap();
+        assert!(notification.is_notification());
+
+        let null_id: JsonRpcRequest =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","method":"m","id":null}"#).unwrap();
+        assert!(!null_id.is_notification());
+        assert_eq!(null_id.id, Some(serde_json::Value::Null));
+    }
+
+    #[test]
+    fn responses_always_carry_an_id() {
+        let response = JsonRpcResponse::error(JsonRpcError::parse_error(), None);
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json.get("id"), Some(&serde_json::Value::Null));
+    }
 
     #[test]
     fn missing_and_null_params_are_distinct() {
