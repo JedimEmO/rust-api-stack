@@ -166,3 +166,20 @@ async fn from_arc_constructor_shares_the_server() {
         .unwrap();
     assert_eq!(resp.text().await.unwrap(), "pong");
 }
+
+#[tokio::test]
+async fn transport_body_limit_applies_to_its_responses() {
+    let t = transport().with_body_limit(3);
+    let resp = t
+        .execute(TransportRequest::new(
+            http::Method::GET,
+            "http://api.example/ping",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.body_limit(), 3);
+    assert!(matches!(
+        resp.text().await,
+        Err(TransportError::BodyTooLarge { limit: 3 })
+    ));
+}

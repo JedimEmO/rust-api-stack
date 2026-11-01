@@ -68,6 +68,11 @@ let response = client
 let bytes = response.bytes().await?;
 ```
 
+`bytes()` stops at 16 MiB and fails with `TransportError::BodyTooLarge`,
+so a server cannot make the client buffer without end.
+For a larger file, raise the limit on that response with `response.with_body_limit(n)`,
+or write the body out as it arrives with `response.into_body_stream()`.
+
 The disk-streaming `file(...)` helper above needs both `client` and `fs` on the API crate:
 
 ```toml

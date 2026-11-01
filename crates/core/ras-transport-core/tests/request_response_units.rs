@@ -317,20 +317,23 @@ fn query_value_rejects_unsupported_shapes() {
 #[test]
 fn encode_path_segment_passes_unreserved_and_escapes_the_rest() {
     // RFC 3986 unreserved set is passed through verbatim.
-    assert_eq!(encode_path_segment("abcXYZ-._~09"), "abcXYZ-._~09");
+    assert_eq!(encode_path_segment("abcXYZ-._~09").unwrap(), "abcXYZ-._~09");
 
     // Segment/path/query/fragment delimiters are escaped so a value cannot
     // break out of its slot.
-    assert_eq!(encode_path_segment("a/b"), "a%2Fb");
-    assert_eq!(encode_path_segment("../admin"), "..%2Fadmin");
-    assert_eq!(encode_path_segment("x?role=admin"), "x%3Frole%3Dadmin");
-    assert_eq!(encode_path_segment("a#frag"), "a%23frag");
-    assert_eq!(encode_path_segment("100%"), "100%25");
-    assert_eq!(encode_path_segment("a b"), "a%20b");
+    assert_eq!(encode_path_segment("a/b").unwrap(), "a%2Fb");
+    assert_eq!(encode_path_segment("../admin").unwrap(), "..%2Fadmin");
+    assert_eq!(
+        encode_path_segment("x?role=admin").unwrap(),
+        "x%3Frole%3Dadmin"
+    );
+    assert_eq!(encode_path_segment("a#frag").unwrap(), "a%23frag");
+    assert_eq!(encode_path_segment("100%").unwrap(), "100%25");
+    assert_eq!(encode_path_segment("a b").unwrap(), "a%20b");
 
     // Control bytes and multi-byte UTF-8 are percent-encoded per byte.
-    assert_eq!(encode_path_segment("a\r\nb"), "a%0D%0Ab");
-    assert_eq!(encode_path_segment("é"), "%C3%A9");
+    assert_eq!(encode_path_segment("a\r\nb").unwrap(), "a%0D%0Ab");
+    assert_eq!(encode_path_segment("é").unwrap(), "%C3%A9");
 }
 
 #[test]

@@ -6,7 +6,7 @@ You implement the handler trait that `file_service!` generates,
 and its methods take and return the types in this crate:
 
 - `FileRequestContext` carries the request method, path, headers and the authenticated user, if any.
-- `IncomingFile` is a streaming upload part with a byte limit; read it with `next_chunk()` or skip it with `drain()`.
+- `IncomingFile` is a streaming upload part with a byte limit; read it with `next_chunk()` or skip it with `drain()`. A read error ends the part: later reads return it again, and the generated server rejects the upload.
 - `UploadSummary` lists the accepted parts and their sizes when an upload finishes.
 - `JsonResponse<T>` is the upload response body with its status and headers.
 - `DownloadResponse` builds a download from bytes or a stream, with `content_type`, `content_length`, `attachment` and `etag` helpers.

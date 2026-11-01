@@ -504,6 +504,13 @@ Each method also has a `<handler>_with_timeout(..., timeout)` variant.
 `build()` uses the reqwest transport;
 `build_with_transport(transport)` takes any `Arc<dyn HttpTransport>`.
 
+A path parameter is percent-encoded into its own segment.
+A value of `.`, `..` or the empty string fails the call with `TransportError::InvalidPathSegment`,
+because the URL would otherwise name a different endpoint.
+The client reads a response body into memory up to 16 MiB
+and fails with `TransportError::BodyTooLarge` past that;
+`ReqwestTransport::with_body_limit` raises the limit.
+
 ## Use an OpenAPI TypeScript client
 
 A browser client can be generated from the OpenAPI document instead.

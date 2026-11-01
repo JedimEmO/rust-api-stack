@@ -54,7 +54,9 @@ impl std::fmt::Debug for RequestBody {
 /// `url` is always the full absolute URL the client builds today;
 /// [`crate::AxumTestTransport`] strips the scheme+authority down to a
 /// path+query.
-#[derive(Debug)]
+///
+/// `Debug` redacts the values of `Authorization`, `Proxy-Authorization` and
+/// `Cookie`, and of any header marked sensitive.
 pub struct TransportRequest {
     /// HTTP method.
     pub method: Method,
@@ -102,8 +104,9 @@ impl TransportRequest {
     /// returns [`TransportError::InvalidHeader`] rather than silently dropping
     /// the header and sending the request unauthenticated.
     pub fn bearer(mut self, token: impl AsRef<str>) -> Result<Self, TransportError> {
-        let value = HeaderValue::try_from(format!("Bearer {}", token.as_ref()))
+        let mut value = HeaderValue::try_from(format!("Bearer {}", token.as_ref()))
             .map_err(|_| TransportError::InvalidHeader("bearer token".to_string()))?;
+        value.set_sensitive(true);
         self.headers.insert(http::header::AUTHORIZATION, value);
         Ok(self)
     }
@@ -124,5 +127,38 @@ impl TransportRequest {
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self
+    }
+}
+
+impl std::fmt::Debug for TransportRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TransportRequest")
+            .field("method", &self.method)
+            .field("url", &self.url)
+            .field("headers", &RedactedHeaders(&self.headers))
+            .field("body", &self.body)
+            .field("timeout", &self.timeout)
+            .finish()
+    }
+}
+
+/// Debug view of a [`HeaderMap`] that hides credential values.
+struct RedactedHeaders<'a>(&'a HeaderMap);
+
+impl std::fmt::Debug for RedactedHeaders<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut map = f.debug_map();
+        for (name, value) in self.0 {
+            let secret = value.is_sensitive()
+                || name == http::header::AUTHORIZATION
+                || name == http::header::PROXY_AUTHORIZATION
+                || name == http::header::COOKIE;
+            if secret {
+                map.entry(name, &"<redacted>");
+            } else {
+                map.entry(name, value);
+            }
+        }
+        map.finish()
     }
 }
