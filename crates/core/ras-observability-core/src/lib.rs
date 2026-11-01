@@ -1,8 +1,9 @@
 //! Backend-neutral request metrics traits for Rust API Stack services.
 //!
 //! [`RequestContext`] describes a request the same way for REST, JSON-RPC and WebSocket
-//! services. [`UsageTracker`] runs before a request, [`MethodDurationTracker`] after it,
-//! and [`ServiceMetrics`] is the synchronous counter and histogram interface.
+//! services. [`UsageTracker`] runs before a request, [`MethodDurationTracker`] after it
+//! with the duration and whether the request succeeded, and [`ServiceMetrics`] is the
+//! synchronous counter and histogram interface.
 //!
 //! This crate holds no metrics backend. `ras-observability-otel` implements these traits
 //! with OpenTelemetry and a Prometheus endpoint; depend on this crate directly only to
@@ -17,8 +18,6 @@ use http::HeaderMap;
 use ras_auth_core::AuthenticatedUser;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::future::Future;
-use std::pin::Pin;
 use std::time::Duration;
 
 /// Protocol type for request context
@@ -94,28 +93,6 @@ impl RequestContext {
     }
 }
 
-/// Type alias for async usage tracking function
-pub type UsageTrackerFn = Box<
-    dyn Fn(
-            HeaderMap,
-            Option<AuthenticatedUser>,
-            RequestContext,
-        ) -> Pin<Box<dyn Future<Output = ()> + Send>>
-        + Send
-        + Sync,
->;
-
-/// Type alias for async method duration tracking function
-pub type MethodDurationTrackerFn = Box<
-    dyn Fn(
-            RequestContext,
-            Option<AuthenticatedUser>,
-            Duration,
-        ) -> Pin<Box<dyn Future<Output = ()> + Send>>
-        + Send
-        + Sync,
->;
-
 /// Trait for tracking request usage
 #[async_trait]
 pub trait UsageTracker: Send + Sync {
@@ -128,15 +105,22 @@ pub trait UsageTracker: Send + Sync {
     );
 }
 
-/// Trait for tracking method execution duration
+/// Trait for tracking how a request ended.
+///
+/// Called once per request, after the response is built.
 #[async_trait]
 pub trait MethodDurationTracker: Send + Sync {
-    /// Track the duration of a method execution
+    /// Record the duration and outcome of a request.
+    ///
+    /// `success` is `false` when the request ended in an error response: a handler
+    /// error, a request body or parameters that do not decode, or a response that
+    /// could not be produced.
     async fn track_duration(
         &self,
         context: &RequestContext,
         user: Option<&AuthenticatedUser>,
         duration: Duration,
+        success: bool,
     );
 }
 
@@ -150,66 +134,6 @@ pub trait ServiceMetrics: Send + Sync {
 
     /// Record the duration of a method execution
     fn record_method_duration(&self, context: &RequestContext, duration: Duration);
-}
-
-/// Builder for configuring observability
-pub struct ObservabilityBuilder {
-    usage_tracker: Option<UsageTrackerFn>,
-    duration_tracker: Option<MethodDurationTrackerFn>,
-}
-
-impl ObservabilityBuilder {
-    /// Create a new builder
-    pub fn new() -> Self {
-        Self {
-            usage_tracker: None,
-            duration_tracker: None,
-        }
-    }
-
-    /// Set the usage tracker
-    pub fn with_usage_tracker<F, Fut>(mut self, tracker: F) -> Self
-    where
-        F: Fn(HeaderMap, Option<AuthenticatedUser>, RequestContext) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        self.usage_tracker = Some(Box::new(move |headers, user, context| {
-            Box::pin(tracker(headers, user, context))
-        }));
-        self
-    }
-
-    /// Set the method duration tracker
-    pub fn with_method_duration_tracker<F, Fut>(mut self, tracker: F) -> Self
-    where
-        F: Fn(RequestContext, Option<AuthenticatedUser>, Duration) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        self.duration_tracker = Some(Box::new(move |context, user, duration| {
-            Box::pin(tracker(context, user, duration))
-        }));
-        self
-    }
-
-    /// Build the observability configuration
-    pub fn build(self) -> ObservabilityConfig {
-        ObservabilityConfig {
-            usage_tracker: self.usage_tracker,
-            duration_tracker: self.duration_tracker,
-        }
-    }
-}
-
-impl Default for ObservabilityBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Configuration for observability
-pub struct ObservabilityConfig {
-    pub usage_tracker: Option<UsageTrackerFn>,
-    pub duration_tracker: Option<MethodDurationTrackerFn>,
 }
 
 /// Helper functions for extracting common attributes from requests

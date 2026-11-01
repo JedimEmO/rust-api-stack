@@ -167,16 +167,21 @@ fn auth_tokens(auth: &AuthRequirement) -> TokenStream {
             quote! { ras_permission_manifest::AuthRequirementInfo::Optional }
         }
         AuthRequirement::WithPermissions(groups) => {
-            if groups.is_empty() || groups.iter().any(Vec::is_empty) {
+            // As ras-auth-core enforces: only all-empty groups mean "any authenticated
+            // caller"; otherwise empty groups are ignored.
+            if groups.iter().all(Vec::is_empty) {
                 quote! { ras_permission_manifest::AuthRequirementInfo::Authenticated }
             } else {
-                let group_tokens = groups.iter().map(|group| {
-                    quote! {
-                        ras_permission_manifest::PermissionGroupInfo {
-                            all_of: vec![#(#group.to_string()),*],
+                let group_tokens = groups
+                    .iter()
+                    .filter(|group| !group.is_empty())
+                    .map(|group| {
+                        quote! {
+                            ras_permission_manifest::PermissionGroupInfo {
+                                all_of: vec![#(#group.to_string()),*],
+                            }
                         }
-                    }
-                });
+                    });
                 quote! {
                     ras_permission_manifest::AuthRequirementInfo::Permissions {
                         any_of: vec![#(#group_tokens),*],
@@ -195,10 +200,15 @@ fn static_requirement_tokens(auth: &AuthRequirement) -> TokenStream {
             quote! { ras_permission_manifest::StaticPermissionRequirement::authenticated_only() }
         }
         AuthRequirement::WithPermissions(groups) => {
-            if groups.is_empty() || groups.iter().any(Vec::is_empty) {
+            // As ras-auth-core enforces: only all-empty groups mean "any authenticated
+            // caller"; otherwise empty groups are ignored.
+            if groups.iter().all(Vec::is_empty) {
                 quote! { ras_permission_manifest::StaticPermissionRequirement::authenticated_only() }
             } else {
-                let group_tokens = groups.iter().map(|group| quote! { &[#(#group),*] });
+                let group_tokens = groups
+                    .iter()
+                    .filter(|group| !group.is_empty())
+                    .map(|group| quote! { &[#(#group),*] });
                 quote! { ras_permission_manifest::StaticPermissionRequirement::new(&[#(#group_tokens),*]) }
             }
         }

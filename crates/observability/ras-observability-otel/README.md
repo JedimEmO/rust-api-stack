@@ -33,7 +33,7 @@ so build one `OtelSetup` per process.
 
 - `usage_tracker()`, an `OtelUsageTracker` that logs the request and counts it as started.
 - `method_duration_tracker()`, an `OtelMethodDurationTracker` that logs the duration,
-  records it, and counts the request as completed.
+  records it, and counts the request as completed with the outcome the hook reports.
 - `metrics()`, the shared `OtelMetrics`, for recording through `ServiceMetrics` yourself.
 
 ## Wiring the trackers into a generated service
@@ -64,12 +64,14 @@ let router = MyServiceBuilder::new(MyServiceImpl::new())
     })
     .with_method_duration_tracker({
         let tracker = otel.method_duration_tracker();
-        move |method, path, user, duration| {
+        move |method, path, user, duration, success| {
             let context = RequestContext::rest(method, path);
             let tracker = tracker.clone();
             let user = user.cloned();
             async move {
-                tracker.track_duration(&context, user.as_ref(), duration).await;
+                tracker
+                    .track_duration(&context, user.as_ref(), duration, success)
+                    .await;
             }
         }
     })
@@ -81,13 +83,18 @@ Keep it there, or annotate the parameter types:
 a closure bound to a `let` first, with unannotated reference parameters,
 does not get the higher-ranked signature the builder needs.
 
-A `jsonrpc_service!` builder takes the same two hooks.
+A `file_service!` builder takes the same two hooks with the same arguments.
+A `jsonrpc_service!` builder takes them too.
 Its usage tracker receives the `JsonRpcRequest`, so the context is `RequestContext::jsonrpc(request.method.clone())`,
-and its duration tracker receives the method name.
+and its duration tracker receives the method name in place of the HTTP method and path.
 [examples/basic-jsonrpc](https://github.com/JedimEmO/rust-api-stack/blob/master/examples/basic-jsonrpc/service/src/main.rs)
 wires both.
-The `file_service!` hooks are synchronous closures named `with_usage_tracker` and `with_duration_tracker`;
-call `ServiceMetrics` on `otel.metrics()` from them.
+
+The hooks run only for requests that pass authorization,
+and the duration hook runs once for every request the usage hook saw,
+so `requests_started_total` and `requests_completed_total` count the same requests.
+The [observability guide](https://github.com/JedimEmO/rust-api-stack/blob/master/documentation/src/observability.md)
+spells out when each hook runs.
 
 ## Metrics
 
@@ -100,9 +107,9 @@ call `ServiceMetrics` on `otel.metrics()` from them.
 The exporter also adds its own scope labels, such as `otel_scope_name`.
 `protocol` is `REST`, `JSON-RPC` or `WebSocket`.
 
-`OtelMethodDurationTracker` always records `success="true"`,
-because the generated duration hooks do not say whether the handler failed.
-To count failures, call `ServiceMetrics::increment_requests_completed` with `false` yourself.
+`success` is `false` when the request ended in an error response:
+a 4xx or 5xx status from a REST or file service, or a JSON-RPC error.
+A failure rate is `requests_completed_total{success="false"}` over `requests_completed_total`.
 
 User attributes never become metric labels; a label per user would create a series per user.
 The trackers do log at `info` level, though,

@@ -320,8 +320,32 @@ let app: axum::Router = DocumentServiceBuilder::new(MyService::default())
 
 A `WITH_PERMISSIONS` endpoint answers `500` when no auth provider is set.
 The builder also takes `auth_cookie(...)`, `auth_transport(...)` and
-`csrf_protection(...)` for cookie auth,
-and `with_usage_tracker(...)` and `with_duration_tracker(...)` for metrics.
+`csrf_protection(...)` for cookie auth.
+
+For metrics, the builder takes the same two async hooks as `rest_service!`:
+
+```rust,ignore
+let app = DocumentServiceBuilder::new(MyService::default())
+    .auth_provider(my_auth_provider)
+    .with_usage_tracker(|_headers, user, method, path| {
+        let user = user.map_or("anonymous", |user| user.user_id.as_str());
+        tracing::info!(%method, %path, %user, "file request");
+        async {}
+    })
+    .with_method_duration_tracker(|method, path, _user, duration, success| {
+        tracing::info!(%method, %path, ?duration, success, "file request finished");
+        async {}
+    })
+    .build();
+```
+
+`path` is the route template, such as `/download/{id}`, not the request path,
+so it is safe to use as a metric label.
+A request rejected by authentication or authorization reaches neither hook.
+Every other request reaches both, once each,
+and `success` is `false` when the response status is 4xx or 5xx,
+such as a multipart part that breaks a limit or a handler error.
+[Observability](../observability.md) shows how to feed both hooks into OpenTelemetry.
 
 ## Auth syntax
 

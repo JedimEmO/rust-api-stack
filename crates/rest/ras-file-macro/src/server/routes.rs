@@ -101,7 +101,88 @@ pub(super) fn generate_router_construction(
                 #base_path,
                 ::axum::Router::new()
                     #(#routes)*
-                    .with_state((service, auth_provider, usage_tracker, duration_tracker, auth_transport))
+                    .with_state((service, auth_provider, usage_tracker, method_duration_tracker, auth_transport))
             )
+    }
+}
+
+/// The type of the boxed usage tracker the builder stores.
+pub(super) fn usage_tracker_type() -> TokenStream {
+    quote! {
+        ::std::sync::Arc<
+            dyn Fn(
+                    &::axum::http::HeaderMap,
+                    Option<&::ras_auth_core::AuthenticatedUser>,
+                    &str,
+                    &str,
+                ) -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = ()> + Send>>
+                + Send
+                + Sync,
+        >
+    }
+}
+
+/// The type of the boxed method duration tracker the builder stores.
+pub(super) fn duration_tracker_type() -> TokenStream {
+    quote! {
+        ::std::sync::Arc<
+            dyn Fn(
+                    &str,
+                    &str,
+                    Option<&::ras_auth_core::AuthenticatedUser>,
+                    ::std::time::Duration,
+                    bool,
+                ) -> ::std::pin::Pin<Box<dyn ::std::future::Future<Output = ()> + Send>>
+                + Send
+                + Sync,
+        >
+    }
+}
+
+/// The router state every generated handler extracts.
+pub(super) fn handler_state_type() -> TokenStream {
+    let usage = usage_tracker_type();
+    let duration = duration_tracker_type();
+    quote! {
+        (
+            ::std::sync::Arc<S>,
+            Option<::std::sync::Arc<A>>,
+            Option<#usage>,
+            Option<#duration>,
+            ::ras_auth_core::AuthTransportConfig,
+        )
+    }
+}
+
+/// Wraps request decoding and the handler calls in the usage and duration trackers.
+///
+/// Authentication and the permission check run before this code and may return
+/// early; such a rejection reaches neither tracker. `body` runs inside an async
+/// block, so each early `return` there (a bad path, an invalid multipart part,
+/// a handler error) still produces a response that the duration tracker records.
+/// The request counts as a success unless the response status is 4xx or 5xx.
+///
+/// Expects `state`, `parts`, `method` and `user: Option<AuthenticatedUser>` in scope.
+pub(super) fn tracked_handler(route: &str, body: TokenStream) -> TokenStream {
+    quote! {
+        if let Some(tracker) = &state.2 {
+            let tracker_headers =
+                ::ras_auth_core::redact_sensitive_headers_for_auth_transport(&parts.headers, &state.4);
+            tracker(&tracker_headers, user.as_ref(), method, #route).await;
+        }
+
+        let __ras_start = ::std::time::Instant::now();
+        let __ras_response: ::axum::response::Response = async {
+            #body
+        }
+        .await;
+
+        if let Some(tracker) = &state.3 {
+            let __ras_status = __ras_response.status();
+            let __ras_success = !(__ras_status.is_client_error() || __ras_status.is_server_error());
+            tracker(method, #route, user.as_ref(), __ras_start.elapsed(), __ras_success).await;
+        }
+
+        __ras_response
     }
 }

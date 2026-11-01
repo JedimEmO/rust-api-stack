@@ -193,7 +193,7 @@ Service-level options go between `base_path` and `endpoints`, each followed by a
 | --- | --- | --- |
 | `openapi: true` | off | Generate the OpenAPI functions; `_to_file` writes `target/openapi/<service>.json`. |
 | `openapi: { output: "path.json" }` | | The same, with your own output path for `_to_file`. |
-| `serve_docs: <bool>` | `false` | Serve the API explorer and `openapi.json`. Needs `openapi`; without it the generated code does not compile. |
+| `serve_docs: <bool>` | `false` | Serve the API explorer and `openapi.json`. Needs `openapi`; `serve_docs: true` without it is a compile error that says so. |
 | `docs_path: "..."` | `"/docs"` | Where the explorer is served, under `base_path`. The document is at `<docs_path>/openapi.json`. |
 | `docs_require_auth: <bool>` | `false` | Require an authenticated caller for the explorer page and `openapi.json`. |
 | `require_json_content_type: <bool>` | `true` | Reject a bodied request whose `Content-Type` is not `application/json` with 415. |
@@ -439,8 +439,14 @@ The builder methods are:
 | `auth_cookie(config)` | Accept a session cookie as well as a bearer token, with double-submit CSRF protection. |
 | `csrf_protection(config)` | Replace the CSRF configuration. |
 | `auth_transport(config)` | Replace the whole credential transport configuration. |
-| `with_usage_tracker(f)` | Called before each handler with the headers (credentials redacted), the user, the HTTP method and the path. |
-| `with_method_duration_tracker(f)` | Called after each request with the HTTP method, the path, the user and the duration. |
+| `with_usage_tracker(f)` | Async hook called once authorization passes, before the body is decoded, with the headers (credentials redacted), the user, the HTTP method and the route path. |
+| `with_method_duration_tracker(f)` | Async hook called once the response is built, with the HTTP method, the route path, the user, the duration and whether the request succeeded. |
+
+A request rejected by authentication or authorization reaches neither hook.
+Every other request reaches both, once each.
+`success` is `false` when the response status is 4xx or 5xx,
+such as a body that does not decode or a handler error.
+[Observability](../observability.md) shows how to feed both hooks into OpenTelemetry.
 
 Cookie auth works with the same `AuthProvider`:
 

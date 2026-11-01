@@ -50,7 +50,7 @@ pub(crate) fn generate_server_code(service_def: &ServiceDefinition) -> proc_macr
             auth_provider: Option<Box<dyn ras_jsonrpc_core::AuthProvider>>,
             auth_transport: ras_jsonrpc_core::AuthTransportConfig,
             usage_tracker: Option<Box<dyn Fn(&axum::http::HeaderMap, Option<&ras_jsonrpc_core::AuthenticatedUser>, &ras_jsonrpc_types::JsonRpcRequest) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync>>,
-            method_duration_tracker: Option<Box<dyn Fn(&str, Option<&ras_jsonrpc_core::AuthenticatedUser>, std::time::Duration) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync>>,
+            method_duration_tracker: Option<Box<dyn Fn(&str, Option<&ras_jsonrpc_core::AuthenticatedUser>, std::time::Duration, bool) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync>>,
         }
 
         impl<T: #service_trait_name> #builder_name<T> {
@@ -105,8 +105,13 @@ pub(crate) fn generate_server_code(service_def: &ServiceDefinition) -> proc_macr
                 self
             }
 
-            /// Set the usage tracker function
-            /// This function will be called for each request with headers, authenticated user (if any), and the JSON-RPC request
+            /// Set the usage tracker.
+            ///
+            /// Called once for each call to a declared method that passes authorization,
+            /// before its params are decoded. It receives the request headers (credentials
+            /// redacted), the authenticated user (if any) and the JSON-RPC request. Calls
+            /// rejected for a missing or invalid credential or a missing permission, and
+            /// calls to unknown methods, reach neither tracker.
             pub fn with_usage_tracker<F, Fut>(mut self, tracker: F) -> Self
             where
                 F: Fn(&axum::http::HeaderMap, Option<&ras_jsonrpc_core::AuthenticatedUser>, &ras_jsonrpc_types::JsonRpcRequest) -> Fut + Send + Sync + 'static,
@@ -118,15 +123,20 @@ pub(crate) fn generate_server_code(service_def: &ServiceDefinition) -> proc_macr
                 self
             }
 
-            /// Set the method duration tracker function
-            /// This function will be called after each method completes with the method name, authenticated user (if any), and the duration
+            /// Set the method duration tracker.
+            ///
+            /// Called once for every call the usage tracker saw, after the response is
+            /// built. It receives the method's wire name, the authenticated user (if any),
+            /// the time from the usage tracker to the finished response, and whether the
+            /// call succeeded: `false` when the response is a JSON-RPC error, such as
+            /// invalid params or a handler error.
             pub fn with_method_duration_tracker<F, Fut>(mut self, tracker: F) -> Self
             where
-                F: Fn(&str, Option<&ras_jsonrpc_core::AuthenticatedUser>, std::time::Duration) -> Fut + Send + Sync + 'static,
+                F: Fn(&str, Option<&ras_jsonrpc_core::AuthenticatedUser>, std::time::Duration, bool) -> Fut + Send + Sync + 'static,
                 Fut: std::future::Future<Output = ()> + Send + 'static,
             {
-                self.method_duration_tracker = Some(Box::new(move |method, user, duration| {
-                    Box::pin(tracker(method, user, duration))
+                self.method_duration_tracker = Some(Box::new(move |method, user, duration, success| {
+                    Box::pin(tracker(method, user, duration, success))
                 }));
                 self
             }

@@ -148,7 +148,7 @@ These optional fields go between them:
 | --- | --- | --- |
 | `openrpc: true` | off | Generate the OpenRPC functions; `_to_file` writes `target/openrpc/<service>.json`. |
 | `openrpc: { output: "path.json" }` | | The same, with your own output path for `_to_file`. |
-| `explorer: true` | off | Serve the API explorer at `<base_url>/explorer` and the document at `<base_url>/explorer/openrpc.json`. Needs `openrpc`; without it the option does nothing. |
+| `explorer: true` | off | Serve the API explorer at `<base_url>/explorer` and the document at `<base_url>/explorer/openrpc.json`. Needs `openrpc`; `explorer` without it is a compile error that says so. |
 | `explorer: { path: "/docs" }` | | The same, at your own path under `base_url`. |
 | `docs_require_auth: <bool>` | `false` | Require an authenticated caller for the explorer page and `openrpc.json`. |
 | `require_json_content_type: <bool>` | `true` | Reject a request whose `Content-Type` is not `application/json` with HTTP 415. |
@@ -359,8 +359,15 @@ The builder methods are:
 | `auth_cookie(config)` | Accept a session cookie as well as a bearer token, with double-submit CSRF protection. |
 | `csrf_protection(config)` | Replace the CSRF configuration. |
 | `auth_transport(config)` | Replace the whole credential transport configuration. |
-| `with_usage_tracker(f)` | Called for each request with the headers (credentials redacted), the user and the request. |
-| `with_method_duration_tracker(f)` | Called after each handler with the wire method name, the user and the duration. |
+| `with_usage_tracker(f)` | Async hook called once a call to a declared method passes authorization, before its params are decoded, with the headers (credentials redacted), the user and the request. |
+| `with_method_duration_tracker(f)` | Async hook called once the response is built, with the wire method name, the user, the duration and whether the call succeeded. |
+
+A call rejected by authentication or authorization, or to a method the service does not declare,
+reaches neither hook.
+Every other call reaches both, once each.
+`success` is `false` when the response is a JSON-RPC error,
+such as invalid params or a handler error.
+[Observability](../observability.md) shows how to feed both hooks into OpenTelemetry.
 
 Bearer credentials are read from `Authorization: Bearer <token>`.
 [Auth in the API contract](../auth-in-api-contract.md) shows how to write an `AuthProvider`.

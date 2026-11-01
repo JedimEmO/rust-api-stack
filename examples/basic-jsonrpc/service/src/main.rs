@@ -343,14 +343,15 @@ async fn main() -> anyhow::Result<()> {
         let duration_tracker = otel.method_duration_tracker();
         move |method: &str,
               user: Option<&ras_jsonrpc_core::AuthenticatedUser>,
-              duration: std::time::Duration| {
+              duration: std::time::Duration,
+              success: bool| {
             let context = RequestContext::jsonrpc(method.to_string());
             let duration_tracker = duration_tracker.clone();
             let user_clone = user.cloned();
 
             async move {
                 duration_tracker
-                    .track_duration(&context, user_clone.as_ref(), duration)
+                    .track_duration(&context, user_clone.as_ref(), duration, success)
                     .await;
             }
         }

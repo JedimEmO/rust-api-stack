@@ -105,6 +105,11 @@ The Prometheus endpoint exposes three metrics:
 - `requests_completed_total`, labelled `method`, `protocol` and `success`
 - `method_duration_milliseconds`, a histogram labelled `method` and `protocol`
 
+`success` is `false` when the call ended in a JSON-RPC error,
+such as invalid params or a handler error.
+Calls rejected by authentication or authorization, and calls to unknown methods,
+are not counted at all; they are logged at `warn` instead.
+
 User ids go to the `tracing` log, not into metric labels,
 so the number of time series does not grow with the number of users.
 

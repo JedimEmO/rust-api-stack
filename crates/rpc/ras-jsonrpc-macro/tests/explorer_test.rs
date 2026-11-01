@@ -133,22 +133,4 @@ mod tests {
         let spec: serde_json::Value = spec_response.json();
         assert_eq!(spec["info"]["title"], "NormalizedService JSON-RPC API");
     }
-
-    #[test]
-    fn test_explorer_requires_openrpc() {
-        mod no_openrpc_service {
-            use ras_jsonrpc_macro::jsonrpc_service;
-
-            jsonrpc_service!({
-                service_name: NoOpenRpcService,
-                explorer: true,  // This should be ignored without openrpc
-                methods: [
-                    UNAUTHORIZED test_method(()) -> String,
-                ]
-            });
-        }
-
-        // Explorer routes should not be generated
-        // This test just verifies that the macro compiles
-    }
 }

@@ -1,5 +1,5 @@
 use super::auth::{generate_auth_check, generate_permission_check};
-use super::routes::generate_path_extraction;
+use super::routes::{generate_path_extraction, handler_state_type, tracked_handler};
 use super::types::{part_enum_name, part_variant_name, path_struct_name};
 use crate::parser::{
     Endpoint, FileServiceDefinition, FilenamePolicy, MaxBytes, UploadConfig, UploadPart,
@@ -49,38 +49,10 @@ pub(super) fn generate_upload_handler(
         let count_ident = part_count_ident(part);
         quote! { let mut #count_ident: usize = 0; }
     });
-
-    quote! {
-        async fn #handler_fn<S, A>(
-            state: ::axum::extract::State<(
-                ::std::sync::Arc<S>,
-                Option<::std::sync::Arc<A>>,
-                Option<::std::sync::Arc<Box<dyn Fn(&::axum::http::HeaderMap, &str, &str) + Send + Sync>>>,
-                Option<::std::sync::Arc<Box<dyn Fn(&str, &str, std::time::Duration) + Send + Sync>>>,
-                ::ras_auth_core::AuthTransportConfig,
-            )>,
-            req: ::axum::http::Request<::axum::body::Body>,
-        ) -> ::axum::response::Response
-        where
-            S: #trait_name + Send + Sync + 'static,
-            A: ::ras_auth_core::AuthProvider + Send + Sync + 'static,
-        {
-            use ::axum::extract::FromRequest;
-            use ::axum::response::IntoResponse;
-
-            let start = std::time::Instant::now();
-            let method = "POST";
-            let request_path = req.uri().path().to_string();
-            let (mut parts, body) = req.into_parts();
-
-            if let Some(tracker) = &state.2 {
-                let tracker_headers =
-                    ::ras_auth_core::redact_sensitive_headers_for_auth_transport(&parts.headers, &state.4);
-                tracker(&tracker_headers, method, &request_path);
-            }
-
-            #auth
-            #permission_check
+    let state_type = handler_state_type();
+    let tracked = tracked_handler(
+        &path,
+        quote! {
             #path_extraction
 
             #content_length_limit
@@ -153,14 +125,33 @@ pub(super) fn generate_upload_handler(
                 Err(error) => return __ras_file_error_response(error),
             };
 
-            if let Some(tracker) = &state.3 {
-                tracker(method, &request_path, start.elapsed());
-            }
-
             let (status, headers, body) = response.into_parts();
             let mut response = (status, ::axum::Json(body)).into_response();
             response.headers_mut().extend(headers);
             response
+        },
+    );
+
+    quote! {
+        async fn #handler_fn<S, A>(
+            state: ::axum::extract::State<#state_type>,
+            req: ::axum::http::Request<::axum::body::Body>,
+        ) -> ::axum::response::Response
+        where
+            S: #trait_name + Send + Sync + 'static,
+            A: ::ras_auth_core::AuthProvider + Send + Sync + 'static,
+        {
+            use ::axum::extract::FromRequest;
+            use ::axum::response::IntoResponse;
+
+            let method = "POST";
+            let request_path = req.uri().path().to_string();
+            let (mut parts, body) = req.into_parts();
+
+            #auth
+            #permission_check
+
+            #tracked
         }
     }
 }

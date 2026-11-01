@@ -87,7 +87,8 @@ mod static_hosting;
 ///
 /// * `openapi: true` or `openapi: { output: "path.json" }`: emit the OpenAPI functions.
 /// * `serve_docs: <bool>` and `docs_path: "..."` (default `"/docs"`): serve the API explorer and
-///   `openapi.json` under `base_path`. Requires `openapi`.
+///   `openapi.json` under `base_path`. Needs `openapi`; without it the macro reports a compile
+///   error at `serve_docs`.
 /// * `docs_require_auth: <bool>` (default `false`): require an authenticated caller for the
 ///   explorer and `openapi.json`.
 /// * `require_json_content_type: <bool>` (default `true`): enforce `application/json` on

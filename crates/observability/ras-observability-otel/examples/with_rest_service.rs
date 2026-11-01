@@ -17,15 +17,18 @@ impl ServiceWithObservability {
             .build()
             .expect("Failed to set up OpenTelemetry");
 
-        // Create usage tracker callback
+        // The closures a `rest_service!` builder takes. Bound to a `let`, they need
+        // annotated parameter types; passed straight to the builder, they do not.
         let _usage_tracker = {
             let usage_tracker = otel.usage_tracker();
-            move |headers: axum::http::HeaderMap,
-                  user: Option<ras_auth_core::AuthenticatedUser>,
+            move |headers: &axum::http::HeaderMap,
+                  user: Option<&ras_auth_core::AuthenticatedUser>,
                   method: &str,
                   path: &str| {
                 let context = RequestContext::rest(method, path);
                 let usage_tracker = usage_tracker.clone();
+                let headers = headers.clone();
+                let user = user.cloned();
 
                 async move {
                     usage_tracker
@@ -35,20 +38,20 @@ impl ServiceWithObservability {
             }
         };
 
-        // Create duration tracker callback
         let _duration_tracker = {
             let duration_tracker = otel.method_duration_tracker();
             move |method: &str,
                   path: &str,
                   user: Option<&ras_auth_core::AuthenticatedUser>,
-                  duration: std::time::Duration| {
+                  duration: std::time::Duration,
+                  success: bool| {
                 let context = RequestContext::rest(method, path);
                 let duration_tracker = duration_tracker.clone();
                 let user_cloned = user.cloned();
 
                 async move {
                     duration_tracker
-                        .track_duration(&context, user_cloned.as_ref(), duration)
+                        .track_duration(&context, user_cloned.as_ref(), duration, success)
                         .await;
                 }
             }

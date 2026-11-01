@@ -42,12 +42,14 @@ let service = UserServiceBuilder::new(UserServiceImpl)
     })
     .with_method_duration_tracker({
         let tracker = otel.method_duration_tracker();
-        move |method, path, user, duration| {
+        move |method, path, user, duration, success| {
             let context = RequestContext::rest(method, path);
             let tracker = tracker.clone();
             let user = user.cloned();
             async move {
-                tracker.track_duration(&context, user.as_ref(), duration).await;
+                tracker
+                    .track_duration(&context, user.as_ref(), duration, success)
+                    .await;
             }
         }
     })
@@ -58,23 +60,47 @@ let app = axum::Router::new()
     .merge(metrics_router);
 ```
 
-The hooks differ per macro:
+The hooks take the same shape in every macro;
+only the arguments that name the request differ:
 
 | Macro | Usage hook | Duration hook |
 |---|---|---|
-| `rest_service!` | `with_usage_tracker(headers, user, method, path)`, async | `with_method_duration_tracker(method, path, user, duration)`, async |
-| `jsonrpc_service!` | `with_usage_tracker(headers, user, request)`, async | `with_method_duration_tracker(method, user, duration)`, async |
-| `file_service!` | `with_usage_tracker(headers, method, path)`, sync | `with_duration_tracker(method, path, duration)`, sync |
+| `rest_service!` | `with_usage_tracker(headers, user, method, path)` | `with_method_duration_tracker(method, path, user, duration, success)` |
+| `jsonrpc_service!` | `with_usage_tracker(headers, user, request)` | `with_method_duration_tracker(method, user, duration, success)` |
+| `file_service!` | `with_usage_tracker(headers, user, method, path)` | `with_method_duration_tracker(method, path, user, duration, success)` |
 | `jsonrpc_bidirectional_service!` | none | none |
 
-For a JSON-RPC service, build the context with `RequestContext::jsonrpc(request.method.clone())`.
-The file service hooks are synchronous,
-so call the `ServiceMetrics` methods on `otel.metrics()` from them.
+Every hook returns a future, which the service awaits.
+`path` is the route template relative to the service's base path, such as `/items/{id}`,
+so it is safe to use as a metric label.
+For a JSON-RPC service, build the context with `RequestContext::jsonrpc(request.method.clone())` in the usage hook;
+the duration hook receives the method's wire name.
 A bidirectional service has no hooks; record its messages yourself with `RequestContext::websocket`.
 
+## When the hooks run
+
+Both hooks run only for requests that pass authentication and authorization.
+A request with a missing or invalid credential, or without a required permission,
+reaches neither hook; the service logs the rejection at `warn` instead.
+A JSON-RPC call to a method the service does not declare reaches neither hook either,
+so a caller cannot grow your metric labels by inventing method names.
+
+Once a request passes authorization,
+the usage hook runs, then the request is decoded and handled,
+and the duration hook runs exactly once with the finished response.
+So `requests_started` and `requests_completed` count the same requests.
+`duration` is the time from the usage hook to the finished response.
+For a file download it ends when the response starts streaming, not when the last byte is sent.
+
+`success` is `false` when the request ended in an error:
+
+- for REST and file services, any response with a 4xx or 5xx status,
+  such as a body or multipart part that does not decode, or a handler error;
+- for JSON-RPC, any error response,
+  such as invalid params, a handler error, or a result that does not serialize.
+
+`OtelMethodDurationTracker` records it as the `success` label on `requests_completed`.
 The usage hook sees the request headers with credential headers redacted.
-`OtelMethodDurationTracker` counts every completed request as `success="true"`,
-because the duration hooks do not say whether the handler failed.
 
 ## Request contexts
 

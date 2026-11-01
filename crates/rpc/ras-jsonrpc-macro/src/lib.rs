@@ -78,7 +78,8 @@ mod static_hosting;
 ///
 /// * `openrpc: true` or `openrpc: { output: "path.json" }`: emit the OpenRPC functions.
 /// * `explorer: true` or `explorer: { path: "/docs" }`: serve the API explorer and
-///   `openrpc.json` under the JSON-RPC route. Has no effect without `openrpc`.
+///   `openrpc.json` under the JSON-RPC route. Needs `openrpc`; without it the macro reports
+///   a compile error at `explorer`.
 /// * `docs_require_auth: <bool>` (default `false`): require an authenticated caller for the
 ///   explorer and `openrpc.json`. The JSON-RPC endpoint is never affected.
 /// * `require_json_content_type: <bool>` (default `true`): reject a request whose

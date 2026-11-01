@@ -37,16 +37,15 @@ or the number of metric series grows with your traffic.
 
 - `UsageTracker::track_request` runs before a request is handled,
   with the request headers, the authenticated user if any, and the context.
-- `MethodDurationTracker::track_duration` runs after the handler returns, with the elapsed time.
+- `MethodDurationTracker::track_duration` runs once the response is built,
+  with the elapsed time and whether the request succeeded.
+  `success` is `false` when the request ended in an error response.
 - `ServiceMetrics` is the synchronous counter and histogram interface:
   requests started, requests completed with a success flag, and method duration.
 
 The `extractors` module has two helpers, `user_agent` and `user_attributes`.
 `user_attributes` returns the user ID and the full permission list,
 so keep its output out of metric labels.
-
-`ObservabilityBuilder` and `ObservabilityConfig` hold a usage tracker and a duration tracker as boxed closures.
-The generated service builders do not take them; they have their own `with_usage_tracker` methods.
 
 ## Checks
 

@@ -209,8 +209,8 @@ pub(super) fn generate_http_methods(service_def: &ServiceDefinition) -> proc_mac
                             axum::http::StatusCode::OK
                         };
 
-                        // Rejections otherwise bypass the usage/duration trackers
-                        // (which run mid-dispatch); log auth/CSRF/permission
+                        // Rejections never reach the usage/duration trackers (which
+                        // run after authorization); log auth/CSRF/permission
                         // rejections here so a bad-credential caller is observable.
                         if status_code != axum::http::StatusCode::OK {
                             if let Some(ref error) = response.error {
@@ -341,13 +341,8 @@ pub(super) fn generate_http_methods(service_def: &ServiceDefinition) -> proc_mac
                     }
                 };
 
-                if let Some(tracker) = &self.usage_tracker {
-                    let user_ref = authenticated_user.as_ref();
-                    let tracker_headers =
-                        ras_jsonrpc_core::redact_sensitive_headers_for_auth_transport(&headers, &self.auth_transport);
-                    tracker(&tracker_headers, user_ref, &request).await;
-                }
-
+                // Each method arm runs the usage and duration trackers itself, once
+                // the call has passed authorization.
                 match request.method.as_str() {
                     #(#method_dispatch)*
                     _ => ras_jsonrpc_types::JsonRpcResponse::error(
