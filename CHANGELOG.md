@@ -78,7 +78,7 @@ Publish order follows the dependencies: `cargo publish --workspace` handles it.
 
 ### Observability
 
-- `ras-observability-core` defines hooks for request counts and method durations.
+- `ras-observability-core` defines hooks for request counts and method durations, with each call's outcome.
 - `ras-observability-otel` records them with OpenTelemetry and exports them for Prometheus.
 
 ### Supporting crates
