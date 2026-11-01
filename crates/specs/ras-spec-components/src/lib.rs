@@ -82,11 +82,11 @@ mod components;
 
 #[cfg(test)]
 mod tests {
+    use super::components::{Components, Dialect, Generators, COMPONENTS_PREFIX};
     use super::SpecGenerationError;
-    use super::components::{COMPONENTS_PREFIX, Components, Dialect, Generators};
     use schemars::JsonSchema;
     use serde::{Deserialize, Serialize};
-    use serde_json::{Map, Value, json};
+    use serde_json::{json, Map, Value};
 
     #[derive(Serialize, Deserialize, JsonSchema)]
     struct Renamed {
@@ -142,11 +142,9 @@ mod tests {
 
         let schemas = schemas_of(&components);
         assert!(schemas["Renamed"]["properties"].get("in").is_some());
-        assert!(
-            schemas["Renamed.Serialize"]["properties"]
-                .get("out")
-                .is_some()
-        );
+        assert!(schemas["Renamed.Serialize"]["properties"]
+            .get("out")
+            .is_some());
         // Holder only differs through its reference, and still gets its own component.
         assert_eq!(
             schemas["Holder.Serialize"]["properties"]["inner"]["$ref"],

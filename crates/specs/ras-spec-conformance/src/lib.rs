@@ -139,6 +139,99 @@ pub fn openrpc_value_violations(doc: &Value, schema: &Value, value: &Value) -> V
     }
 }
 
+/// OpenAPI 3.0 Schema Object keywords that have no draft-7 meaning and that
+/// the translation below does not handle. A schema using one fails the check
+/// instead of being validated against something weaker.
+const UNSUPPORTED_OPENAPI_KEYWORDS: &[&str] = &["discriminator", "xml"];
+
+/// Rewrites an OpenAPI 3.0 schema into JSON Schema draft 7: `nullable: true`
+/// becomes a `null` alternative. Only schema positions are visited.
+fn openapi_to_draft7(schema: &Value, problems: &mut Vec<String>, path: &str) -> Value {
+    let Value::Object(object) = schema else {
+        return schema.clone();
+    };
+    let mut translated = serde_json::Map::new();
+    for (key, value) in object {
+        if UNSUPPORTED_OPENAPI_KEYWORDS.contains(&key.as_str()) {
+            problems.push(format!(
+                "{path}: `{key}` is not supported by the value check"
+            ));
+        }
+        let child = format!("{path}/{key}");
+        let value = match key.as_str() {
+            "properties" | "patternProperties" => Value::Object(
+                value
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .map(|(name, sub)| (name.clone(), openapi_to_draft7(sub, problems, &child)))
+                    .collect(),
+            ),
+            "allOf" | "anyOf" | "oneOf" => Value::Array(
+                value
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|sub| openapi_to_draft7(sub, problems, &child))
+                    .collect(),
+            ),
+            "items" | "additionalProperties" | "not" => openapi_to_draft7(value, problems, &child),
+            "nullable" => continue,
+            _ => value.clone(),
+        };
+        translated.insert(key.clone(), value);
+    }
+    let translated = Value::Object(translated);
+    if object.get("nullable") == Some(&Value::Bool(true)) {
+        match translated.get("type").and_then(Value::as_str) {
+            Some(single) if translated.get("enum").is_none() => {
+                let mut with_null = translated.clone();
+                with_null["type"] = serde_json::json!([single, "null"]);
+                with_null
+            }
+            _ => serde_json::json!({ "anyOf": [translated, { "type": "null" }] }),
+        }
+    } else {
+        translated
+    }
+}
+
+/// Lists every way `value` fails `schema`, a schema from an OpenAPI 3.0
+/// document whose `$ref`s point into `doc`'s components.
+///
+/// The schema and every component are translated to draft 7 first; see
+/// `openapi_to_draft7` for what is supported.
+pub fn openapi_value_violations(doc: &Value, schema: &Value, value: &Value) -> Vec<String> {
+    let mut problems = Vec::new();
+    let schemas: serde_json::Map<String, Value> = doc["components"]["schemas"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(name, component)| {
+            let path = format!("#/components/schemas/{name}");
+            (
+                name.clone(),
+                openapi_to_draft7(component, &mut problems, &path),
+            )
+        })
+        .collect();
+    let root = serde_json::json!({
+        "allOf": [openapi_to_draft7(schema, &mut problems, "#")],
+        "components": { "schemas": schemas },
+    });
+    if !problems.is_empty() {
+        return problems;
+    }
+    match jsonschema::options()
+        .with_draft(Draft::Draft7)
+        .with_retriever(VendoredOnly)
+        .build(&root)
+    {
+        Ok(validator) => violations(&validator, value),
+        Err(error) => vec![format!("schema does not compile: {error}")],
+    }
+}
+
 fn assert_clean(kind: &str, problems: Vec<String>, doc: &Value) {
     assert!(
         problems.is_empty(),
@@ -216,5 +309,19 @@ mod tests {
     fn dangling_refs_are_reported_with_their_location() {
         let doc = json!({ "a": { "$ref": "#/missing" }, "b": { "$ref": "#/a" } });
         assert_eq!(dangling_refs(&doc), vec!["/a/$ref: #/missing".to_string()]);
+    }
+
+    #[test]
+    fn openapi_values_respect_nullable() {
+        let doc = json!({ "components": { "schemas": {
+            "Item": { "type": "object", "properties": { "nick": { "type": "string", "nullable": true } } }
+        } } });
+        let item = json!({ "$ref": "#/components/schemas/Item" });
+        assert!(openapi_value_violations(&doc, &item, &json!({ "nick": null })).is_empty());
+        assert!(!openapi_value_violations(&doc, &item, &json!({ "nick": 3 })).is_empty());
+        let optional_item = json!({ "allOf": [item], "nullable": true });
+        assert!(openapi_value_violations(&doc, &optional_item, &json!(null)).is_empty());
+        let unsupported = json!({ "discriminator": { "propertyName": "kind" } });
+        assert!(!openapi_value_violations(&doc, &unsupported, &json!({})).is_empty());
     }
 }

@@ -34,6 +34,11 @@ pub fn generate_openapi_code(
         "generate_{}_openapi",
         service_name.to_string().to_lowercase()
     );
+    let try_openapi_fn_name = quote::format_ident!(
+        "try_generate_{}_openapi",
+        service_name.to_string().to_lowercase()
+    );
+    let service_str = service_name.to_string();
     let openapi_to_file_fn_name = quote::format_ident!(
         "generate_{}_openapi_to_file",
         service_name.to_string().to_lowercase()
@@ -59,9 +64,12 @@ pub fn generate_openapi_code(
     };
 
     let embedded = embedded_components(&components_mod);
-    let endpoint_infos =
-        operations::generate_endpoint_infos(service_def, &endpoint_info_struct_name);
-    let paths = operations::generate_paths();
+    let endpoint_infos = operations::generate_endpoint_infos(
+        service_def,
+        &endpoint_info_struct_name,
+        &components_mod,
+    );
+    let paths = operations::generate_paths(&components_mod);
 
     quote! {
         #embedded
@@ -83,13 +91,24 @@ pub fn generate_openapi_code(
             path_params: Vec<(String, String, serde_json::Value)>,
             /// (name, type as written, required, schema)
             query_params: Vec<(String, String, bool, serde_json::Value)>,
+            /// Authored examples; only the current version has them.
+            examples: Vec<#components_mod::RestExample>,
             version: Option<String>,
             canonical_version: Option<String>,
             canonical_path: String,
         }
 
-        /// Generate OpenAPI 3.0 document for this service
+        /// Generate the OpenAPI 3.0 document for this service.
+        ///
+        /// Panics when an authored example cannot be serialized; see the
+        /// fallible variant next to it.
         pub fn #openapi_fn_name() -> serde_json::Value {
+            #try_openapi_fn_name().unwrap_or_else(|error| panic!("{error}"))
+        }
+
+        /// Generate the OpenAPI 3.0 document for this service, or say which
+        /// example or part of the document could not be built.
+        pub fn #try_openapi_fn_name() -> Result<serde_json::Value, ras_rest_core::SpecGenerationError> {
             use serde_json::json;
 
             let mut generators = #components_mod::Generators::new(#components_mod::Dialect::OpenApi3);
@@ -98,19 +117,34 @@ pub fn generate_openapi_code(
                 #(#endpoint_infos),*
             ];
 
-            let components = generators.into_components().unwrap_or_else(|error| {
-                panic!("OpenAPI document for {}: {}", stringify!(#service_name), error)
-            });
+            let components = generators.into_components().map_err(|error| {
+                ras_rest_core::SpecGenerationError::document(#service_str, error)
+            })?;
             for endpoint in &mut endpoints {
                 if let Some(schema) = endpoint.response_schema.as_mut() {
                     components.fix_serialized(schema);
                 }
             }
-            let final_schemas = components.schemas;
+            let mut final_schemas = components.schemas;
+            let error_body = #components_mod::rest_error_body_schema();
+            match final_schemas.get(#components_mod::REST_ERROR_BODY) {
+                Some(existing) if *existing != error_body => {
+                    return Err(ras_rest_core::SpecGenerationError::document(
+                        #service_str,
+                        format!(
+                            "component `{}` is reserved for handler error bodies, but a type uses that name",
+                            #components_mod::REST_ERROR_BODY
+                        ),
+                    ));
+                }
+                _ => {
+                    final_schemas.insert(#components_mod::REST_ERROR_BODY.to_string(), error_body);
+                }
+            }
 
             #paths
 
-            json!({
+            Ok(json!({
                 "openapi": "3.0.3",
                 "info": {
                     "title": format!("{} REST API", stringify!(#service_name)),
@@ -128,12 +162,12 @@ pub fn generate_openapi_code(
                         }
                     }
                 }
-            })
+            }))
         }
 
         /// Write OpenAPI document to the target directory
         pub fn #openapi_to_file_fn_name() -> std::io::Result<()> {
-            let doc = #openapi_fn_name();
+            let doc = #try_openapi_fn_name().map_err(std::io::Error::other)?;
             let output_path = #output_path_code;
 
             if let Some(parent) = std::path::Path::new(&output_path).parent() {

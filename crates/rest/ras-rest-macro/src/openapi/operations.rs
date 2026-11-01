@@ -1,7 +1,11 @@
-use crate::{AuthRequirement, PathParam, QueryParam, ServiceDefinition};
+use crate::{
+    AuthRequirement, EndpointDefinition, EndpointExample, EndpointExampleOutcome, PathParam,
+    QueryParam, ServiceDefinition,
+};
 use proc_macro2::{Ident, TokenStream};
-use quote::quote;
+use quote::{quote, quote_spanned};
 use syn::Type;
+use syn::spanned::Spanned;
 
 fn type_text(ty: &Type) -> String {
     quote!(#ty).to_string().replace(' ', "")
@@ -56,7 +60,9 @@ fn query_param_tokens(params: &[QueryParam]) -> Vec<TokenStream> {
 pub(super) fn generate_endpoint_infos(
     service_def: &ServiceDefinition,
     endpoint_info_struct_name: &Ident,
+    components_mod: &Ident,
 ) -> Vec<TokenStream> {
+    let service = service_def.service_name.to_string();
     service_def
         .endpoints
         .iter()
@@ -95,6 +101,10 @@ pub(super) fn generate_endpoint_infos(
             let response_schema = response_schema_tokens(&endpoint.response_type);
             let path_params = path_param_tokens(&endpoint.path_params);
             let query_params = query_param_tokens(&endpoint.query_params);
+            let examples = endpoint
+                .examples
+                .iter()
+                .map(|example| example_tokens(&service, endpoint, example, components_mod));
 
             let mut infos = vec![quote! {
                 #endpoint_info_struct_name {
@@ -110,6 +120,7 @@ pub(super) fn generate_endpoint_infos(
                     response_schema: #response_schema,
                     path_params: vec![#(#path_params),*],
                     query_params: vec![#(#query_params),*],
+                    examples: vec![#(#examples),*],
                     version: #canonical_version_tokens,
                     canonical_version: #canonical_version_tokens,
                     canonical_path: #path.to_string(),
@@ -146,6 +157,7 @@ pub(super) fn generate_endpoint_infos(
                         response_schema: #response_schema,
                         path_params: vec![#(#path_params),*],
                         query_params: vec![#(#query_params),*],
+                        examples: Vec::new(),
                         version: Some(#version_label.to_string()),
                         canonical_version: Some(#canonical_version.to_string()),
                         canonical_path: #canonical_path.to_string(),
@@ -158,7 +170,7 @@ pub(super) fn generate_endpoint_infos(
         .collect()
 }
 
-pub(super) fn generate_paths() -> TokenStream {
+pub(super) fn generate_paths(components_mod: &Ident) -> TokenStream {
     quote! {
             let mut paths = serde_json::Map::new();
 
@@ -180,6 +192,7 @@ pub(super) fn generate_paths() -> TokenStream {
                     "enum": [null],
                     "description": "Always JSON `null`."
                 }));
+                let example_response_schema = response_schema.clone();
                 let mut operation = json!({
                     "summary": operation_summary,
                     "description": operation_description,
@@ -257,6 +270,12 @@ pub(super) fn generate_paths() -> TokenStream {
                     }
                 }
 
+                #components_mod::apply_rest_examples(
+                    &mut operation,
+                    &example_response_schema,
+                    endpoint.examples,
+                );
+
                 if endpoint.auth_required {
                     operation["security"] = json!([{
                         "bearerAuth": []
@@ -277,6 +296,127 @@ pub(super) fn generate_paths() -> TokenStream {
                 path_item[method_lower] = operation;
             }
 
+    }
+}
+
+/// One evaluated example: a block that builds a `RestExample` or returns a
+/// `SpecGenerationError` naming where it failed.
+fn example_tokens(
+    service: &str,
+    endpoint: &EndpointDefinition,
+    example: &EndpointExample,
+    components_mod: &Ident,
+) -> TokenStream {
+    let operation = format!("{} {}", endpoint.method.as_str(), endpoint.path);
+    let name = example.name.to_string();
+    let (summary, description) = match &example.docs {
+        Some(docs) => {
+            let summary = &docs.summary;
+            let description = &docs.description;
+            (
+                quote! { Some(#summary.to_string()) },
+                quote! { Some(#description.to_string()) },
+            )
+        }
+        None => (quote! { None }, quote! { None }),
+    };
+
+    // Each value is bound to its declared type, so a mismatch is reported at
+    // the example.
+    let param_value = |param_name: &Ident, param_type: &Type, expr: &syn::Expr, part: String| {
+        let to_json = quote_spanned! { expr.span()=> #components_mod::to_json(&value) };
+        let key = param_name.to_string();
+        quote! {
+            (#key.to_string(), {
+                let value: #param_type = #expr;
+                #to_json.map_err(|cause| context(#part, cause))?
+            })
+        }
+    };
+    let path = example.path.iter().map(|(param_name, expr)| {
+        let param_type = &endpoint
+            .path_params
+            .iter()
+            .find(|param| &param.name == param_name)
+            .expect("the parser checked path parameter names")
+            .param_type;
+        param_value(
+            param_name,
+            param_type,
+            expr,
+            format!("path parameter {param_name}"),
+        )
+    });
+    let query = example.query.iter().map(|(param_name, expr)| {
+        let param_type = &endpoint
+            .query_params
+            .iter()
+            .find(|param| &param.name == param_name)
+            .expect("the parser checked query parameter names")
+            .param_type;
+        param_value(
+            param_name,
+            param_type,
+            expr,
+            format!("query parameter {param_name}"),
+        )
+    });
+
+    let body = match (&example.body, &endpoint.request_type) {
+        (Some(expr), Some(request_type)) => {
+            let round_trip = quote_spanned! { expr.span()=> #components_mod::round_trip(&value) };
+            quote! {
+                Some({
+                    let value: #request_type = #expr;
+                    #round_trip.map_err(|cause| context("body", cause))?
+                })
+            }
+        }
+        _ => quote! { None },
+    };
+
+    let response_type = &endpoint.response_type;
+    let (status, response, error) = match &example.outcome {
+        EndpointExampleOutcome::Success { status, response } => {
+            let response = match response {
+                Some(expr) => {
+                    let to_json = quote_spanned! { expr.span()=> #components_mod::to_json(&value) };
+                    quote! {
+                        Some({
+                            let value: #response_type = #expr;
+                            #to_json.map_err(|cause| context("response", cause))?
+                        })
+                    }
+                }
+                None => quote! { None },
+            };
+            (*status, response, quote! { None })
+        }
+        EndpointExampleOutcome::Error { status, message } => (
+            *status,
+            quote! { None },
+            quote! { Some(#message.to_string()) },
+        ),
+    };
+
+    quote! {
+        {
+            let context = |part: &str, cause: String| {
+                ras_rest_core::SpecGenerationError::example(#service, #operation, #name, part, cause)
+            };
+            let _ = &context;
+            #components_mod::RestExample {
+                name: #name.to_string(),
+                summary: #summary,
+                description: #description,
+                path: vec![#(#path),*],
+                query: vec![#(#query),*],
+                body: #body,
+                status: #status,
+                response: #response,
+                error: #error,
+            }
+        }
     }
 }
 

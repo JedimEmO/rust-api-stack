@@ -48,7 +48,7 @@ pub fn generate_static_hosting_code(
     };
 
     let openapi_fn_name = quote::format_ident!(
-        "generate_{}_openapi",
+        "try_generate_{}_openapi",
         service_name.to_string().to_lowercase()
     );
     let docs_handler_name =
@@ -77,8 +77,27 @@ pub fn generate_static_hosting_code(
             ::axum::response::Html(html.clone())
         }
 
-        async fn openapi_json_handler() -> ::axum::Json<::serde_json::Value> {
-            ::axum::Json(#openapi_fn_name())
+        // Built on first request and kept, failure included, so a failing
+        // example runs once. Authorization runs before this handler, so an
+        // unauthorized request never reaches the cache.
+        async fn openapi_json_handler() -> ::axum::response::Response {
+            use ::axum::response::IntoResponse;
+
+            static DOC: ::std::sync::OnceLock<
+                ::std::result::Result<::serde_json::Value, ras_rest_core::SpecGenerationError>,
+            > = ::std::sync::OnceLock::new();
+
+            match DOC.get_or_init(#openapi_fn_name) {
+                Ok(doc) => ::axum::Json(doc.clone()).into_response(),
+                Err(error) => {
+                    ras_rest_core::tracing::error!(%error, "OpenAPI document could not be generated");
+                    (
+                        ::axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        "OpenAPI document unavailable",
+                    )
+                        .into_response()
+                }
+            }
         }
     }
 }

@@ -50,6 +50,32 @@ pub(crate) struct EndpointDefinition {
     /// When `true`, the handler receives the request `HeaderMap` as an extra
     /// parameter (immediately after the caller/user, before path params).
     pub(crate) with_headers: bool,
+    pub(crate) examples: Vec<EndpointExample>,
+}
+
+/// An authored request example and the response or error it gets.
+#[derive(Debug)]
+pub(crate) struct EndpointExample {
+    pub(crate) name: Ident,
+    pub(crate) docs: Option<DocComment>,
+    /// One value per path parameter, in declaration order.
+    pub(crate) path: Vec<(Ident, syn::Expr)>,
+    /// Values for the query parameters given; `Option` ones may be left out.
+    pub(crate) query: Vec<(Ident, syn::Expr)>,
+    /// Present exactly when the endpoint declares a request type.
+    pub(crate) body: Option<syn::Expr>,
+    pub(crate) outcome: EndpointExampleOutcome,
+}
+
+#[derive(Debug)]
+pub(crate) enum EndpointExampleOutcome {
+    /// A 2xx response; `response` is absent for 204 and may be for `()`.
+    Success {
+        status: u16,
+        response: Option<syn::Expr>,
+    },
+    /// A 4xx or 5xx `RestError`.
+    Error { status: u16, message: String },
 }
 
 #[derive(Debug)]

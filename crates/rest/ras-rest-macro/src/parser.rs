@@ -373,6 +373,7 @@ impl Parse for EndpointDefinition {
         let mut versions = Vec::new();
         let mut body_limit = None;
         let mut with_headers = false;
+        let mut examples = Vec::new();
 
         if input.peek(syn::token::Brace) {
             let content;
@@ -405,10 +406,19 @@ impl Parse for EndpointDefinition {
                     "headers" => {
                         with_headers = content.parse::<syn::LitBool>()?.value();
                     }
+                    "examples" => {
+                        examples = parse_endpoint_examples(
+                            &content,
+                            &path_params,
+                            &query_params,
+                            request_type.as_ref(),
+                            &response_type,
+                        )?;
+                    }
                     _ => {
                         return Err(syn::Error::new(
                             field_name.span(),
-                            "Expected version, versions, body_limit, or headers",
+                            "Expected version, versions, body_limit, headers, or examples",
                         ));
                     }
                 }
@@ -433,6 +443,7 @@ impl Parse for EndpointDefinition {
             versions,
             body_limit,
             with_headers,
+            examples,
         })
     }
 }
@@ -478,6 +489,13 @@ impl Parse for EndpointVersionDefinition {
                 "migration" => {
                     migration_type = Some(content.parse::<Type>()?);
                 }
+                "examples" => {
+                    return Err(syn::Error::new(
+                        field_name.span(),
+                        "examples belong on the current endpoint only; \
+                         legacy versions are documented without examples",
+                    ));
+                }
                 _ => {
                     return Err(syn::Error::new(
                         field_name.span(),
@@ -505,5 +523,366 @@ impl Parse for EndpointVersionDefinition {
                 syn::Error::new(input.span(), "Version entry is missing migration")
             })?,
         })
+    }
+}
+
+fn set_once<T>(slot: &mut Option<T>, field: &Ident, value: T) -> syn::Result<()> {
+    if slot.is_some() {
+        return Err(syn::Error::new(
+            field.span(),
+            format!("`{field}` is given more than once"),
+        ));
+    }
+    *slot = Some(value);
+    Ok(())
+}
+
+fn is_unit_type(ty: &Type) -> bool {
+    matches!(ty, Type::Tuple(tuple) if tuple.elems.is_empty())
+}
+
+fn is_option_type(ty: &Type) -> bool {
+    quote!(#ty)
+        .to_string()
+        .replace(' ', "")
+        .starts_with("Option<")
+}
+
+/// Parses `{ name: <expr>, ... }` for path or query values, checking each name
+/// against the endpoint's parameters.
+fn parse_param_values(
+    input: syn::parse::ParseStream,
+    known: &[String],
+    kind: &str,
+) -> syn::Result<Vec<(Ident, syn::Expr)>> {
+    let body;
+    syn::braced!(body in input);
+    let mut values: Vec<(Ident, syn::Expr)> = Vec::new();
+    while !body.is_empty() {
+        let name = body.parse::<Ident>()?;
+        let _ = body.parse::<Token![:]>()?;
+        let value = body.parse::<syn::Expr>()?;
+        if !known.contains(&name.to_string()) {
+            return Err(syn::Error::new(
+                name.span(),
+                format!("this endpoint has no {kind} parameter `{name}`"),
+            ));
+        }
+        if values.iter().any(|(existing, _)| existing == &name) {
+            return Err(syn::Error::new(
+                name.span(),
+                format!("{kind} parameter `{name}` is given more than once"),
+            ));
+        }
+        values.push((name, value));
+        if body.peek(Token![,]) {
+            let _ = body.parse::<Token![,]>()?;
+        }
+    }
+    Ok(values)
+}
+
+/// Parses an HTTP status literal within `range`.
+fn parse_status(
+    input: syn::parse::ParseStream,
+    range: std::ops::RangeInclusive<u16>,
+    what: &str,
+) -> syn::Result<u16> {
+    let literal = input.parse::<syn::LitInt>()?;
+    let status = literal.base10_parse::<u16>()?;
+    if !range.contains(&status) {
+        return Err(syn::Error::new(
+            literal.span(),
+            format!(
+                "{what} status must be in {}..={}",
+                range.start(),
+                range.end()
+            ),
+        ));
+    }
+    Ok(status)
+}
+
+/// Parses `error: { status: 404, message: "..." }`.
+fn parse_endpoint_error(input: syn::parse::ParseStream) -> syn::Result<(u16, String)> {
+    let body;
+    let braces = syn::braced!(body in input);
+    let mut status = None;
+    let mut message = None;
+    while !body.is_empty() {
+        let field = body.parse::<Ident>()?;
+        let _ = body.parse::<Token![:]>()?;
+        match field.to_string().as_str() {
+            "status" => set_once(
+                &mut status,
+                &field,
+                parse_status(&body, 400..=599, "an error")?,
+            )?,
+            "message" => set_once(&mut message, &field, body.parse::<LitStr>()?.value())?,
+            _ => return Err(syn::Error::new(field.span(), "Expected status or message")),
+        }
+        if body.peek(Token![,]) {
+            let _ = body.parse::<Token![,]>()?;
+        }
+    }
+    Ok((
+        status.ok_or_else(|| {
+            syn::Error::new(braces.span.join(), "an example error needs a `status`")
+        })?,
+        message.ok_or_else(|| {
+            syn::Error::new(braces.span.join(), "an example error needs a `message`")
+        })?,
+    ))
+}
+
+/// Parses `examples: [ name { path: {..}, query: {..}, body: .., response: .. }, ... ]`.
+fn parse_endpoint_examples(
+    input: syn::parse::ParseStream,
+    path_params: &[PathParam],
+    query_params: &[QueryParam],
+    request_type: Option<&Type>,
+    response_type: &Type,
+) -> syn::Result<Vec<EndpointExample>> {
+    let path_names: Vec<String> = path_params.iter().map(|p| p.name.to_string()).collect();
+    let query_names: Vec<String> = query_params.iter().map(|p| p.name.to_string()).collect();
+
+    let list;
+    syn::bracketed!(list in input);
+    let mut examples = Vec::new();
+    let mut names = std::collections::HashSet::new();
+    while !list.is_empty() {
+        let docs = parse_doc_comment_attrs(list.call(syn::Attribute::parse_outer)?, "example")?;
+        let name = list.parse::<Ident>()?;
+        if !names.insert(name.to_string()) {
+            return Err(syn::Error::new(
+                name.span(),
+                format!("duplicate example name `{name}`"),
+            ));
+        }
+
+        let body_content;
+        syn::braced!(body_content in list);
+        let mut path = None;
+        let mut query = None;
+        let mut body = None;
+        let mut status = None;
+        let mut response = None;
+        let mut error = None;
+        while !body_content.is_empty() {
+            let field = body_content.parse::<Ident>()?;
+            let _ = body_content.parse::<Token![:]>()?;
+            match field.to_string().as_str() {
+                "path" => set_once(
+                    &mut path,
+                    &field,
+                    parse_param_values(&body_content, &path_names, "path")?,
+                )?,
+                "query" => set_once(
+                    &mut query,
+                    &field,
+                    parse_param_values(&body_content, &query_names, "query")?,
+                )?,
+                "body" => set_once(&mut body, &field, body_content.parse::<syn::Expr>()?)?,
+                "status" => set_once(
+                    &mut status,
+                    &field,
+                    parse_status(&body_content, 200..=299, "a success")?,
+                )?,
+                "response" => set_once(&mut response, &field, body_content.parse::<syn::Expr>()?)?,
+                "error" => set_once(&mut error, &field, parse_endpoint_error(&body_content)?)?,
+                _ => {
+                    return Err(syn::Error::new(
+                        field.span(),
+                        "Expected path, query, body, status, response, or error",
+                    ));
+                }
+            }
+            if body_content.peek(Token![,]) {
+                let _ = body_content.parse::<Token![,]>()?;
+            }
+        }
+
+        let path = path.unwrap_or_default();
+        if let Some(missing) = path_names
+            .iter()
+            .find(|param| !path.iter().any(|(given, _)| given == *param))
+        {
+            return Err(syn::Error::new(
+                name.span(),
+                format!("example `{name}` needs a value for path parameter `{missing}`"),
+            ));
+        }
+        let query = query.unwrap_or_default();
+        if let Some(missing) = query_params.iter().find(|param| {
+            !is_option_type(&param.param_type)
+                && !query.iter().any(|(given, _)| given == &param.name)
+        }) {
+            return Err(syn::Error::new(
+                name.span(),
+                format!(
+                    "example `{name}` needs a value for query parameter `{}`, which is not optional",
+                    missing.name
+                ),
+            ));
+        }
+        match (&body, request_type) {
+            (None, Some(_)) => {
+                return Err(syn::Error::new(
+                    name.span(),
+                    format!("example `{name}` needs a `body`, a value of the request type"),
+                ));
+            }
+            (Some(body), None) => {
+                return Err(syn::Error::new_spanned(
+                    body,
+                    "this endpoint takes no request body; leave `body` out",
+                ));
+            }
+            _ => {}
+        }
+
+        let outcome = match (error, status, response) {
+            (Some((status, message)), None, None) => {
+                EndpointExampleOutcome::Error { status, message }
+            }
+            (Some(_), _, _) => {
+                return Err(syn::Error::new(
+                    name.span(),
+                    format!("example `{name}` has an `error`; leave out `status` and `response`"),
+                ));
+            }
+            (None, status, response) => {
+                let status = status.unwrap_or(200);
+                if status == 204 {
+                    if let Some(response) = response {
+                        return Err(syn::Error::new_spanned(
+                            response,
+                            "a 204 response has no body; leave `response` out",
+                        ));
+                    }
+                } else if response.is_none() && !is_unit_type(response_type) {
+                    return Err(syn::Error::new(
+                        name.span(),
+                        format!("example `{name}` needs a `response` or an `error`"),
+                    ));
+                }
+                EndpointExampleOutcome::Success { status, response }
+            }
+        };
+
+        examples.push(EndpointExample {
+            name,
+            docs,
+            path,
+            query,
+            body,
+            outcome,
+        });
+        if list.peek(Token![,]) {
+            let _ = list.parse::<Token![,]>()?;
+        }
+    }
+    Ok(examples)
+}
+
+#[cfg(test)]
+mod example_diagnostics {
+    use super::*;
+
+    fn parse(endpoints: &str) -> syn::Result<ServiceDefinition> {
+        syn::parse_str(&format!(
+            "{{ service_name: S, base_path: \"/api\", openapi: true, endpoints: [ {endpoints} ] }}"
+        ))
+    }
+
+    #[test]
+    fn a_well_formed_example_list_parses() {
+        let service = parse(
+            r#"
+            POST UNAUTHORIZED items/{id: u32} ? notify: Option<bool> & tag: String (Body) -> Item {
+                examples: [
+                    /// Docs.
+                    ok { path: { id: 1 }, query: { tag: "a".into() }, body: make(), response: item() },
+                    created { path: { id: 2 }, query: { tag: "b".into(), notify: Some(true) }, body: make(), status: 201, response: item() },
+                    missing { path: { id: 3 }, query: { tag: "c".into() }, body: make(), error: { status: 404, message: "gone" } },
+                ],
+            }
+            "#,
+        )
+        .unwrap();
+        let examples = &service.endpoints[0].examples;
+        assert_eq!(examples.len(), 3);
+        assert!(matches!(
+            examples[1].outcome,
+            EndpointExampleOutcome::Success { status: 201, .. }
+        ));
+        assert!(matches!(
+            examples[2].outcome,
+            EndpointExampleOutcome::Error { status: 404, .. }
+        ));
+    }
+
+    #[test]
+    fn diagnostics() {
+        let cases = [
+            (
+                "GET UNAUTHORIZED items/{id: u32} () -> Item { examples: [ a { response: 1 } ] }",
+                "needs a value for path parameter `id`",
+            ),
+            (
+                "GET UNAUTHORIZED items/{id: u32} () -> Item { examples: [ a { path: { id: 1, other: 2 }, response: 1 } ] }",
+                "no path parameter `other`",
+            ),
+            (
+                "GET UNAUTHORIZED search ? q: String () -> Item { examples: [ a { response: 1 } ] }",
+                "query parameter `q`, which is not optional",
+            ),
+            (
+                "POST UNAUTHORIZED items (Body) -> Item { examples: [ a { response: 1 } ] }",
+                "needs a `body`",
+            ),
+            (
+                "GET UNAUTHORIZED items () -> Item { examples: [ a { body: 1, response: 1 } ] }",
+                "takes no request body",
+            ),
+            (
+                "GET UNAUTHORIZED items () -> Item { examples: [ a { } ] }",
+                "needs a `response` or an `error`",
+            ),
+            (
+                "DELETE UNAUTHORIZED items () -> () { examples: [ a { status: 204, response: () } ] }",
+                "a 204 response has no body",
+            ),
+            (
+                "GET UNAUTHORIZED items () -> Item { examples: [ a { status: 404, response: 1 } ] }",
+                "a success status must be in 200..=299",
+            ),
+            (
+                "GET UNAUTHORIZED items () -> Item { examples: [ a { error: { status: 200, message: \"x\" } } ] }",
+                "an error status must be in 400..=599",
+            ),
+            (
+                "GET UNAUTHORIZED items () -> Item { examples: [ a { response: 1, error: { status: 404, message: \"x\" } } ] }",
+                "leave out `status` and `response`",
+            ),
+            (
+                "GET UNAUTHORIZED items () -> Item { examples: [ a { response: 1 }, a { response: 2 } ] }",
+                "duplicate example name `a`",
+            ),
+            (
+                "GET UNAUTHORIZED items () -> Item { examples: [ a { error: { message: \"x\" } } ] }",
+                "needs a `status`",
+            ),
+            (
+                "GET UNAUTHORIZED v2/items () -> Item { versions: [ v1 { path: v1/items, response: Item, migration: M, examples: [] } ] }",
+                "examples belong on the current endpoint only",
+            ),
+        ];
+        for (input, expected) in cases {
+            let message = parse(input).expect_err(input).to_string();
+            assert!(message.contains(expected), "{input}\n  gave: {message}");
+        }
+        // A `()` response may leave `response` out.
+        parse("DELETE UNAUTHORIZED items () -> () { examples: [ a { } ] }").unwrap();
     }
 }

@@ -1,7 +1,9 @@
 [package]
 name = "ras-spec-components"
 version = "0.1.0"
-edition = "2024"
+# 2021 on purpose: the crate compiles `src/components.rs`, which consumers embed,
+# so its tests fail on syntax an older-edition consumer could not compile.
+edition = "2021"
 rust-version = "1.88"
 description = "Schema component assembly that RAS service macros embed in generated OpenRPC and OpenAPI code"
 license = "MIT OR Apache-2.0"

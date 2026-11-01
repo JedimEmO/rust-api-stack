@@ -1,9 +1,10 @@
 //! Builds the `components.schemas` map of a generated API document.
 //!
 //! This file is embedded verbatim in macro-generated code, so it may only use
-//! `std`, `schemars` and `serde_json`, always through absolute paths.
+//! `std`, `schemars`, `serde` and `serde_json`, always through absolute paths,
+//! and only syntax every edition accepts (no let chains).
 
-use ::schemars::transform::{Transform, transform_subschemas};
+use ::schemars::transform::{transform_subschemas, Transform};
 use ::schemars::{JsonSchema, Schema, SchemaGenerator};
 use ::serde_json::{Map, Value};
 use ::std::collections::BTreeSet;
@@ -487,4 +488,164 @@ pub fn method_errors(has_params: bool, auth_required: bool, examples: &[Example]
         }
     }
     errors
+}
+
+/// The component key of the body a REST handler error is sent with.
+pub const REST_ERROR_BODY: &str = "RestErrorBody";
+
+/// The schema of [`REST_ERROR_BODY`]: `{ "error": "<message>" }`.
+pub fn rest_error_body_schema() -> Value {
+    ::serde_json::json!({
+        "type": "object",
+        "description": "The body of an error a handler returns as `RestError`.",
+        "properties": { "error": { "type": "string" } },
+        "required": ["error"]
+    })
+}
+
+/// An authored REST example, evaluated to JSON.
+pub struct RestExample {
+    /// The example's identifier, used as its key everywhere it appears.
+    pub name: String,
+    /// The first line of the example's doc comment.
+    pub summary: Option<String>,
+    /// The whole doc comment.
+    pub description: Option<String>,
+    /// Path parameter values by name.
+    pub path: Vec<(String, Value)>,
+    /// Query parameter values by name; `null` means left out.
+    pub query: Vec<(String, Value)>,
+    /// The serialized request body, if the endpoint takes one.
+    pub body: Option<Value>,
+    /// The response status.
+    pub status: u16,
+    /// The serialized response body, for a success.
+    pub response: Option<Value>,
+    /// The error message, for a `RestError`.
+    pub error: Option<String>,
+}
+
+impl RestExample {
+    fn object(&self, value: Value) -> Value {
+        let mut object = Map::new();
+        if let Some(summary) = &self.summary {
+            object.insert("summary".into(), Value::String(summary.clone()));
+        }
+        if let Some(description) = &self.description {
+            object.insert("description".into(), Value::String(description.clone()));
+        }
+        object.insert("value".into(), value);
+        Value::Object(object)
+    }
+}
+
+/// Inserts `example` under `name` in `target["examples"]`.
+fn insert_example(target: &mut Value, name: &str, example: Value) {
+    if !target["examples"].is_object() {
+        target["examples"] = Value::Object(Map::new());
+    }
+    target["examples"][name] = example;
+}
+
+/// Adds REST examples to an OpenAPI operation.
+///
+/// OpenAPI 3.0 has no request/response pairs, so each example appears under
+/// the same key in every place it touches: its parameters, its request body and
+/// the response for its status. A status no response lists yet gets one; an
+/// error response is described by [`REST_ERROR_BODY`].
+pub fn apply_rest_examples(
+    operation: &mut Value,
+    response_schema: &Value,
+    examples: Vec<RestExample>,
+) {
+    for example in examples {
+        let parameter_values = example
+            .path
+            .iter()
+            .map(|(name, value)| ("path", name, value))
+            .chain(
+                example
+                    .query
+                    .iter()
+                    .map(|(name, value)| ("query", name, value)),
+            );
+        for (location, name, value) in parameter_values {
+            if value.is_null() {
+                continue;
+            }
+            let object = example.object(value.clone());
+            // Nested, not a let chain: this file compiles in the consumer's edition.
+            if let Some(parameters) = operation["parameters"].as_array_mut() {
+                if let Some(parameter) = parameters
+                    .iter_mut()
+                    .find(|p| p["in"] == location && p["name"] == name.as_str())
+                {
+                    insert_example(parameter, &example.name, object);
+                }
+            }
+        }
+
+        if let Some(body) = &example.body {
+            if operation["requestBody"].is_object() {
+                let object = example.object(body.clone());
+                insert_example(
+                    &mut operation["requestBody"]["content"]["application/json"],
+                    &example.name,
+                    object,
+                );
+            }
+        }
+
+        let status = example.status.to_string();
+        if !operation["responses"].is_object() {
+            operation["responses"] = Value::Object(Map::new());
+        }
+        let responses = &mut operation["responses"];
+        match &example.error {
+            Some(message) => {
+                let response = &mut responses[status.as_str()];
+                if !response.is_object() {
+                    *response =
+                        ::serde_json::json!({ "description": "Error returned by the handler" });
+                } else if response["content"].is_null() {
+                    // A status the framework also answers, before the handler runs.
+                    let description = response["description"]
+                        .as_str()
+                        .unwrap_or("Error")
+                        .to_string();
+                    response["description"] = Value::String(format!(
+                        "{description}. A handler error has a `{REST_ERROR_BODY}` body; \
+                         a request rejected before the handler runs may have another body."
+                    ));
+                }
+                let media = &mut response["content"]["application/json"];
+                media["schema"] = ::serde_json::json!({
+                    "$ref": format!("{COMPONENTS_PREFIX}{REST_ERROR_BODY}")
+                });
+                let object = example.object(::serde_json::json!({ "error": message }));
+                insert_example(media, &example.name, object);
+            }
+            None if example.status == 204 => {
+                if !responses["204"].is_object() {
+                    responses["204"] = ::serde_json::json!({ "description": "No content" });
+                }
+            }
+            None => {
+                let response = &mut responses[status.as_str()];
+                if !response.is_object() {
+                    *response = ::serde_json::json!({
+                        "description": "Successful response",
+                        "content": { "application/json": { "schema": response_schema } }
+                    });
+                }
+                let value = example.response.clone().unwrap_or(Value::Null);
+                let object = example.object(value);
+                insert_example(
+                    &mut response["content"]["application/json"],
+                    &example.name,
+                    object,
+                );
+            }
+        }
+    }
 }
