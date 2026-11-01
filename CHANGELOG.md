@@ -75,6 +75,7 @@ Publish order follows the dependencies: `cargo publish --workspace` handles it.
 - `ras-identity-oauth2`: OAuth2 authorization-code sign-in with PKCE and state, and ID token claim validation.
 - `ras-identity-session`: HMAC-signed JWT sessions with `iss` and `aud` checks, an in-memory session registry for revocation,
   and a `JwtAuthProvider` that the generated services accept.
+  User IDs name the identity provider as well as the subject, such as `local:alice`.
 
 ### Observability
 
