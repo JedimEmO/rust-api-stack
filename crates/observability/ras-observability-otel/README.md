@@ -1,6 +1,6 @@
 # ras-observability-otel
 
-Request metrics for Rust Agent Stack services, recorded with OpenTelemetry and exported for Prometheus.
+Request metrics for Rust API Stack services, recorded with OpenTelemetry and exported for Prometheus.
 It implements the `ras-observability-core` traits
 and serves the collected metrics from an axum `/metrics` route.
 

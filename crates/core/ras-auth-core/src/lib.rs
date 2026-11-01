@@ -1,4 +1,4 @@
-//! Authentication, authorization and HTTP credential handling for Rust Agent Stack services.
+//! Authentication, authorization and HTTP credential handling for Rust API Stack services.
 //!
 //! This crate is the contract between the generated services and your authentication
 //! logic. The REST, JSON-RPC, bidirectional JSON-RPC and file service macros generate code

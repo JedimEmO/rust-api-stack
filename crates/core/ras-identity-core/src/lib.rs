@@ -1,4 +1,4 @@
-//! Identity provider and permission traits for Rust Agent Stack.
+//! Identity provider and permission traits for Rust API Stack.
 //!
 //! An [`IdentityProvider`] verifies a login payload and returns a [`VerifiedIdentity`];
 //! a [`UserPermissions`] implementation maps that identity to permission strings.

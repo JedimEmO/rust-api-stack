@@ -1,6 +1,6 @@
 # ras-identity-core
 
-The traits that sit between a login method and a session in the Rust Agent Stack.
+The traits that sit between a login method and a session in the Rust API Stack.
 An `IdentityProvider` checks a login attempt and says who the user is;
 a `UserPermissions` implementation says what that user may do.
 

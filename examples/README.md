@@ -1,6 +1,6 @@
-# Rust Agent Stack examples
+# Rust API Stack examples
 
-Runnable applications that use the Rust Agent Stack macros and crates.
+Runnable applications that use the Rust API Stack macros and crates.
 Each example has its own README with the run command, the demo credentials and what to try.
 For the concepts behind them, read the [mdBook guide](https://jedimemo.github.io/rust-api-stack/).
 

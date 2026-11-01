@@ -1,6 +1,6 @@
 # ras-observability-core
 
-Backend-neutral traits and types for request metrics in Rust Agent Stack services.
+Backend-neutral traits and types for request metrics in Rust API Stack services.
 They describe a request the same way whether it came through REST, JSON-RPC or a WebSocket,
 so one metrics backend can serve all three.
 

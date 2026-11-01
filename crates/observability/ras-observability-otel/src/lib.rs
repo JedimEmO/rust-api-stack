@@ -1,4 +1,4 @@
-//! Request metrics for Rust Agent Stack services, recorded with OpenTelemetry and exported
+//! Request metrics for Rust API Stack services, recorded with OpenTelemetry and exported
 //! for Prometheus.
 //!
 //! [`standard_setup`] (or [`OtelSetupBuilder`]) installs a meter provider as the OpenTelemetry

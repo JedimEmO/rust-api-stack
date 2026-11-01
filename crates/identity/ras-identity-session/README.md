@@ -1,6 +1,6 @@
 # ras-identity-session
 
-JWT sessions for Rust Agent Stack services.
+JWT sessions for Rust API Stack services.
 `SessionService` turns a login verified by an `IdentityProvider` into a signed JWT,
 and `JwtAuthProvider` lets the generated services accept that JWT as their `AuthProvider`.
 

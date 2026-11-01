@@ -1,6 +1,6 @@
 # Introduction
 
-Rust Agent Stack (RAS) is a set of Rust crates for building typed,
+Rust API Stack (RAS) is a set of Rust crates for building typed,
 authenticated HTTP and WebSocket APIs on Axum.
 You declare an API once, in Rust,
 and a macro generates the server boundary, the handler trait, the clients,

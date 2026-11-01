@@ -5,7 +5,7 @@ version = "0.1.0"
 # so its tests fail on syntax an older-edition consumer could not compile.
 edition = "2021"
 rust-version = "1.88"
-description = "Schema and example code that the Rust Agent Stack service macros embed in generated OpenRPC and OpenAPI documents"
+description = "Schema and example code that the Rust API Stack service macros embed in generated OpenRPC and OpenAPI documents"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/JedimEmO/rust-api-stack"
 homepage = "https://github.com/JedimEmO/rust-api-stack"

@@ -1,6 +1,6 @@
 # ras-auth-core
 
-The authentication and authorization contract shared by the Rust Agent Stack service crates.
+The authentication and authorization contract shared by the Rust API Stack service crates.
 It defines how a request credential becomes an `AuthenticatedUser`,
 how permission requirements are checked,
 and how bearer tokens and cookies reach the server.

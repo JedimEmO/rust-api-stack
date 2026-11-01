@@ -1,4 +1,4 @@
-//! Backend-neutral request metrics traits for Rust Agent Stack services.
+//! Backend-neutral request metrics traits for Rust API Stack services.
 //!
 //! [`RequestContext`] describes a request the same way for REST, JSON-RPC and WebSocket
 //! services. [`UsageTracker`] runs before a request, [`MethodDurationTracker`] after it,

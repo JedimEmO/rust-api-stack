@@ -1,6 +1,6 @@
 # ras-identity-oauth2
 
-An OAuth2 sign-in provider for Rust Agent Stack services.
+An OAuth2 sign-in provider for Rust API Stack services.
 It runs the authorization-code flow with PKCE, checks the OpenID Connect `id_token` when one is returned,
 and hands the user's identity to `ras-identity-session`, which issues a JWT.
 

@@ -1,7 +1,7 @@
 [book]
-title = "Rust Agent Stack API Builder Guide"
-description = "Rationale and usage guide for the Rust Agent Stack service macros."
-authors = ["Rust Agent Stack contributors"]
+title = "Rust API Stack Guide"
+description = "Rationale and usage guide for the Rust API Stack service macros."
+authors = ["Rust API Stack contributors"]
 language = "en"
 src = "documentation/src"
 

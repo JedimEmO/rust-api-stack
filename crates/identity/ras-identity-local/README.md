@@ -1,6 +1,6 @@
 # ras-identity-local
 
-A username and password `IdentityProvider` for Rust Agent Stack, with Argon2id password hashes.
+A username and password `IdentityProvider` for Rust API Stack, with Argon2id password hashes.
 Register it with `ras-identity-session` to turn a correct password into a JWT session.
 
 Users live in an in-memory map.

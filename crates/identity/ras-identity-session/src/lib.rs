@@ -1,4 +1,4 @@
-//! JWT sessions for Rust Agent Stack services.
+//! JWT sessions for Rust API Stack services.
 //!
 //! [`SessionService`] routes a login payload to a registered
 //! `ras_identity_core::IdentityProvider`, collects permissions from an optional

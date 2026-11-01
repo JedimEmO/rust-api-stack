@@ -1,4 +1,4 @@
-//! An OAuth2 sign-in provider for Rust Agent Stack services.
+//! An OAuth2 sign-in provider for Rust API Stack services.
 //!
 //! [`OAuth2Provider`] runs the authorization-code flow with PKCE and implements
 //! [`IdentityProvider`] under the ID `"oauth2"`, so `ras-identity-session` can turn a
