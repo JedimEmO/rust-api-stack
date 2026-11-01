@@ -234,3 +234,99 @@ async fn incoming_rpc_request_sends_handler_response_or_method_not_found() {
 
     assert!(rx.try_recv().is_err());
 }
+
+/// A handler that answers once `release` fires.
+fn gated_handler(release: std::sync::Arc<tokio::sync::Notify>) -> RpcRequestHandler {
+    std::sync::Arc::new(move |request| {
+        let release = release.clone();
+        Box::pin(async move {
+            release.notified().await;
+            JsonRpcResponse::success(serde_json::json!(true), request.id.clone())
+        })
+    })
+}
+
+fn server_call(id: &str) -> BidirectionalMessage {
+    BidirectionalMessage::Request(JsonRpcRequest::new(
+        "client.confirm".to_string(),
+        None,
+        Some(serde_json::json!(id)),
+    ))
+}
+
+#[tokio::test]
+async fn answering_a_server_call_never_blocks_the_reader_on_a_full_queue() {
+    let harness = IncomingHarness::new();
+    // The outgoing queue is full, and only the reader could drain it.
+    let (tx, mut rx) = mpsc::channel(1);
+    tx.send(BidirectionalMessage::Ping).await.unwrap();
+    *harness.message_tx.write().await = Some(tx);
+    let handler: RpcRequestHandler = std::sync::Arc::new(|request| {
+        Box::pin(async move { JsonRpcResponse::success(serde_json::json!(true), request.id) })
+    });
+    harness
+        .rpc_request_handlers
+        .insert("client.confirm".to_string(), handler);
+
+    tokio::time::timeout(
+        Duration::from_millis(200),
+        Client::handle_incoming_message(server_call("1"), harness.context()),
+    )
+    .await
+    .expect("the reader must not wait for queue space");
+
+    // Once the queue drains, the answer still goes out.
+    assert!(matches!(rx.recv().await, Some(BidirectionalMessage::Ping)));
+    assert!(matches!(
+        rx.recv().await,
+        Some(BidirectionalMessage::Response(response)) if response.id == Some(serde_json::json!("1"))
+    ));
+}
+
+#[tokio::test]
+async fn a_slow_server_call_handler_never_blocks_the_reader() {
+    let harness = IncomingHarness::new();
+    let (tx, mut rx) = mpsc::channel(4);
+    *harness.message_tx.write().await = Some(tx);
+    let release = std::sync::Arc::new(tokio::sync::Notify::new());
+    harness
+        .rpc_request_handlers
+        .insert("client.confirm".to_string(), gated_handler(release.clone()));
+
+    // The handler waits, for instance on a call back to the server, which
+    // needs the reader to keep going.
+    tokio::time::timeout(
+        Duration::from_millis(200),
+        Client::handle_incoming_message(server_call("1"), harness.context()),
+    )
+    .await
+    .expect("the reader must not wait for the handler");
+
+    release.notify_one();
+    assert!(matches!(
+        rx.recv().await,
+        Some(BidirectionalMessage::Response(_))
+    ));
+}
+
+#[tokio::test]
+async fn server_calls_past_the_concurrency_limit_are_dropped() {
+    let harness = IncomingHarness::with_server_call_limit(1);
+    let (tx, mut rx) = mpsc::channel(4);
+    *harness.message_tx.write().await = Some(tx);
+    let release = std::sync::Arc::new(tokio::sync::Notify::new());
+    harness
+        .rpc_request_handlers
+        .insert("client.confirm".to_string(), gated_handler(release.clone()));
+
+    Client::handle_incoming_message(server_call("1"), harness.context()).await;
+    Client::handle_incoming_message(server_call("2"), harness.context()).await;
+    release.notify_one();
+
+    assert!(matches!(
+        rx.recv().await,
+        Some(BidirectionalMessage::Response(response)) if response.id == Some(serde_json::json!("1"))
+    ));
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert!(rx.try_recv().is_err(), "the second call is not answered");
+}

@@ -26,6 +26,15 @@ use crate::native::NativeWebSocketTransport;
 #[cfg(target_arch = "wasm32")]
 use crate::wasm::WasmWebSocketTransport;
 
+/// The transport, shared between the client and its driver task.
+///
+/// The browser transport is neither `Send` nor `Sync` and the driver runs on
+/// the page's single-threaded executor, so on `wasm32` an `Rc` shares it.
+#[cfg(not(target_arch = "wasm32"))]
+type SharedTransport = Arc<RwLock<Box<dyn WebSocketTransport>>>;
+#[cfg(target_arch = "wasm32")]
+type SharedTransport = std::rc::Rc<RwLock<Box<dyn WebSocketTransport>>>;
+
 mod builder;
 mod driver;
 pub use builder::ClientBuilder;
@@ -33,7 +42,7 @@ pub use builder::ClientBuilder;
 /// Bidirectional JSON-RPC WebSocket client
 pub struct Client {
     config: ClientConfig,
-    transport: Arc<RwLock<Box<dyn WebSocketTransport>>>,
+    transport: SharedTransport,
     state: Arc<RwLock<ClientState>>,
     connection_id: Arc<RwLock<Option<ConnectionId>>>,
     pending_requests: Arc<DashMap<Value, PendingRequest>>,
@@ -65,7 +74,7 @@ impl Client {
 
         Ok(Self {
             config,
-            transport: Arc::new(RwLock::new(transport)),
+            transport: SharedTransport::new(RwLock::new(transport)),
             state: Arc::new(RwLock::new(ClientState::Disconnected)),
             connection_id: Arc::new(RwLock::new(None)),
             pending_requests: Arc::new(DashMap::new()),
@@ -304,7 +313,11 @@ impl Client {
         debug!("Registered connection event handler: {}", name);
     }
 
-    /// Register a handler for RPC requests from the server
+    /// Register a handler for RPC requests from the server.
+    ///
+    /// Each request runs on its own task, so a slow handler does not hold up
+    /// incoming messages. At most `message_buffer_size` run at once; requests
+    /// beyond that are dropped with a logged error.
     pub fn on_rpc_request(&self, method: &str, handler: RpcRequestHandler) {
         self.rpc_request_handlers
             .insert(method.to_string(), handler);

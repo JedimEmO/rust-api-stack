@@ -83,7 +83,11 @@ pub trait MessageHandler: Send + Sync + 'static {
         Ok(())
     }
 
-    /// Handle connection closed event
+    /// Handle connection closed event.
+    ///
+    /// Called exactly once when the connection ends, unless its future is
+    /// dropped part-way (for example at runtime shutdown). `reason` is the
+    /// reason from the client's close frame, if it sent one.
     async fn on_disconnect(
         &self,
         context: Arc<ConnectionContext>,
