@@ -3069,6 +3069,7 @@ dependencies = [
 name = "ras-jsonrpc-macro"
 version = "0.3.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "axum",
  "axum-test",
@@ -3091,6 +3092,7 @@ dependencies = [
  "serde",
  "serde_json",
  "syn",
+ "thiserror 2.0.18",
  "tokio",
  "tower",
 ]

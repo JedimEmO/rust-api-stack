@@ -8,6 +8,7 @@ use thiserror::Error;
 /// Errors produced by an [`crate::HttpTransport`] or by the helpers that build
 /// requests / decode responses.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum TransportError {
     /// The request never produced an HTTP response (DNS, TCP, TLS, connect, etc).
     #[error("connection error: {0}")]
@@ -57,6 +58,8 @@ pub enum TransportError {
         code: i64,
         /// The JSON-RPC error message.
         message: String,
+        /// The error object's `data`, when the server sent one.
+        data: Option<serde_json::Value>,
     },
 }
 

@@ -54,6 +54,8 @@ ras-jsonrpc-core = { path = "../ras-jsonrpc-core", version = "0.2.0" }
 ras-auth-core = { path = "../../core/ras-auth-core", version = "0.3.0" }
 ras-permission-manifest = { path = "../../specs/ras-permission-manifest", version = "0.1.0" }
 ras-spec-conformance = { path = "../../specs/ras-spec-conformance" }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
 schemars = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true }

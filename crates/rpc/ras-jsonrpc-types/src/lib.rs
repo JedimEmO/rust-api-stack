@@ -5,6 +5,9 @@
 
 use serde::{Deserialize, Serialize};
 
+mod handler_error;
+pub use handler_error::{HandlerErrorOutcome, PublicRpcError, handler_code_allowed};
+
 /// JSON-RPC 2.0 request structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcRequest {
@@ -58,7 +61,7 @@ pub struct JsonRpcResponse {
 }
 
 /// JSON-RPC 2.0 error structure.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JsonRpcError {
     /// Error code indicating the type of error.
     pub code: i32,
