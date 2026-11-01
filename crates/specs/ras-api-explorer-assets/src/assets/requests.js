@@ -42,10 +42,22 @@
             return toAbsoluteUrl(`${base}${path}${query.toString() ? `?${query}` : ""}`);
         }
 
+        // URL normalization turns a `.` or `..` segment into a different endpoint, and an
+        // empty one into `//`; the generated clients refuse them, and so does the explorer.
+        function checkPathParams() {
+            document.querySelectorAll("[data-path-param]").forEach((input) => {
+                if (input.value === "" || input.value === "." || input.value === "..") {
+                    const shown = input.value === "" ? "empty" : `"${input.value}"`;
+                    throw new Error(`Path parameter "${input.dataset.pathParam}" cannot be ${shown}`);
+                }
+            });
+        }
+
         function buildRequest(operation) {
             const headers = { "Content-Type": "application/json" };
             if (state.token) headers.Authorization = `Bearer ${state.token}`;
             if (operation.protocol === "rest") {
+                checkPathParams();
                 const options = { method: operation.method, headers };
                 const body = $("body-editor")?.value.trim();
                 if (body) options.body = JSON.stringify(JSON.parse(body));
