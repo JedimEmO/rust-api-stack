@@ -76,9 +76,21 @@ impl SessionService {
         self.permissions_provider = Some(provider);
     }
 
+    /// Register an identity provider under its `provider_id()`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the provider ID is empty or contains `:`. The part of a
+    /// user ID before the first `:` names the registered provider (see
+    /// [`user_id`](crate::user_id)), so a registered ID must not contain one.
     pub async fn register_provider(&self, provider: Box<dyn IdentityProvider>) {
+        let provider_id = provider.provider_id().to_string();
+        assert!(
+            !provider_id.is_empty() && !provider_id.contains(':'),
+            "identity provider ID {provider_id:?} must be non-empty and must not contain ':'"
+        );
         let mut providers = self.providers.write().await;
-        providers.insert(provider.provider_id().to_string(), provider);
+        providers.insert(provider_id, provider);
     }
 
     pub async fn begin_session(
@@ -95,6 +107,21 @@ impl SessionService {
 
         let identity = provider.verify(auth_payload).await?;
 
+        // A provider may only issue identities in its own namespace: its
+        // registered ID, or a sub-namespace such as `oauth2:google` under
+        // `oauth2`. Otherwise one provider could mint another's user IDs.
+        let in_namespace = identity
+            .provider_id
+            .strip_prefix(provider_id)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(':'));
+        if !in_namespace {
+            return Err(IdentityError::ProviderError(format!(
+                "provider '{provider_id}' returned an identity for provider '{}'",
+                identity.provider_id
+            ))
+            .into());
+        }
+
         let now = Utc::now();
         let exp = now + self.config.jwt_ttl;
         let jti = Uuid::new_v4().to_string();
@@ -106,7 +133,7 @@ impl SessionService {
         };
 
         let claims = JwtClaims {
-            sub: identity.subject.clone(),
+            sub: crate::user_id(&identity),
             exp: exp.timestamp(),
             iat: now.timestamp(),
             nbf: None,
@@ -124,6 +151,8 @@ impl SessionService {
             let mut sessions = self.active_sessions.write().await;
             // Per-user cap (S5): evict the oldest sessions (by iat) so this
             // user never holds more than `max_sessions_per_user` entries.
+            // `sub` is provider-scoped, so a login at one provider never
+            // evicts a session that another provider's identity owns.
             let max = self.config.max_sessions_per_user;
             let mut owned: Vec<(i64, String)> = sessions
                 .iter()

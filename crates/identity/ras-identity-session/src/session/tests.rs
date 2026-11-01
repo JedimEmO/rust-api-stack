@@ -59,7 +59,7 @@ async fn test_session_lifecycle() {
         .unwrap();
 
     let claims = session_service.verify_session(&token).await.unwrap();
-    assert_eq!(claims.sub, "testuser");
+    assert_eq!(claims.sub, "local:testuser");
     assert_eq!(claims.provider_id, "local");
     assert!(claims.permissions.is_empty());
 
@@ -105,7 +105,7 @@ async fn test_session_with_permissions() {
         .unwrap();
 
     let claims = session_service.verify_session(&token).await.unwrap();
-    assert_eq!(claims.sub, "admin");
+    assert_eq!(claims.sub, "local:admin");
     assert_eq!(claims.permissions.len(), 2);
     assert!(claims.permissions.contains("read"));
     assert!(claims.permissions.contains("write"));
@@ -283,7 +283,7 @@ async fn verify_session_can_skip_active_session_store_when_configured() {
         .unwrap();
 
     let claims = service.verify_session(&token).await.unwrap();
-    assert_eq!(claims.sub, "stateless");
+    assert_eq!(claims.sub, "local:stateless");
     assert!(
         service
             .active_sessions
@@ -323,7 +323,7 @@ async fn jwt_auth_provider_maps_verified_claims_to_authenticated_user() {
 
     let user = auth_provider.authenticate(token).await.unwrap();
 
-    assert_eq!(user.user_id, "alice");
+    assert_eq!(user.user_id, "local:alice");
     assert!(user.permissions.contains("chat:read"));
     assert!(user.metadata.is_none());
 }

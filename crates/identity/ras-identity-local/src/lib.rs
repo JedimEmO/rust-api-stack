@@ -8,7 +8,8 @@
 //! Every failed login returns `IdentityError::InvalidCredentials`, and an unknown user is
 //! checked against a fixed Argon2 hash so it costs about as much as a wrong password.
 //! Passwords over [`MAX_PASSWORD_BYTES`] are refused before hashing, and at most five
-//! verifications run at once. There is no rate limit, lockout or password policy.
+//! Argon2 hashes, from logins and [`LocalUserProvider::add_user`] together, run at once.
+//! There is no rate limit, lockout or password policy.
 //!
 //! The `timing-tests` Cargo feature enables timing-sensitive tests for this crate's own
 //! test suite. See the
@@ -32,6 +33,10 @@ use tokio::sync::RwLock;
 /// Maximum accepted password length in bytes. Longer inputs are rejected before
 /// hashing so a client cannot make the server burn Argon2 time on multi-megabyte inputs.
 pub const MAX_PASSWORD_BYTES: usize = 1024;
+
+/// How many Argon2 hashes, from logins and [`LocalUserProvider::add_user`] together,
+/// run at once.
+const HASHING_CONCURRENCY: usize = 5;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct LocalUser {
@@ -82,7 +87,7 @@ pub enum LocalUserError {
     PasswordHash(argon2::password_hash::Error),
     /// The password exceeds [`MAX_PASSWORD_BYTES`].
     PasswordTooLong { max_bytes: usize },
-    /// The blocking hashing task was cancelled or panicked.
+    /// The blocking hashing task could not start, was cancelled or panicked.
     HashTaskFailed,
 }
 
@@ -128,7 +133,7 @@ impl LocalUserProvider {
     pub fn new() -> Self {
         Self {
             users: Arc::new(RwLock::new(HashMap::new())),
-            semaphore: Arc::new(tokio::sync::Semaphore::new(5)),
+            semaphore: Arc::new(tokio::sync::Semaphore::new(HASHING_CONCURRENCY)),
         }
     }
 
@@ -152,8 +157,18 @@ impl LocalUserProvider {
             }
         }
 
-        // Argon2 is CPU-bound; keep it off the async executor (I4).
+        let permit = self
+            .semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| LocalUserError::HashTaskFailed)?;
+
+        // Argon2 is CPU-bound; keep it off the async executor (I4). The permit moves
+        // into the closure: a blocking task outlives a cancelled caller, and it must
+        // count against the limit until the hash is done.
         let password_hash = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
             let salt = SaltString::generate(&mut OsRng);
             Argon2::default()
                 .hash_password(password.as_bytes(), &salt)
@@ -186,7 +201,7 @@ impl LocalUserProvider {
     }
 
     async fn verify_user(&self, username: &str, password: &str) -> IdentityResult<LocalUser> {
-        let _semlock =
+        let permit =
             self.semaphore.clone().acquire_owned().await.map_err(|_| {
                 IdentityError::ProviderError("local auth limiter closed".to_string())
             })?;
@@ -209,9 +224,11 @@ impl LocalUserProvider {
             }
         };
 
-        // Argon2 is CPU-bound; run it on the blocking pool (I4).
+        // Argon2 is CPU-bound; run it on the blocking pool (I4). The permit moves into
+        // the closure so a cancelled login still counts until its hash finishes.
         let password = password.to_string();
         let password_valid = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
             let parsed_hash = PasswordHash::new(&password_hash)
                 .map_err(|e| IdentityError::ProviderError(e.to_string()))?;
             Ok::<bool, IdentityError>(
