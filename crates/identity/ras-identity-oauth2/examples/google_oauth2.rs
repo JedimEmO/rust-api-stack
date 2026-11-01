@@ -5,6 +5,9 @@
 //! 2. Integrating with SessionService
 //! 3. Handling the OAuth2 flow
 //! 4. Issuing JWTs after successful authentication
+//!
+//! Run it with `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and `JWT_SECRET` set:
+//! `cargo run -p ras-identity-oauth2 --example google_oauth2`.
 
 use ras_identity_oauth2::{
     InMemoryStateStore, OAuth2Config, OAuth2Provider, OAuth2ProviderConfig, OAuth2Response,
@@ -27,7 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .expect("GOOGLE_CLIENT_SECRET must be set for the Google OAuth2 example"),
         authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
         token_endpoint: "https://oauth2.googleapis.com/token".to_string(),
-        userinfo_endpoint: Some("https://www.googleapis.com/oauth2/v1/userinfo".to_string()),
+        userinfo_endpoint: Some("https://www.googleapis.com/oauth2/v3/userinfo".to_string()),
         issuer: Some("https://accounts.google.com".to_string()),
         redirect_uri: "http://localhost:3000/auth/google/callback".to_string(),
         scopes: vec![
@@ -56,7 +59,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create session service
     let session_config = SessionConfig::new(
-        "50f60a216877ea8c01d90deebfaf37ee95297d744bca0931", // openssl rand -hex 32
+        // A random secret of at least 32 bytes, for instance from `openssl rand -hex 32`.
+        std::env::var("JWT_SECRET").expect("JWT_SECRET must be set for the Google OAuth2 example"),
         "google-oauth2-example",
         "google-oauth2-example",
     )
@@ -167,7 +171,7 @@ mod tests {
             client_secret: "test-client-secret".to_string(),
             authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
             token_endpoint: "https://oauth2.googleapis.com/token".to_string(),
-            userinfo_endpoint: Some("https://www.googleapis.com/oauth2/v1/userinfo".to_string()),
+            userinfo_endpoint: Some("https://www.googleapis.com/oauth2/v3/userinfo".to_string()),
             issuer: Some("https://accounts.google.com".to_string()),
             redirect_uri: "http://localhost:3000/callback".to_string(),
             scopes: vec!["openid".to_string(), "email".to_string()],

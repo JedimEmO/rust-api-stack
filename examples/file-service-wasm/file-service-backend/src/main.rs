@@ -15,6 +15,9 @@ use storage::FileStorage;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Load `.env` first, so a `RUST_LOG` set there reaches the tracing filter.
+    dotenvy::dotenv().ok();
+
     // Initialize tracing
     tracing_subscriber::registry()
         .with(
@@ -23,9 +26,6 @@ async fn main() -> Result<()> {
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
-
-    // Load environment variables
-    dotenvy::dotenv().ok();
 
     // Create storage directory
     let storage_path = std::env::var("STORAGE_PATH").unwrap_or_else(|_| "./uploads".to_string());
