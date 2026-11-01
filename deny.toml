@@ -28,7 +28,11 @@ allow = [
     "Zlib",
 ]
 confidence-threshold = 0.8
-exceptions = []
+exceptions = [
+    # MIT-0 (MIT without the attribution clause). Reached only through `jsonschema`,
+    # a dependency of the unpublished test-support crate `ras-spec-conformance`.
+    { allow = ["MIT-0"], crate = "borrow-or-share" },
+]
 
 [sources]
 unknown-registry = "warn"

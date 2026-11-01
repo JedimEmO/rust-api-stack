@@ -150,6 +150,58 @@ test.describe('JSON-RPC API explorer', () => {
     expect(sessionStorageValues).toContain('admin-token');
   });
 
+  test('documents referenced struct fields and guesses nested and recursive params', async ({ page }) => {
+    await selectMethod(page, 'place_order');
+    const deliveryRow = page.locator('#request-form .schema-field').filter({ hasText: 'delivery' }).first();
+    await expect(deliveryRow).toContainText('Where the order is shipped.');
+    const order = JSON.parse(await page.locator('#params-editor').inputValue());
+    expect(order).toEqual({ item: 'example', delivery: { street: 'example', city: 'example' } });
+
+    await send(page);
+    await expect(page.locator('#response-status')).toContainText('200');
+    await expect(page.locator('#response-output')).toContainText('street');
+
+    await selectMethod(page, 'grow_tree');
+    const tree = JSON.parse(await page.locator('#params-editor').inputValue());
+    expect(tree.label).toBe('example');
+    expect(tree.children).toEqual([{}]);
+  });
+
+  test('lists examples, opens with the first success example, and sends the one chosen', async ({ page }) => {
+    await selectMethod(page, 'reserve_table');
+    const examples = page.locator('#request-form .examples');
+    await expect(examples).toContainText('for_two');
+    await expect(examples).toContainText('A table for two.');
+    await expect(examples).toContainText('too_many_guests');
+    await expect(examples).toContainText('The largest table seats twelve.');
+
+    expect(JSON.parse(await page.locator('#params-editor').inputValue())).toEqual({ guests: 2, name: 'Ada' });
+    await expect(page.locator('#expected-output')).toContainText('"table": 4');
+    await send(page);
+    await expect(page.locator('#response-status')).toContainText('200');
+    await expect(page.locator('#response-output')).toContainText('"table": 4');
+
+    await page.getByRole('button', { name: 'Use example too_many_guests' }).click();
+    expect(JSON.parse(await page.locator('#params-editor').inputValue())).toEqual({ guests: 40, name: 'Bob' });
+    await expect(page.locator('#expected-output')).toContainText('1001');
+    await expect(page.locator('#expected-output')).toContainText('"max_guests": 12');
+
+    const outgoing = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith('/rpc'));
+    await send(page);
+    expect((await outgoing).postDataJSON().params).toEqual({ guests: 40, name: 'Bob' });
+    await expect(page.locator('#response-output')).toContainText('No table for that many guests');
+  });
+
+  test('keeps a field named __proto__ when an example is used', async ({ page }) => {
+    await selectMethod(page, 'proto_field');
+    await expect(page.locator('#params-editor')).toHaveValue(/"__proto__": "kept"/);
+    const outgoing = page.waitForRequest((request) => request.method() === 'POST' && request.url().endsWith('/rpc'));
+    await send(page);
+    expect((await outgoing).postData()).toContain('"__proto__":"kept"');
+    await expect(page.locator('#response-status')).toContainText('200');
+    await expect(page.locator('#response-output')).toContainText('kept');
+  });
+
   test('persists theme preference in localStorage', async ({ page }) => {
     await page.locator('#theme-toggle').click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');

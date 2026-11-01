@@ -20,7 +20,9 @@ This crate provides the `jsonrpc_service!` procedural macro that generates type-
 - **Versioned methods**: Optional request/response migrations for legacy wire methods
 - **Async support**: Full async/await support throughout
 - **JSON-RPC 2.0 responses**: Generates standard success and error envelopes
-- **OpenRPC document generation**: Automatic API documentation generation
+- **OpenRPC document generation**: Automatic API documentation generation, with by-name parameters that match the call the server accepts
+- **Authored examples**: Typed call and error examples, checked at compile time, in the OpenRPC document and the API explorer
+- **Public handler errors**: Handlers return `PublicRpcError` to send a code, message and data the client can act on; every other error stays hidden
 
 ## Usage
 
@@ -28,13 +30,13 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-ras-jsonrpc-macro = { version = "0.3.0", default-features = false }
-ras-jsonrpc-core = { version = "0.2.0", optional = true }
-ras-jsonrpc-types = "0.2.0"
+ras-jsonrpc-macro = { version = "0.4.0", default-features = false }
+ras-jsonrpc-core = { version = "0.3.0", optional = true }
+ras-jsonrpc-types = "0.3.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-schemars = "1.0.0-alpha.20"
-ras-transport-core = { version = "0.1.0", optional = true }
+schemars = "1.2"
+ras-transport-core = { version = "0.2.0", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 axum = { version = "0.8", optional = true }

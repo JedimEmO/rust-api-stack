@@ -237,6 +237,7 @@ impl Parse for MethodDefinition {
         let mut version = None;
         let mut wire_name = None;
         let mut versions = Vec::new();
+        let mut examples = Vec::new();
 
         if input.peek(syn::token::Brace) {
             let content;
@@ -265,10 +266,13 @@ impl Parse for MethodDefinition {
                             }
                         }
                     }
+                    "examples" => {
+                        examples = parse_examples(&content, &request_type)?;
+                    }
                     _ => {
                         return Err(syn::Error::new(
                             field_name.span(),
-                            "Expected version, wire, or versions",
+                            "Expected version, wire, versions, or examples",
                         ));
                     }
                 }
@@ -288,6 +292,7 @@ impl Parse for MethodDefinition {
             version,
             wire_name,
             versions,
+            examples,
         })
     }
 }
@@ -321,6 +326,13 @@ impl Parse for MethodVersionDefinition {
                 "migration" => {
                     migration_type = Some(content.parse::<Type>()?);
                 }
+                "examples" => {
+                    return Err(syn::Error::new(
+                        field_name.span(),
+                        "examples belong on the current method only; \
+                         legacy versions are documented without examples",
+                    ));
+                }
                 _ => {
                     return Err(syn::Error::new(
                         field_name.span(),
@@ -347,5 +359,281 @@ impl Parse for MethodVersionDefinition {
                 syn::Error::new(input.span(), "Version entry is missing migration")
             })?,
         })
+    }
+}
+
+fn is_unit_type(ty: &Type) -> bool {
+    matches!(ty, Type::Tuple(tuple) if tuple.elems.is_empty())
+}
+
+fn set_once<T>(slot: &mut Option<T>, field: &Ident, value: T) -> syn::Result<()> {
+    if slot.is_some() {
+        return Err(syn::Error::new(
+            field.span(),
+            format!("`{field}` is given more than once"),
+        ));
+    }
+    *slot = Some(value);
+    Ok(())
+}
+
+/// Parses `examples: [ name { params: ..., result: ... }, ... ]`.
+fn parse_examples(
+    input: syn::parse::ParseStream,
+    request_type: &Type,
+) -> syn::Result<Vec<MethodExample>> {
+    let list;
+    syn::bracketed!(list in input);
+
+    let mut examples = Vec::new();
+    let mut names = std::collections::HashSet::new();
+    while !list.is_empty() {
+        let docs = parse_doc_comment_attrs(list.call(syn::Attribute::parse_outer)?, "example")?;
+        let name = list.parse::<Ident>()?;
+        if !names.insert(name.to_string()) {
+            return Err(syn::Error::new(
+                name.span(),
+                format!("duplicate example name `{name}`"),
+            ));
+        }
+
+        let body;
+        syn::braced!(body in list);
+        let mut params = None;
+        let mut result = None;
+        let mut error = None;
+        while !body.is_empty() {
+            let field = body.parse::<Ident>()?;
+            let _ = body.parse::<Token![:]>()?;
+            match field.to_string().as_str() {
+                "params" => set_once(&mut params, &field, body.parse::<syn::Expr>()?)?,
+                "result" => set_once(&mut result, &field, body.parse::<syn::Expr>()?)?,
+                "error" => set_once(&mut error, &field, parse_example_error(&body)?)?,
+                _ => {
+                    return Err(syn::Error::new(
+                        field.span(),
+                        "Expected params, result, or error",
+                    ));
+                }
+            }
+            if body.peek(Token![,]) {
+                let _ = body.parse::<Token![,]>()?;
+            }
+        }
+
+        match (&params, is_unit_type(request_type)) {
+            (None, false) => {
+                return Err(syn::Error::new(
+                    name.span(),
+                    format!("example `{name}` needs `params`, a value of the request type"),
+                ));
+            }
+            (Some(params), true) => {
+                return Err(syn::Error::new_spanned(
+                    params,
+                    "this method takes no params (its request type is `()`); leave `params` out",
+                ));
+            }
+            _ => {}
+        }
+
+        let outcome = match (result, error) {
+            (Some(result), None) => ExampleOutcome::Result(result),
+            (None, Some(error)) => error,
+            (Some(_), Some(_)) => {
+                return Err(syn::Error::new(
+                    name.span(),
+                    format!("example `{name}` has both `result` and `error`; give one"),
+                ));
+            }
+            (None, None) => {
+                return Err(syn::Error::new(
+                    name.span(),
+                    format!("example `{name}` needs a `result` or an `error`"),
+                ));
+            }
+        };
+
+        examples.push(MethodExample {
+            name,
+            docs,
+            params,
+            outcome,
+        });
+
+        if list.peek(Token![,]) {
+            let _ = list.parse::<Token![,]>()?;
+        }
+    }
+    Ok(examples)
+}
+
+/// Parses `error: { code: 1001, message: "...", data: <expr> }`.
+fn parse_example_error(input: syn::parse::ParseStream) -> syn::Result<ExampleOutcome> {
+    let body;
+    let braces = syn::braced!(body in input);
+
+    let mut code = None;
+    let mut message = None;
+    let mut data = None;
+    while !body.is_empty() {
+        let field = body.parse::<Ident>()?;
+        let _ = body.parse::<Token![:]>()?;
+        match field.to_string().as_str() {
+            "code" => set_once(&mut code, &field, parse_error_code(&body)?)?,
+            "message" => set_once(&mut message, &field, body.parse::<LitStr>()?.value())?,
+            "data" => set_once(&mut data, &field, body.parse::<syn::Expr>()?)?,
+            _ => {
+                return Err(syn::Error::new(
+                    field.span(),
+                    "Expected code, message, or data",
+                ));
+            }
+        }
+        if body.peek(Token![,]) {
+            let _ = body.parse::<Token![,]>()?;
+        }
+    }
+
+    Ok(ExampleOutcome::Error {
+        code: code.ok_or_else(|| {
+            syn::Error::new(braces.span.join(), "an example error needs a `code`")
+        })?,
+        message: message.ok_or_else(|| {
+            syn::Error::new(braces.span.join(), "an example error needs a `message`")
+        })?,
+        data,
+    })
+}
+
+/// Parses an integer literal, optionally negative, that a handler may send.
+fn parse_error_code(input: syn::parse::ParseStream) -> syn::Result<i32> {
+    let expr = input.parse::<syn::Expr>()?;
+    let (negative, literal) = match &expr {
+        syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Int(literal),
+            ..
+        }) => (false, literal),
+        syn::Expr::Unary(syn::ExprUnary {
+            op: syn::UnOp::Neg(_),
+            expr: inner,
+            ..
+        }) => match inner.as_ref() {
+            syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Int(literal),
+                ..
+            }) => (true, literal),
+            _ => return Err(syn::Error::new_spanned(expr, "expected an integer literal")),
+        },
+        _ => return Err(syn::Error::new_spanned(expr, "expected an integer literal")),
+    };
+    let magnitude = literal.base10_parse::<i64>()?;
+    let code = i32::try_from(if negative { -magnitude } else { magnitude })
+        .map_err(|_| syn::Error::new_spanned(&expr, "the code does not fit in an i32"))?;
+    if !ras_jsonrpc_types::handler_code_allowed(code) {
+        return Err(syn::Error::new_spanned(
+            &expr,
+            format!(
+                "code {code} is reserved, and a handler cannot send it; use a code outside \
+                 -32768..=-32000, or -32602 for invalid params"
+            ),
+        ));
+    }
+    Ok(code)
+}
+
+#[cfg(test)]
+mod example_diagnostics {
+    use super::*;
+
+    fn parse(methods: &str) -> syn::Result<ServiceDefinition> {
+        syn::parse_str(&format!(
+            "{{ service_name: S, openrpc: true, methods: [ {methods} ] }}"
+        ))
+    }
+
+    fn error(methods: &str) -> String {
+        parse(methods).expect_err("should not parse").to_string()
+    }
+
+    #[test]
+    fn a_well_formed_example_list_parses() {
+        let service = parse(
+            r#"
+            UNAUTHORIZED create(Req) -> Resp {
+                examples: [
+                    /// Docs.
+                    ok { params: Req { a: 1 }, result: Resp::default() },
+                    taken { params: make(), error: { code: -32602, message: "bad", data: 1 } },
+                ],
+            }
+            "#,
+        )
+        .unwrap();
+        let examples = &service.methods[0].examples;
+        assert_eq!(examples.len(), 2);
+        assert_eq!(examples[0].docs.as_ref().unwrap().summary, "Docs.");
+        assert!(matches!(
+            examples[1].outcome,
+            ExampleOutcome::Error { code: -32602, .. }
+        ));
+    }
+
+    #[test]
+    fn diagnostics() {
+        let cases = [
+            (
+                "UNAUTHORIZED m(Req) -> Resp { examples: [ a { result: 1 } ] }",
+                "example `a` needs `params`",
+            ),
+            (
+                "UNAUTHORIZED m(()) -> Resp { examples: [ a { params: 1, result: 1 } ] }",
+                "takes no params",
+            ),
+            (
+                "UNAUTHORIZED m(Req) -> Resp { examples: [ a { params: 1 } ] }",
+                "needs a `result` or an `error`",
+            ),
+            (
+                "UNAUTHORIZED m(Req) -> Resp { examples: [ a { params: 1, result: 1, error: { code: 1, message: \"x\" } } ] }",
+                "both `result` and `error`",
+            ),
+            (
+                "UNAUTHORIZED m(Req) -> Resp { examples: [ a { params: 1, result: 1 }, a { params: 2, result: 2 } ] }",
+                "duplicate example name `a`",
+            ),
+            (
+                "UNAUTHORIZED m(Req) -> Resp { examples: [ a { params: 1, params: 2, result: 1 } ] }",
+                "`params` is given more than once",
+            ),
+            (
+                "UNAUTHORIZED m(Req) -> Resp { examples: [ a { params: 1, outcome: 1 } ] }",
+                "Expected params, result, or error",
+            ),
+            (
+                "UNAUTHORIZED m(Req) -> Resp { examples: [ a { params: 1, error: { code: -32001, message: \"x\" } } ] }",
+                "code -32001 is reserved",
+            ),
+            (
+                "UNAUTHORIZED m(Req) -> Resp { examples: [ a { params: 1, error: { code: 99999999999, message: \"x\" } } ] }",
+                "does not fit in an i32",
+            ),
+            (
+                "UNAUTHORIZED m(Req) -> Resp { examples: [ a { params: 1, error: { message: \"x\" } } ] }",
+                "needs a `code`",
+            ),
+            (
+                "UNAUTHORIZED m(Req) -> Resp { examples: [ a { params: 1, error: { code: n, message: \"x\" } } ] }",
+                "expected an integer literal",
+            ),
+            (
+                "UNAUTHORIZED m(Req) -> Resp { versions: [ v1 { wire: \"m.v1\", request: A, response: B, migration: C, examples: [] } ] }",
+                "examples belong on the current method only",
+            ),
+        ];
+        for (input, expected) in cases {
+            let message = error(input);
+            assert!(message.contains(expected), "{input}\n  gave: {message}");
+        }
     }
 }

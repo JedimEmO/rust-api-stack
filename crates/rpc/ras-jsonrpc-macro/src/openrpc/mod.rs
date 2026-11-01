@@ -4,12 +4,33 @@
 //! from the jsonrpc_service macro definitions.
 
 use crate::{OpenRpcConfig, ServiceDefinition};
-use proc_macro2::TokenStream;
+use proc_macro2::{Ident, TokenStream};
 use quote::quote;
-mod examples;
 mod methods;
 mod schema;
 pub use schema::generate_schema_impl_checks;
+
+/// An identifier for a local the generated document code declares around
+/// authored example expressions. `Span::mixed_site()` hides it from those
+/// expressions, so a user's own `fn context()` or `fn generators()` still
+/// resolves inside an example.
+pub(super) fn local(name: &str) -> Ident {
+    Ident::new(name, proc_macro2::Span::mixed_site())
+}
+
+/// Emits the shared component-assembly code as a private module named `module`.
+fn embedded_components(module: &Ident) -> TokenStream {
+    let mut file: syn::File = syn::parse_str(ras_spec_components::SOURCE)
+        .expect("ras-spec-components source is valid Rust");
+    file.attrs.clear();
+    quote! {
+        #[doc(hidden)]
+        #[allow(dead_code, unused_imports, missing_docs, clippy::all)]
+        mod #module {
+            #file
+        }
+    }
+}
 
 /// Generates OpenRPC document creation code
 pub fn generate_openrpc_code(
@@ -17,19 +38,17 @@ pub fn generate_openrpc_code(
     config: &OpenRpcConfig,
 ) -> TokenStream {
     let service_name = &service_def.service_name;
-    let openrpc_fn_name = quote::format_ident!(
-        "generate_{}_openrpc",
-        service_name.to_string().to_lowercase()
-    );
-    let openrpc_to_file_fn_name = quote::format_ident!(
-        "generate_{}_openrpc_to_file",
-        service_name.to_string().to_lowercase()
-    );
+    let service_name_lower = service_name.to_string().to_lowercase();
+    let openrpc_fn_name = quote::format_ident!("generate_{}_openrpc", service_name_lower);
+    let try_openrpc_fn_name = quote::format_ident!("try_generate_{}_openrpc", service_name_lower);
+    let service_str = service_name.to_string();
+    let openrpc_to_file_fn_name =
+        quote::format_ident!("generate_{}_openrpc_to_file", service_name_lower);
     let method_info_struct_name = quote::format_ident!("{}OpenRpcMethodInfo", service_name);
+    let components_mod = quote::format_ident!("__ras_openrpc_components_{}", service_name_lower);
 
     let output_path_code = match config {
         OpenRpcConfig::Enabled => {
-            let service_name_lower = service_name.to_string().to_lowercase();
             quote! {
                 format!("target/openrpc/{}.json", #service_name_lower)
             }
@@ -41,29 +60,15 @@ pub fn generate_openrpc_code(
         }
     };
 
-    let flatten_fn_name = quote::format_ident!(
-        "_flatten_schema_defs_{}",
-        service_name.to_string().to_lowercase()
-    );
-    let update_refs_fn_name = quote::format_ident!(
-        "_update_refs_recursive_{}",
-        service_name.to_string().to_lowercase()
-    );
-    let generate_example_fn_name = quote::format_ident!(
-        "_generate_example_from_schema_{}",
-        service_name.to_string().to_lowercase()
-    );
-
-    let unique_types = schema::collect_types(service_def);
-    let (schema_fns, schema_insertions) =
-        schema::generate_schemas(service_name, &flatten_fn_name, &unique_types);
-    let method_infos = methods::generate_method_infos(service_def, &method_info_struct_name);
-    let normalization = schema::generate_normalization(&flatten_fn_name, &update_refs_fn_name);
-    let examples = examples::generate_examples(&generate_example_fn_name);
-    let methods = methods::generate_methods(&generate_example_fn_name);
+    let embedded = embedded_components(&components_mod);
+    let generators = local("generators");
+    let method_infos =
+        methods::generate_method_infos(service_def, &method_info_struct_name, &components_mod);
+    let methods = methods::generate_methods(&service_str, &components_mod);
 
     quote! {
-        #[derive(serde::Serialize)]
+        #embedded
+
         struct #method_info_struct_name {
             name: String,
             summary: Option<String>,
@@ -74,33 +79,46 @@ pub fn generate_openrpc_code(
             permission_groups: Vec<Vec<String>>,
             request_type_name: String,
             response_type_name: String,
+            /// `None` for a `()` request, which takes no parameters.
+            params_schema: Option<serde_json::Value>,
+            result_schema: serde_json::Value,
+            /// Authored examples; only the canonical method has them.
+            examples: Vec<#components_mod::Example>,
             version: Option<String>,
             canonical_version: Option<String>,
             canonical_method: String,
         }
 
-        #normalization
-        #examples
-
-        #(#schema_fns)*
-
-        /// Generate OpenRPC document for this service
+        /// Generate the OpenRPC document for this service.
+        ///
+        /// Panics when an authored example cannot be serialized; see the
+        /// fallible variant next to it.
         pub fn #openrpc_fn_name() -> serde_json::Value {
-            use serde_json::json;
-            use schemars::{schema_for, JsonSchema};
-            use std::collections::HashMap;
+            #try_openrpc_fn_name().unwrap_or_else(|error| panic!("{error}"))
+        }
 
-            let methods = vec![
+        /// Generate the OpenRPC document for this service, or say which example
+        /// or part of the document could not be built.
+        pub fn #try_openrpc_fn_name() -> Result<serde_json::Value, ras_jsonrpc_types::SpecGenerationError> {
+            use serde_json::json;
+
+            let mut #generators = #components_mod::Generators::new(#components_mod::Dialect::OpenRpc);
+
+            let mut methods = vec![
                 #(#method_infos),*
             ];
 
-            let mut schemas = HashMap::new();
-
-            #(#schema_insertions)*
+            let components = #generators.into_components().map_err(|error| {
+                ras_jsonrpc_types::SpecGenerationError::document(#service_str, error)
+            })?;
+            for method in &mut methods {
+                components.fix_serialized(&mut method.result_schema);
+            }
+            let schemas = components.schemas;
 
             #methods
 
-            json!({
+            Ok(json!({
                 "openrpc": "1.3.2",
                 "info": {
                     "title": format!("{} JSON-RPC API", stringify!(#service_name)),
@@ -145,12 +163,12 @@ pub fn generate_openrpc_code(
                         }
                     }
                 }
-            })
+            }))
         }
 
         /// Write OpenRPC document to the target directory
         pub fn #openrpc_to_file_fn_name() -> std::io::Result<()> {
-            let doc = #openrpc_fn_name();
+            let doc = #try_openrpc_fn_name().map_err(std::io::Error::other)?;
             let output_path = #output_path_code;
 
             if let Some(parent) = std::path::Path::new(&output_path).parent() {

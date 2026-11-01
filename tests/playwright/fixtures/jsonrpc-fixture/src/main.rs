@@ -65,6 +65,44 @@ pub struct RenameWidgetResponseV2 {
     pub notified: bool,
 }
 
+/// A delivery address.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Address {
+    pub street: String,
+    pub city: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PlaceOrderRequest {
+    pub item: String,
+    /// Where the order is shipped.
+    pub delivery: Address,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ReserveTable {
+    pub guests: u32,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Reservation {
+    pub table: u32,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ProtoField {
+    #[serde(rename = "__proto__")]
+    pub inner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TreeNode {
+    pub label: String,
+    pub children: Vec<TreeNode>,
+}
+
 jsonrpc_service!({
     service_name: ExplorerRpcFixture,
     openrpc: true,
@@ -100,6 +138,29 @@ jsonrpc_service!({
         },
         WITH_PERMISSIONS(["admin"]) create_widget(CreateWidgetRequest) -> Widget,
         WITH_PERMISSIONS(["user"]) current_profile(()) -> ProfileResponse,
+        UNAUTHORIZED place_order(PlaceOrderRequest) -> PlaceOrderRequest,
+        UNAUTHORIZED grow_tree(TreeNode) -> TreeNode,
+        /// Echo a field whose wire name is `__proto__`.
+        UNAUTHORIZED proto_field(ProtoField) -> ProtoField {
+            examples: [
+                kept { params: ProtoField { inner: "kept".to_string() }, result: ProtoField { inner: "kept".to_string() } },
+            ],
+        },
+        /// Reserve a table.
+        UNAUTHORIZED reserve_table(ReserveTable) -> Reservation {
+            examples: [
+                /// A table for two.
+                for_two {
+                    params: ReserveTable { guests: 2, name: "Ada".to_string() },
+                    result: Reservation { table: 4, name: "Ada".to_string() },
+                },
+                /// The largest table seats twelve.
+                too_many_guests {
+                    params: ReserveTable { guests: 40, name: "Bob".to_string() },
+                    error: { code: 1001, message: "No table for that many guests", data: serde_json::json!({ "max_guests": 12 }) },
+                },
+            ],
+        },
     ]
 });
 
@@ -202,6 +263,45 @@ impl ExplorerRpcFixtureTrait for ExplorerRpcFixtureImpl {
             permissions: user.permissions.iter().cloned().collect(),
         })
     }
+
+    async fn place_order(
+        &self,
+        request: PlaceOrderRequest,
+    ) -> std::result::Result<PlaceOrderRequest, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(request)
+    }
+
+    async fn grow_tree(
+        &self,
+        request: TreeNode,
+    ) -> std::result::Result<TreeNode, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(request)
+    }
+
+    async fn proto_field(
+        &self,
+        request: ProtoField,
+    ) -> std::result::Result<ProtoField, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(request)
+    }
+
+    async fn reserve_table(
+        &self,
+        request: ReserveTable,
+    ) -> std::result::Result<Reservation, Box<dyn std::error::Error + Send + Sync>> {
+        if request.guests > 12 {
+            return Err(ras_jsonrpc_types::PublicRpcError::new(
+                1001,
+                "No table for that many guests",
+            )
+            .with_data(serde_json::json!({ "max_guests": 12 }))
+            .into());
+        }
+        Ok(Reservation {
+            table: 4,
+            name: request.name,
+        })
+    }
 }
 
 #[tokio::main]
@@ -290,10 +390,14 @@ mod tests {
             BTreeSet::from([
                 "create_widget",
                 "current_profile",
+                "grow_tree",
                 "no_params",
                 "ping",
+                "place_order",
+                "proto_field",
                 "rename_widget.v1",
                 "rename_widget.v2",
+                "reserve_table",
             ])
         );
     }

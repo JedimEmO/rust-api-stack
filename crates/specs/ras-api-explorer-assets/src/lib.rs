@@ -26,6 +26,7 @@ pub const TEMPLATE: &str = concat!(
     include_str!("assets/markdown.js"),
     include_str!("assets/schema-render.js"),
     include_str!("assets/specs.js"),
+    include_str!("assets/examples.js"),
     include_str!("assets/state.js"),
     include_str!("assets/navigation.js"),
     include_str!("assets/forms.js"),
@@ -39,13 +40,14 @@ pub const TEMPLATE: &str = concat!(
 mod tests {
     use super::*;
 
-    const SCRIPTS: [&str; 11] = [
+    const SCRIPTS: [&str; 12] = [
         include_str!("assets/bootstrap.js"),
         include_str!("assets/storage.js"),
         include_str!("assets/schema-model.js"),
         include_str!("assets/markdown.js"),
         include_str!("assets/schema-render.js"),
         include_str!("assets/specs.js"),
+        include_str!("assets/examples.js"),
         include_str!("assets/state.js"),
         include_str!("assets/navigation.js"),
         include_str!("assets/forms.js"),

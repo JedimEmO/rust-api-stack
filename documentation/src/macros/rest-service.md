@@ -8,15 +8,15 @@ explorer.
 
 ```toml
 [dependencies]
-ras-rest-macro = { version = "0.3.0", default-features = false }
+ras-rest-macro = { version = "0.4.0", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-schemars = "1.0.0-alpha.20"
+schemars = "1.2"
 async-trait = { version = "0.1", optional = true }
-ras-transport-core = { version = "0.1.0", optional = true }
+ras-transport-core = { version = "0.2.0", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ras-rest-core = { version = "0.2.0", optional = true }
+ras-rest-core = { version = "0.2.1", optional = true }
 ras-auth-core = { version = "0.2.0", optional = true }
 axum = { version = "0.8", optional = true }
 axum-extra = { version = "0.10", features = ["query"], optional = true }
@@ -165,6 +165,48 @@ POST WITH_PERMISSIONS(["admin"]) devices/{id: String}(Telemetry) -> Ack {
   forward it upstream verbatim (use
   `ras_auth_core::redact_sensitive_headers_for_auth_transport` if you need to).
 
+### Examples
+
+A schema says what a request may contain; an example shows a request that works
+and the response it gets.
+Give an endpoint an `examples` list in its options block:
+
+```rust,ignore
+/// Rename an item.
+POST WITH_PERMISSIONS(["items:write"]) items/{id: u32}/rename ? notify: Option<bool> (RenameItem) -> RenamedItem {
+    examples: [
+        /// Rename and notify watchers.
+        notify_watchers {
+            path: { id: 42 },
+            query: { notify: Some(true) },
+            body: RenameItem { name: "Spare parts".into() },
+            response: RenamedItem { id: 42, name: "Spare parts".into() },
+        },
+        /// The item does not exist.
+        missing_item {
+            path: { id: 9999 },
+            body: RenameItem { name: "Spare parts".into() },
+            error: { status: 404, message: "Item not found" },
+        },
+    ],
+}
+```
+
+The values are typed Rust expressions, so an example that no longer fits its
+endpoint fails to compile.
+
+* `path` gives every path parameter. `query` gives every query parameter that is
+  not an `Option`; an `Option` one may be left out or set to `None`.
+* `body` is required exactly when the endpoint takes a request body.
+* A success has a `response` and an optional 2xx `status`, 200 by default.
+  A `204` takes no `response`, and an endpoint returning `()` may leave it out.
+* An error has `error: { status, message }`, a 4xx or 5xx status and the message
+  your handler's `RestError` carries.
+
+Examples generate code only when `openapi` is on, and request bodies must read
+back unchanged through the request type, as for JSON-RPC.
+Legacy versions take no examples.
+
 ### Versioning
 
 An endpoint can serve older payload shapes at legacy paths and migrate them to
@@ -306,15 +348,34 @@ With `openapi: true`, the macro generates:
 
 ```rust,ignore
 pub fn generate_userservice_openapi() -> serde_json::Value;
+pub fn try_generate_userservice_openapi()
+    -> Result<serde_json::Value, ras_rest_core::SpecGenerationError>;
 pub fn generate_userservice_openapi_to_file() -> std::io::Result<()>;
 ```
 
+`try_generate_*` names the endpoint, example and part that could not be built;
+`generate_*` panics with that error and `_to_file` returns it as an `io::Error`.
+
 With `serve_docs: true`, the generated router serves the built-in API explorer
-under `docs_path` relative to `base_path`.
+under `docs_path` relative to `base_path`. The served `openapi.json` is generated
+once per service and kept; a failure answers 500 and is logged.
 
 The OpenAPI document includes JSON schemas, routes, HTTP methods, bearer auth
-requirements, and `x-permissions` metadata. It can be checked into build output
-or consumed by TypeScript client generators.
+requirements, `x-permissions` metadata and examples. It validates against the
+OpenAPI 3.0 schema, and it can be checked into build output or consumed by
+TypeScript client generators.
+
+OpenAPI 3.0 has no request/response pairs, so an example appears under its name
+in every place it touches: its parameters, its request body and the response for
+its status. A status that no response listed yet gets one.
+
+Every error response is described by the `RestErrorBody` component,
+`{ "error": string }`. That is the body of a handler's `RestError` and of every
+request the framework rejects, from a path parameter that does not parse to a
+missing credential. `RestErrorBody` is a reserved component name, and every
+component name may only use letters, digits, `.`, `-` and `_`; a type whose schema
+breaks either rule fails generation. A 204 example has no content to sit on and is
+recorded under `x-ras-examples` on the 204 response.
 
 See
 [examples/rest-wasm-example](https://github.com/JedimEmO/rust-api-stack/tree/master/examples/rest-wasm-example)

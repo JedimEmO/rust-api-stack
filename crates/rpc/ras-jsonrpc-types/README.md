@@ -20,7 +20,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-ras-jsonrpc-types = "0.2.0"
+ras-jsonrpc-types = "0.3.0"
 ```
 
 ### Basic Types

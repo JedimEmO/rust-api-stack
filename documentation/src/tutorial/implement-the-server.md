@@ -7,7 +7,7 @@ implements the generated traits.
 [dependencies]
 workspace-api = { path = "../workspace-api", default-features = false, features = ["server"] }
 ras-auth-core = "0.2.0"
-ras-rest-core = "0.2.0"
+ras-rest-core = "0.2.1"
 ras-file-core = "0.2.0"
 axum = "0.8"
 tokio = { version = "1.0", features = ["full"] }

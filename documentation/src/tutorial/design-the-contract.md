@@ -105,3 +105,33 @@ At this point you have made the most important design decisions: operation
 names, path parameters, request/response types, and auth requirements. The
 server implementation can change later without changing this contract.
 
+## Show A Request That Works
+
+The schemas say what a request may contain. A reader of the generated docs also
+wants to see one request that works, and what comes back. Add examples to the
+operations people will try first:
+
+```rust,ignore
+POST WITH_PERMISSIONS(["task:write"]) projects/{project_id: String}/tasks(CreateTaskRequest) -> Task {
+    examples: [
+        /// A task with a title only.
+        minimal {
+            path: { project_id: "proj-1".to_string() },
+            body: CreateTaskRequest { title: "Write the launch notes".to_string() },
+            response: Task { id: "task-1".to_string(), title: "Write the launch notes".to_string() },
+        },
+        /// The project does not exist.
+        unknown_project {
+            path: { project_id: "proj-404".to_string() },
+            body: CreateTaskRequest { title: "Write the launch notes".to_string() },
+            error: { status: 404, message: "Project not found" },
+        },
+    ],
+},
+```
+
+The examples are typed Rust values, so they keep compiling only while they match
+the contract. They appear in the OpenAPI document and in the API explorer, where
+"Use" fills in the request. The [`rest_service!` guide](../macros/rest-service.md#examples)
+lists the rules.
+

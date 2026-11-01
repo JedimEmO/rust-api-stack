@@ -159,7 +159,8 @@ fn error_display_and_constructor_cover_all_variants() {
     assert_eq!(
         TransportError::JsonRpc {
             code: -32601,
-            message: "Method not found".into()
+            message: "Method not found".into(),
+            data: None,
         }
         .to_string(),
         "json-rpc error -32601: Method not found"

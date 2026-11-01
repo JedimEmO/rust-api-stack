@@ -85,7 +85,9 @@ impl MessageRouter {
                     Err(e) => {
                         // Create error response if request has an ID
                         if let Some(id) = req.id {
-                            let error = JsonRpcError::internal_error(e.to_string());
+                            let error = e
+                                .public_rpc_error()
+                                .unwrap_or_else(|| JsonRpcError::internal_error(e.to_string()));
                             let response = JsonRpcResponse::error(error, Some(id));
                             Ok(Some(response))
                         } else {
@@ -170,7 +172,9 @@ impl MessageHandler for MessageRouter {
 
                     // Create error response if request has an ID
                     if let Some(id) = request.id {
-                        let error = JsonRpcError::internal_error(e.to_string());
+                        let error = e
+                            .public_rpc_error()
+                            .unwrap_or_else(|| JsonRpcError::internal_error(e.to_string()));
                         Ok(Some(JsonRpcResponse::error(error, Some(id))))
                     } else {
                         Err(e)
@@ -393,6 +397,60 @@ mod tests {
         let err = resp.error.unwrap();
         assert_eq!(err.code, -32603);
         assert!(!err.message.contains("nope"));
+    }
+
+    fn rpc_request(method: &str) -> JsonRpcRequest {
+        JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            method: method.into(),
+            params: None,
+            id: Some(json!(1)),
+        }
+    }
+
+    /// Both registration APIs send a `ServerError::Rpc` as written when its
+    /// code is allowed, and as `-32603` when it is reserved, so a hand-built
+    /// `ServerError::Rpc` cannot bypass the handler code rule.
+    #[tokio::test]
+    async fn rpc_errors_follow_the_handler_code_rule_on_both_registration_apis() {
+        let public = || JsonRpcError::new(1001, "Email already registered".into(), Some(json!(7)));
+        let reserved = || JsonRpcError::new(-32001, "secret fake auth".into(), None);
+
+        let mut router = MessageRouter::new();
+        router.register("plain.public", move |_req, _ctx| async move {
+            Err::<Option<JsonRpcResponse>, _>(ServerError::Rpc(public()))
+        });
+        router.register("plain.reserved", move |_req, _ctx| async move {
+            Err::<Option<JsonRpcResponse>, _>(ServerError::Rpc(reserved()))
+        });
+        router.register_value("value.public", move |_req, _ctx| async move {
+            Err::<serde_json::Value, _>(ServerError::Rpc(public()))
+        });
+        router.register_value("value.reserved", move |_req, _ctx| async move {
+            Err::<serde_json::Value, _>(ServerError::Rpc(reserved()))
+        });
+
+        for method in ["plain.public", "value.public"] {
+            let error = router
+                .handle_request(rpc_request(method), test_context())
+                .await
+                .unwrap()
+                .unwrap()
+                .error
+                .unwrap();
+            assert_eq!(error, public(), "{method}");
+        }
+        for method in ["plain.reserved", "value.reserved"] {
+            let error = router
+                .handle_request(rpc_request(method), test_context())
+                .await
+                .unwrap()
+                .unwrap()
+                .error
+                .unwrap();
+            assert_eq!(error.code, -32603, "{method}");
+            assert!(!error.message.contains("secret"), "{method}");
+        }
     }
 
     #[tokio::test]

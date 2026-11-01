@@ -1,0 +1,21 @@
+[package]
+name = "ras-spec-components"
+version = "0.1.0"
+# 2021 on purpose: the crate compiles `src/components.rs`, which consumers embed,
+# so its tests fail on syntax an older-edition consumer could not compile.
+edition = "2021"
+rust-version = "1.88"
+description = "Schema component assembly that RAS service macros embed in generated OpenRPC and OpenAPI code"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-api-stack"
+homepage = "https://github.com/JedimEmO/rust-api-stack"
+readme = "README.md"
+
+# No dependencies: the macros embed `src/components.rs` as source, and the code
+# then compiles against the consumer's own `schemars` and `serde_json`.
+[dependencies]
+
+[dev-dependencies]
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

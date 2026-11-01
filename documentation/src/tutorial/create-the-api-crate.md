@@ -14,20 +14,20 @@ name = "workspace-api"
 edition = "2024"
 
 [dependencies]
-ras-rest-macro = { version = "0.3.0", default-features = false }
-ras-file-macro = { version = "0.2.0", default-features = false }
-ras-jsonrpc-bidirectional-macro = { version = "0.2.0", default-features = false }
+ras-rest-macro = { version = "0.4.0", default-features = false }
+ras-file-macro = { version = "0.3.0", default-features = false }
+ras-jsonrpc-bidirectional-macro = { version = "0.3.0", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
-schemars = { version = "1.0.0-alpha.20", optional = true }
+schemars = { version = "1.2", optional = true }
 serde_json = { version = "1.0", optional = true }
 async-trait = { version = "0.1", optional = true }
-ras-transport-core = { version = "0.1.0", optional = true }
+ras-transport-core = { version = "0.2.0", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ras-auth-core = { version = "0.2.0", optional = true }
-ras-rest-core = { version = "0.2.0", optional = true }
+ras-rest-core = { version = "0.2.1", optional = true }
 ras-file-core = { version = "0.2.0", optional = true }
-ras-jsonrpc-bidirectional-server = { version = "0.2.0", optional = true }
+ras-jsonrpc-bidirectional-server = { version = "0.4.0", optional = true }
 axum = { version = "0.8", optional = true }
 axum-extra = { version = "0.10", optional = true }
 tokio = { version = "1.0", optional = true }

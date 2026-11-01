@@ -10,6 +10,8 @@ use thiserror::Error;
 pub use ras_auth_core::{
     AuthError, AuthProvider, AuthResult, AuthenticatedUser, sanitize_log_detail,
 };
+/// Why a generated OpenAPI document could not be built.
+pub use ras_spec_components::SpecGenerationError;
 pub use ras_version_core::*;
 
 // Re-export `tracing` so generated REST server code can log without requiring

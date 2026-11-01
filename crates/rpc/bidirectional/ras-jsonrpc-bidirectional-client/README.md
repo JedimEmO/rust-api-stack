@@ -32,7 +32,7 @@ For native clients:
 
 ```toml
 [dependencies]
-ras-jsonrpc-bidirectional-client = "0.2.0"
+ras-jsonrpc-bidirectional-client = "0.4.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1.0", features = ["full"] }
@@ -43,7 +43,7 @@ For browser WASM clients:
 ```toml
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 ras-jsonrpc-bidirectional-client = {
-    version = "0.1.0",
+    version = "0.4.0",
     default-features = false,
     features = ["wasm"],
 }
@@ -219,7 +219,7 @@ When using in WASM environments:
 ```toml
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 ras-jsonrpc-bidirectional-client = {
-    version = "0.1.0",
+    version = "0.4.0",
     default-features = false,
     features = ["wasm"],
 }

@@ -13,11 +13,11 @@ async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ras-auth-core = "0.2.0"
-ras-jsonrpc-types = "0.2.0"
-ras-jsonrpc-bidirectional-types = "0.2.0"
-ras-jsonrpc-bidirectional-macro = { version = "0.2.0", default-features = false }
-ras-jsonrpc-bidirectional-server = { version = "0.2.0", optional = true }
-ras-jsonrpc-bidirectional-client = { version = "0.2.0", optional = true }
+ras-jsonrpc-types = "0.3.0"
+ras-jsonrpc-bidirectional-types = "0.3.0"
+ras-jsonrpc-bidirectional-macro = { version = "0.3.0", default-features = false }
+ras-jsonrpc-bidirectional-server = { version = "0.4.0", optional = true }
+ras-jsonrpc-bidirectional-client = { version = "0.4.0", optional = true }
 
 [features]
 default = []
@@ -126,6 +126,25 @@ let app = axum::Router::new()
 `require_auth(true)` requires credentials for the connection as a whole.
 Method-level permissions are still enforced for protected calls.
 
+### Errors The Client Sees
+
+Handler errors follow the same rule as in
+[`jsonrpc_service!`](jsonrpc-service.md#errors-the-client-sees).
+An error reaches the client as `-32603 "Internal error"` with no detail,
+unless the handler returns a `ras_jsonrpc_types::PublicRpcError` directly
+with a code outside the reserved range, or `-32602`:
+
+```rust,ignore
+return Err(ras_jsonrpc_types::PublicRpcError::new(1001, "Room is full").into());
+```
+
+The generated server carries such an error as `ServerError::Rpc`.
+A hand-written `MessageRouter` handler can return `ServerError::Rpc` too;
+the router applies the same code rule before sending it.
+
+This covers calls from the client to the server.
+Errors from the client's handlers for server-to-client calls keep their current form.
+
 ### Connection Security Defaults
 
 The generated builder produces a `WebSocketService`. Its defaults are tuned for
@@ -207,6 +226,9 @@ client
     })
     .await?;
 ```
+
+A call that fails with a JSON-RPC error returns `ClientError::Rpc(JsonRpcError)`,
+with the code, message and data the server sent.
 
 This macro does not currently generate OpenRPC. Use HTTP
 `jsonrpc_service!` when an OpenRPC document is required.

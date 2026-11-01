@@ -34,7 +34,7 @@ pub fn generate_static_hosting_code(
     let explorer_path_suffix = normalize_explorer_path(&config.explorer_path);
     let service_name_str = service_name.to_string();
     let service_name_lower = service_name_str.to_lowercase();
-    let openrpc_fn_name_str = ["generate_", &service_name_lower, "_openrpc"].concat();
+    let openrpc_fn_name_str = ["try_generate_", &service_name_lower, "_openrpc"].concat();
     let explorer_routes_fn_str = [&service_name_lower, "_explorer_routes"].concat();
     let openrpc_fn_name = syn::Ident::new(&openrpc_fn_name_str, service_name.span());
     let explorer_routes_fn = syn::Ident::new(&explorer_routes_fn_str, service_name.span());
@@ -75,9 +75,27 @@ pub fn generate_static_hosting_code(
                 }
             };
 
-            async fn serve_openrpc() -> Json<::serde_json::Value> {
-                let doc = #openrpc_fn_name();
-                Json(::serde_json::to_value(doc).unwrap())
+            // Built on first request and kept, failure included, so a failing
+            // example runs once. Authorization wraps this route, so an
+            // unauthorized request never reaches the cache.
+            async fn serve_openrpc() -> ::axum::response::Response {
+                use ::axum::response::IntoResponse;
+
+                static DOC: ::std::sync::OnceLock<
+                    ::std::result::Result<::serde_json::Value, ras_jsonrpc_types::SpecGenerationError>,
+                > = ::std::sync::OnceLock::new();
+
+                match DOC.get_or_init(#openrpc_fn_name) {
+                    Ok(doc) => Json(doc.clone()).into_response(),
+                    Err(error) => {
+                        ras_jsonrpc_core::tracing::error!(%error, "OpenRPC document could not be generated");
+                        (
+                            ::axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                            "OpenRPC document unavailable",
+                        )
+                            .into_response()
+                    }
+                }
             }
 
             ::axum::Router::new()

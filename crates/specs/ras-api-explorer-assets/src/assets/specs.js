@@ -1,6 +1,12 @@
+        // For display: a string is shown as its text.
         function jsonPretty(value) {
             if (typeof value === "string") return value;
             return JSON.stringify(value, null, 2);
+        }
+
+        // For a JSON editor: always valid JSON, so a string value keeps its quotes.
+        function jsonEditorText(value) {
+            return value === undefined ? "" : JSON.stringify(value, null, 2);
         }
 
         function normalizePermissions(value) {
@@ -32,7 +38,8 @@
                         pathParams: params.filter((param) => param.in === "path"),
                         queryParams: params.filter((param) => param.in === "query"),
                         requestSchema,
-                        responseSchema
+                        responseSchema,
+                        examples: normalizeRestExamples(operation)
                     });
                 });
             });
@@ -42,7 +49,10 @@
         function normalizeOpenRpc(spec) {
             return (spec.methods || []).map((method) => {
                 const auth = method["x-authentication"];
+                // The whole request: by-name methods list one descriptor per field,
+                // so `params[0]` is only the request for raw methods and older documents.
                 const param = Array.isArray(method.params) ? method.params[0] : null;
+                const paramsSchema = method["x-ras-params-schema"] || param?.schema || null;
                 return {
                     id: method.name,
                     protocol: "jsonrpc",
@@ -53,8 +63,9 @@
                     description: method.description || method.summary || "",
                     authRequired: Boolean(auth && auth.required !== false),
                     permissions: normalizePermissions(method["x-permissions"]),
-                    paramsSchema: param?.schema || null,
-                    responseSchema: method.result?.schema || null
+                    paramsSchema,
+                    responseSchema: method.result?.schema || null,
+                    examples: normalizeRpcExamples(method)
                 };
             });
         }

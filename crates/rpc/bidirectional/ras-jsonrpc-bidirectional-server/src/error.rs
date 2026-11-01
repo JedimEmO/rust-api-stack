@@ -3,10 +3,12 @@
 use axum::http::StatusCode;
 use ras_auth_core::AuthError;
 use ras_jsonrpc_bidirectional_types::BidirectionalError;
+use ras_jsonrpc_types::{HandlerErrorOutcome, JsonRpcError};
 use thiserror::Error;
 
 /// Server-specific errors for WebSocket operations
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ServerError {
     /// WebSocket upgrade failed
     #[error("WebSocket upgrade failed: {0}")]
@@ -51,6 +53,14 @@ pub enum ServerError {
     /// Permission denied
     #[error("Permission denied: {0}")]
     PermissionDenied(String),
+
+    /// An error a handler chose to send to the client, from a returned
+    /// `ras_jsonrpc_types::PublicRpcError`.
+    ///
+    /// It is sent as written when its code passes
+    /// `ras_jsonrpc_types::handler_code_allowed`, and as `-32603` otherwise.
+    #[error("JSON-RPC error {}: {}", .0.code, .0.message)]
+    Rpc(JsonRpcError),
 }
 
 impl ServerError {
@@ -72,7 +82,8 @@ impl ServerError {
             | ServerError::RoutingFailed(_)
             | ServerError::WebSocketError(_)
             | ServerError::ConnectionError(_)
-            | ServerError::Internal(_) => "Internal error",
+            | ServerError::Internal(_)
+            | ServerError::Rpc(_) => "Internal error",
         }
     }
 
@@ -89,8 +100,28 @@ impl ServerError {
             | ServerError::SerializationError(_)
             | ServerError::WebSocketError(_)
             | ServerError::ConnectionError(_)
-            | ServerError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            | ServerError::Internal(_)
+            | ServerError::Rpc(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
+    }
+
+    /// The wire error for [`ServerError::Rpc`], after the handler code rule;
+    /// `None` for every other variant.
+    ///
+    /// A reserved code is logged and replaced by `-32603`, so a hand-built
+    /// `ServerError::Rpc` cannot send what a handler may not.
+    pub fn public_rpc_error(&self) -> Option<JsonRpcError> {
+        let ServerError::Rpc(error) = self else {
+            return None;
+        };
+        let outcome = HandlerErrorOutcome::from_wire(error.clone());
+        if let HandlerErrorOutcome::ReservedCode(code) = outcome {
+            tracing::warn!(
+                code,
+                "handler returned a reserved JSON-RPC error code; sending -32603"
+            );
+        }
+        Some(outcome.into_error())
     }
 }
 

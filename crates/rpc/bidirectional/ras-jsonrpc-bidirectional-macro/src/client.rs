@@ -44,7 +44,7 @@ pub fn generate_client_code(
                     None => {
                         // Check if there was an error
                         if let Some(error) = response.error {
-                            Err(ras_jsonrpc_bidirectional_client::ClientError::internal(format!("JSON-RPC error: {}", error.message)))
+                            Err(ras_jsonrpc_bidirectional_client::ClientError::Rpc(error))
                         } else {
                             Err(ras_jsonrpc_bidirectional_client::ClientError::internal("Response has no result or error"))
                         }

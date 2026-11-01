@@ -90,7 +90,12 @@ fn jsonrpc_parse_params_code(
                     request.id.clone()
                 ),
             },
-            None => match serde_json::from_value(serde_json::Value::Null) {
+            // `params` left out. `()` and `Option` requests decode from `null`;
+            // a struct whose fields are all optional decodes from `{}`, which is
+            // the call its by-name OpenRPC descriptors permit.
+            None => match serde_json::from_value(serde_json::Value::Null)
+                .or_else(|_| serde_json::from_value(serde_json::Value::Object(Default::default())))
+            {
                 Ok(p) => p,
                 Err(e) => return ras_jsonrpc_types::JsonRpcResponse::error(
                     ras_jsonrpc_types::JsonRpcError::invalid_params(e.to_string()),
@@ -121,6 +126,7 @@ fn generate_jsonrpc_canonical_dispatch(method: &MethodDefinition) -> proc_macro2
     let params_ident = quote::format_ident!("params");
     let parse_params = jsonrpc_parse_params_code(&params_ident, request_type);
     let (auth_check, tracker_user) = jsonrpc_auth_check_code(&method.auth);
+    let handler_error = handler_error_response_code(&method_wire);
 
     let handler_call = match &method.auth {
         AuthRequirement::Unauthorized => quote! { self.service.#method_name(#params_ident).await },
@@ -155,10 +161,7 @@ fn generate_jsonrpc_canonical_dispatch(method: &MethodDefinition) -> proc_macro2
                         ),
                     }
                 }
-                Err(e) => ras_jsonrpc_types::JsonRpcResponse::error(
-                    ras_jsonrpc_types::JsonRpcError::internal_error(e.to_string()),
-                    request.id.clone()
-                ),
+                Err(e) => #handler_error,
             }
         }
     }
@@ -179,6 +182,7 @@ fn generate_jsonrpc_legacy_dispatch(
     let params_ident = quote::format_ident!("params");
     let parse_params = jsonrpc_parse_params_code(&legacy_params_ident, legacy_request_type);
     let (auth_check, tracker_user) = jsonrpc_auth_check_code(&method.auth);
+    let handler_error = handler_error_response_code(method_wire);
 
     let handler_call = match &method.auth {
         AuthRequirement::Unauthorized => quote! { self.service.#method_name(#params_ident).await },
@@ -231,11 +235,26 @@ fn generate_jsonrpc_legacy_dispatch(
                         ),
                     }
                 }
-                Err(e) => ras_jsonrpc_types::JsonRpcResponse::error(
-                    ras_jsonrpc_types::JsonRpcError::internal_error(e.to_string()),
-                    request.id.clone()
-                ),
+                Err(e) => #handler_error,
             }
+        }
+    }
+}
+
+/// Turns a handler's `Err(e)` into a response: a returned `PublicRpcError`
+/// with an allowed code is sent as written, everything else as `-32603`.
+fn handler_error_response_code(method_wire: &impl quote::ToTokens) -> proc_macro2::TokenStream {
+    quote! {
+        {
+            let outcome = ras_jsonrpc_types::HandlerErrorOutcome::from_handler_error(e.as_ref());
+            if let ras_jsonrpc_types::HandlerErrorOutcome::ReservedCode(code) = &outcome {
+                ras_jsonrpc_core::tracing::warn!(
+                    method = #method_wire,
+                    code = *code,
+                    "handler returned a PublicRpcError with a reserved code; sending -32603"
+                );
+            }
+            ras_jsonrpc_types::JsonRpcResponse::error(outcome.into_error(), request.id.clone())
         }
     }
 }

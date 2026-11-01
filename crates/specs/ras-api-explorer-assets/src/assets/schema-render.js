@@ -1,11 +1,13 @@
+        // `seen` holds the references on the current path, so a recursive type
+        // stops at its second appearance while siblings still get examples.
         function exampleFromSchema(schema, seen = new Set()) {
-            const resolved = resolveRef(schema);
-            if (!resolved) return {};
-            if (resolved.$ref) {
-                if (seen.has(resolved.$ref)) return {};
-                seen.add(resolved.$ref);
-                return exampleFromSchema(resolveRef(resolved), seen);
+            const ref = schemaRef(schema);
+            if (ref) {
+                if (seen.has(ref)) return {};
+                seen = new Set(seen).add(ref);
             }
+            const resolved = resolveRef(schema);
+            if (!resolved || resolved.$ref) return {};
             if (resolved.example !== undefined) return resolved.example;
             if (Array.isArray(resolved.examples) && resolved.examples.length) return resolved.examples[0];
             if (resolved.default !== undefined) return resolved.default;
@@ -20,7 +22,8 @@
             if (type === "boolean") return false;
             if (type === "array") return [exampleFromSchema(resolved.items, seen)];
             if (type === "object" || resolved.properties) {
-                const output = {};
+                // No prototype, so a property named `__proto__` becomes an own property.
+                const output = Object.create(null);
                 Object.entries(resolved.properties || {}).forEach(([key, prop]) => {
                     output[key] = exampleFromSchema(prop, seen);
                 });

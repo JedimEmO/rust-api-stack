@@ -7,6 +7,7 @@ async fn test_openrpc_generation() {
 
     assert_eq!(openrpc_doc["openrpc"], "1.3.2");
     assert_eq!(openrpc_doc["info"]["title"], "TestService JSON-RPC API");
+    ras_spec_conformance::assert_openrpc_conforms(&openrpc_doc);
 
     let methods = openrpc_doc["methods"].as_array().unwrap();
     assert_eq!(methods.len(), 11); // We have 11 methods defined

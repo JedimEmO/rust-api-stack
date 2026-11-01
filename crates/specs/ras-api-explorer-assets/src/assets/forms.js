@@ -22,7 +22,11 @@
                     const input = document.createElement("input");
                     input.placeholder = param.description || param.name;
                     input.dataset[kind === "path" ? "pathParam" : "queryParam"] = param.name;
-                    input.addEventListener("input", updateRequestUrl);
+                    input.addEventListener("input", () => {
+                        // Typing decides presence: an emptied field is left out.
+                        input.dataset.present = input.value === "" ? "false" : "true";
+                        updateRequestUrl();
+                    });
                     const type = document.createElement("span");
                     type.className = "badge";
                     type.textContent = schemaType(param.schema);
@@ -33,7 +37,7 @@
                 fragment.appendChild(group);
             });
             if (operation.requestSchema) {
-                fragment.appendChild(editorBlock("JSON body", "body-editor", jsonPretty(exampleFromSchema(operation.requestSchema))));
+                fragment.appendChild(editorBlock("JSON body", "body-editor", jsonEditorText(exampleFromSchema(operation.requestSchema))));
                 const docs = renderSchemaDocs("Request schema", operation.requestSchema);
                 if (docs) fragment.appendChild(docs);
             }
@@ -73,7 +77,7 @@
             grid.append(idField, methodField);
             fragment.appendChild(grid);
             if (operation.paramsSchema) {
-                fragment.appendChild(editorBlock("Params", "params-editor", jsonPretty(exampleFromSchema(operation.paramsSchema))));
+                fragment.appendChild(editorBlock("Params", "params-editor", jsonEditorText(exampleFromSchema(operation.paramsSchema))));
                 const docs = renderSchemaDocs("Params schema", operation.paramsSchema);
                 if (docs) fragment.appendChild(docs);
             } else {
@@ -126,7 +130,10 @@
                 auth.appendChild(badge);
             });
             form.appendChild(auth);
+            const examples = renderExamples(operation);
+            if (examples) form.appendChild(examples);
             form.appendChild(operation.protocol === "rest" ? renderRestForm(operation) : renderRpcForm(operation));
+            applyDefaultExample(operation);
             updateRequestUrl();
         }
 

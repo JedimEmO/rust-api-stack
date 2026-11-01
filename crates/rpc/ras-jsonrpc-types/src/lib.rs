@@ -5,6 +5,10 @@
 
 use serde::{Deserialize, Serialize};
 
+mod handler_error;
+pub use handler_error::{HandlerErrorOutcome, PublicRpcError, handler_code_allowed};
+pub use ras_spec_components::SpecGenerationError;
+
 /// JSON-RPC 2.0 request structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcRequest {
@@ -15,12 +19,43 @@ pub struct JsonRpcRequest {
     pub method: String,
 
     /// Parameters for the method call.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    ///
+    /// `None` when the field is missing. An explicit `"params": null` is
+    /// `Some(Value::Null)`, so the two can be told apart.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub params: Option<serde_json::Value>,
 
     /// Request identifier for matching responses.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    ///
+    /// `None` when the field is missing, which makes the request a
+    /// notification: the server runs it and sends no response. An explicit
+    /// `"id": null` is `Some(Value::Null)`, a request answered with `"id": null`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub id: Option<serde_json::Value>,
+}
+
+impl JsonRpcRequest {
+    /// Whether this is a notification: a request without an `id` field,
+    /// which gets no response.
+    pub fn is_notification(&self) -> bool {
+        self.id.is_none()
+    }
+}
+
+/// Wraps any present value, `null` included, in `Some`; `default` covers a missing field.
+fn deserialize_present<'de, D>(deserializer: D) -> Result<Option<serde_json::Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde_json::Value::deserialize(deserializer).map(Some)
 }
 
 /// JSON-RPC 2.0 response structure.
@@ -38,12 +73,14 @@ pub struct JsonRpcResponse {
     pub error: Option<JsonRpcError>,
 
     /// Request identifier for matching with requests.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    ///
+    /// Always serialized, as `null` when the request's id is unknown or `null`,
+    /// because JSON-RPC 2.0 requires the member in every response.
     pub id: Option<serde_json::Value>,
 }
 
 /// JSON-RPC 2.0 error structure.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JsonRpcError {
     /// Error code indicating the type of error.
     pub code: i32,
@@ -222,6 +259,46 @@ impl JsonRpcError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_and_null_ids_are_distinct() {
+        let notification: JsonRpcRequest =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","method":"m"}"#).unwrap();
+        assert!(notification.is_notification());
+
+        let null_id: JsonRpcRequest =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","method":"m","id":null}"#).unwrap();
+        assert!(!null_id.is_notification());
+        assert_eq!(null_id.id, Some(serde_json::Value::Null));
+    }
+
+    #[test]
+    fn responses_always_carry_an_id() {
+        let response = JsonRpcResponse::error(JsonRpcError::parse_error(), None);
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json.get("id"), Some(&serde_json::Value::Null));
+    }
+
+    #[test]
+    fn missing_and_null_params_are_distinct() {
+        let missing: JsonRpcRequest =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","method":"m","id":1}"#).unwrap();
+        assert_eq!(missing.params, None);
+
+        let null: JsonRpcRequest =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","method":"m","params":null,"id":1}"#).unwrap();
+        assert_eq!(null.params, Some(serde_json::Value::Null));
+        assert_eq!(
+            serde_json::to_value(&null).unwrap()["params"],
+            serde_json::Value::Null
+        );
+        assert!(
+            serde_json::to_value(&missing)
+                .unwrap()
+                .get("params")
+                .is_none()
+        );
+    }
 
     #[test]
     fn jsonrpc_request_constructor_sets_version() {

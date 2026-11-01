@@ -1,0 +1,46 @@
+[package]
+name = "compile-fixture-edition2018"
+version = "0.0.0"
+# 2018 on purpose: the generated document code, including the embedded
+# ras-spec-components source, must compile in the oldest edition a consumer uses.
+edition = "2018"
+rust-version = "1.88"
+description = "Compile fixture: both service macros with examples in an edition-2018 consumer"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JedimEmO/rust-api-stack"
+homepage = "https://github.com/JedimEmO/rust-api-stack"
+publish = false
+readme = "README.md"
+
+[features]
+default = []
+server = [
+    "dep:axum",
+    "dep:axum-extra",
+    "dep:async-trait",
+    "dep:ras-auth-core",
+    "dep:ras-jsonrpc-core",
+    "dep:ras-rest-core",
+]
+client = ["dep:ras-transport-core"]
+# `feature_gated` services also look for the consumer's `reqwest` feature.
+reqwest = ["client", "ras-transport-core?/reqwest"]
+
+[dependencies]
+ras-jsonrpc-macro = { path = "../../../crates/rpc/ras-jsonrpc-macro", version = "0.4.0", default-features = false }
+ras-rest-macro = { path = "../../../crates/rest/ras-rest-macro", version = "0.4.0", default-features = false }
+ras-jsonrpc-types = { path = "../../../crates/rpc/ras-jsonrpc-types", version = "0.3.0" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true }
+# Workspace builds unify the macros' `permissions` feature, which generates
+# permission-manifest code, as in the example API crates.
+ras-permission-manifest = { path = "../../../crates/specs/ras-permission-manifest", version = "0.1.0" }
+
+ras-jsonrpc-core = { path = "../../../crates/rpc/ras-jsonrpc-core", version = "0.3.0", optional = true }
+ras-rest-core = { path = "../../../crates/rest/ras-rest-core", version = "0.2.1", optional = true }
+ras-auth-core = { path = "../../../crates/core/ras-auth-core", version = "0.3.0", optional = true }
+ras-transport-core = { path = "../../../crates/core/ras-transport-core", version = "0.2.0", optional = true }
+axum = { workspace = true, optional = true }
+axum-extra = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }

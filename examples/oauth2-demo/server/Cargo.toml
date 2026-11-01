@@ -17,9 +17,9 @@ client = ["oauth2-demo-api/client"]
 [dependencies]
 oauth2-demo-api = { path = "../api", version = "0.1.0", features = ["server"] }
 # JSON-RPC infrastructure
-ras-jsonrpc-macro = { path = "../../../crates/rpc/ras-jsonrpc-macro", version = "0.3.0" }
-ras-jsonrpc-core = { path = "../../../crates/rpc/ras-jsonrpc-core", version = "0.2.0" }
-ras-jsonrpc-types = { path = "../../../crates/rpc/ras-jsonrpc-types", version = "0.2.0" }
+ras-jsonrpc-macro = { path = "../../../crates/rpc/ras-jsonrpc-macro", version = "0.4.0" }
+ras-jsonrpc-core = { path = "../../../crates/rpc/ras-jsonrpc-core", version = "0.3.0" }
+ras-jsonrpc-types = { path = "../../../crates/rpc/ras-jsonrpc-types", version = "0.3.0" }
 
 # Identity management
 ras-identity-core = { path = "../../../crates/core/ras-identity-core", version = "0.1.1" }

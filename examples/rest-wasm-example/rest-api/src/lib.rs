@@ -64,7 +64,26 @@ rest_service!({
     endpoints: [
         // Public endpoints
         GET UNAUTHORIZED users() -> UsersResponse,
-        GET UNAUTHORIZED users/{id: String}() -> User,
+        /// Look up one user by id.
+        GET UNAUTHORIZED users/{id: String}() -> User {
+            examples: [
+                /// An existing user.
+                alice {
+                    path: { id: "user-1".to_string() },
+                    response: User {
+                        id: "user-1".to_string(),
+                        name: "Alice".to_string(),
+                        email: "alice@example.com".to_string(),
+                        role: "admin".to_string(),
+                    },
+                },
+                /// An id that matches no user.
+                unknown {
+                    path: { id: "user-404".to_string() },
+                    error: { status: 404, message: "User not found" },
+                },
+            ],
+        },
 
         // Admin endpoints
         POST WITH_PERMISSIONS(["admin"]) users(CreateUserRequest) -> User,
@@ -78,7 +97,16 @@ rest_service!({
         DELETE WITH_PERMISSIONS(["user"]) users/{user_id: String}/tasks/{task_id: String}() -> (),
 
         // New endpoints with query parameters for pagination and search
-        GET UNAUTHORIZED search/users ? q: String & limit: Option<u32> & offset: Option<u32> () -> UsersResponse,
+        /// Search users by name.
+        GET UNAUTHORIZED search/users ? q: String & limit: Option<u32> & offset: Option<u32> () -> UsersResponse {
+            examples: [
+                /// The first page of matches, at most ten.
+                first_page {
+                    query: { q: "ali".to_string(), limit: Some(10) },
+                    response: UsersResponse { users: vec![], total: 0 },
+                },
+            ],
+        },
         GET WITH_PERMISSIONS(["user"]) users/{user_id: String}/tasks/search ? completed: Option<bool> & page: Option<u32> & per_page: Option<u32> () -> TasksResponse,
     ]
 });

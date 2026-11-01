@@ -169,7 +169,8 @@ pub fn generate_client_code(service_def: &ServiceDefinition) -> proc_macro2::Tok
                         .and_then(|m| m.as_str())
                         .map(|s| s.to_string())
                         .unwrap_or_else(|| error.to_string());
-                    return Err(::ras_transport_core::TransportError::JsonRpc { code, message });
+                    let data = error.get("data").cloned();
+                    return Err(::ras_transport_core::TransportError::JsonRpc { code, message, data });
                 }
 
                 // No JSON-RPC error: surface any non-success HTTP status.
