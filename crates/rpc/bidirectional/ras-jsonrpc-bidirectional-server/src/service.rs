@@ -664,6 +664,12 @@ mod tests {
                 _ => panic!("timed out waiting for refusals"),
             }
         }
+        // An admitted connection takes its permit before it registers with the
+        // manager, so the last refusal can arrive before the last registration.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while manager.connection_count() < CAP && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
         assert_eq!(manager.connection_count(), CAP, "never more than the cap");
 
         release_tx.send(true).unwrap();
