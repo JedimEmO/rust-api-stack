@@ -209,11 +209,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Build the router
     let app = DocumentServiceBuilder::new(service)
         .auth_provider(auth)
-        .with_usage_tracker(|_headers, method, path| {
-            println!("Request: {} {}", method, path);
+        .with_usage_tracker(|_headers, user, method, path| {
+            let user = user.map_or("anonymous", |user| user.user_id.as_str());
+            println!("Request: {method} {path} by {user}");
+            async {}
         })
-        .with_duration_tracker(|method, path, duration| {
-            println!("Request {} {} took {:?}", method, path, duration);
+        .with_method_duration_tracker(|method, path, _user, duration, success| {
+            let outcome = if success { "succeeded" } else { "failed" };
+            println!("Request {method} {path} {outcome} in {duration:?}");
+            async {}
         })
         .build()
         .layer(TraceLayer::new_for_http());

@@ -1,4 +1,19 @@
-//! Local user identity provider with username/password authentication.
+//! A username and password identity provider with Argon2id password hashes.
+//!
+//! [`LocalUserProvider`] implements `ras_identity_core::IdentityProvider` under the provider
+//! ID `"local"`. Register it with `ras-identity-session` to turn a correct password into a
+//! JWT session. Users are held in memory, added with [`LocalUserProvider::add_user`]; there
+//! is no persistence, so this suits demos, tests and services that seed users at startup.
+//!
+//! Every failed login returns `IdentityError::InvalidCredentials`, and an unknown user is
+//! checked against a fixed Argon2 hash so it costs about as much as a wrong password.
+//! Passwords over [`MAX_PASSWORD_BYTES`] are refused before hashing, and at most five
+//! verifications run at once. There is no rate limit, lockout or password policy.
+//!
+//! The `timing-tests` Cargo feature enables timing-sensitive tests for this crate's own
+//! test suite. See the
+//! [README](https://github.com/JedimEmO/rust-api-stack/blob/master/crates/identity/ras-identity-local/README.md)
+//! for usage and the hashing parameters.
 
 use argon2::{
     Argon2,
@@ -14,14 +29,14 @@ use std::fmt;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-/// Maximum accepted password length in bytes (I4). Longer inputs are rejected before
+/// Maximum accepted password length in bytes. Longer inputs are rejected before
 /// hashing so a client cannot make the server burn Argon2 time on multi-megabyte inputs.
 pub const MAX_PASSWORD_BYTES: usize = 1024;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct LocalUser {
     pub username: String,
-    /// Argon2 PHC string. Never serialized (I1a); still required on deserialize.
+    /// Argon2 PHC string. Never serialized; still required on deserialize.
     #[serde(skip_serializing)]
     pub password_hash: String,
     pub email: Option<String>,
@@ -48,7 +63,7 @@ pub struct LocalAuthPayload {
     pub password: String,
 }
 
-/// Redacting `Debug` so the plaintext password never lands in logs (I2).
+/// Redacting `Debug` so the plaintext password never lands in logs.
 impl fmt::Debug for LocalAuthPayload {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalAuthPayload")

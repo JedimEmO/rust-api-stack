@@ -1,119 +1,55 @@
-# Bidirectional Chat Server Integration Tests
+# Bidirectional chat server tests
 
-This directory contains focused integration tests for the bidirectional chat server. The tests are organized into two files:
+Integration tests for the [chat server](../README.md).
+They call `build_application` with explicit configuration, an in-memory identity provider
+and a temporary data directory, so they run in parallel without touching your local `chat_data`.
 
-## Test Files
+## `server_tests.rs`
 
-### `server_tests.rs`
-Basic server functionality and configuration tests:
-- **Configuration Tests**: Validates default values, configuration parsing, and validation logic
-- **Example Config Test**: Loads `../config.example.toml` and verifies its JWT secret works with session creation
-- **Persistence Tests**: Tests the persistence layer for storing and loading chat state
-- **Server Lifecycle**: Tests in-memory server startup and health checks
-- **Rate Limiting Configuration**: Validates rate limiting settings
-- **CORS Configuration**: Tests CORS settings and validation
-- **Logging Configuration**: Validates logging settings
+Configuration, persistence and startup:
 
-### `auth_lifecycle_tests.rs`
-Chat server auth and lifecycle tests:
-- **Server Lifecycle**: Tests in-memory server startup and health checks
-- **User Authentication**: Tests login with valid, invalid, and missing credentials
-- **User Registration**: Tests new user registration, duplicate rejection, and login after registration
-- **Admin Permissions**: Tests admin vs regular user permissions in JWT claims
-- **Concurrent Users**: Tests multiple users logging in simultaneously
+- default values, configuration validation and invalid values
+- loading `../config.example.toml` and creating a session service with its JWT secret
+- room, admin, rate-limit, CORS and logging settings
+- the persistence layer: saving and reloading server state and room messages
+- startup and the health check through the `axum-test` mock transport
+- one router-level test that binds a local port, registers and signs in over REST,
+  connects to `/ws` with the generated client, and checks persisted messages and disconnect cleanup
 
-### `../src/chat/tests.rs` Unit Tests
-Socketless WebSocket flow tests for the real chat server implementation:
-- **Generated WebSocket Dispatch**: Runs the generated `ChatServiceHandler` through the in-memory `WebSocketIo` adapter
-- **Room Join Flow**: Verifies an authenticated client can join the default room
-- **Message Broadcast Flow**: Verifies `send_message` emits both the JSON-RPC response and `message_received` notification without binding a socket
-- **Multi-user Broadcast Flow**: Verifies a message from one authenticated user is delivered to multiple room members through the in-memory connection manager
-- **Room Presence Flow**: Verifies `list_rooms` user counts and `leave_room` notifications across multiple authenticated connections
-- **Profile Management Flow**: Verifies profile read/update behavior and multi-word cat avatar persistence through the generated handler
-- **Admin Operation Flow**: Verifies generated permission enforcement, moderator kicks, and admin announcements without binding a socket
-- **Disconnect Cleanup Flow**: Verifies typing state, room membership, and user-left notifications are cleaned up on disconnect
-- **Request Error Recovery Flow**: Verifies the in-memory WebSocket handler sends a JSON-RPC error response and continues processing later requests
-- **Message Rate Limit Flow**: Verifies `messages_per_minute` rejects excess `send_message` calls without closing the in-memory connection
+## `auth_lifecycle_tests.rs`
 
-## Running the Tests
+Login, registration and permissions through the real REST handlers:
 
-Run all tests:
+- login with valid, invalid and missing credentials
+- registration, duplicate usernames and login after registration
+- admin and regular-user permissions in the JWT claims
+- several users signing in at the same time
+
+## WebSocket flow tests
+
+The unit tests in [`../src/chat/tests.rs`](../src/chat/tests.rs) run the generated `ChatServiceHandler`
+against the real `ChatServer`, through the in-memory `WebSocketIo` adapter and connection manager.
+No socket is bound. They cover:
+
+- joining a room and broadcasting a message to every member
+- `list_rooms` user counts and `leave_room` notifications
+- reading and updating profiles, including multi-word cat avatar values
+- permission checks, moderator kicks and admin announcements
+- cleaning up typing state and room membership on disconnect
+- an error response followed by a successful request on the same connection
+- the per-user `messages_per_minute` limit
+
+## Running them
+
 ```bash
 cargo test -p bidirectional-chat-server --all-targets --all-features --locked
-```
-
-Run only server configuration tests:
-```bash
 cargo test -p bidirectional-chat-server --test server_tests --locked
-```
-
-Run only auth lifecycle tests:
-```bash
 cargo test -p bidirectional-chat-server --test auth_lifecycle_tests --locked
-```
-
-Run a specific test:
-```bash
 cargo test -p bidirectional-chat-server --locked test_user_authentication
 ```
 
-## Test Coverage
+## Not covered
 
-The tests cover the following areas:
-
-1. **Server Startup and Configuration**
-   - Configuration file parsing and validation
-   - Example config loading
-   - Default value handling
-   - Invalid configuration detection
-
-2. **User Registration and Login**
-   - New user registration
-   - Duplicate username rejection
-   - Login after registration
-   - Login with credentials
-   - Invalid credential handling
-   - Concurrent user sessions
-
-3. **Authorization**
-   - Admin permission assignment
-   - Regular user permission assignment
-   - Permission-bearing JWT claims
-
-4. **WebSocket Message Flow**
-   - Socketless generated handler dispatch
-   - Authenticated room join
-   - Message response and notification emission
-   - Multi-user room broadcast through the in-memory connection manager
-   - Multi-user room list and leave presence updates
-   - Profile update/readback with multi-word avatar fields
-   - Moderator kick and admin announcement notifications
-   - Typing-state and room cleanup on disconnect
-   - Request error response followed by a successful request on the same in-memory connection
-   - Per-user chat message rate limiting
-
-5. **Persistence**
-   - Message persistence to disk
-   - Room state persistence
-   - State recovery after restart
-
-6. **Error Cases and Edge Conditions**
-   - Invalid configuration values
-   - Authentication failures
-   - Concurrent access scenarios
-
-## Test Architecture
-
-The tests exercise the library application and its local state owners:
-- `server_tests.rs` covers configuration and persistence, calls `build_application` for startup checks, and exercises an authenticated WebSocket session through the production router.
-- `auth_lifecycle_tests.rs` calls `build_application` with explicit configuration and an in-memory identity provider, then tests production login, registration, and permission assignment.
-- The `../src/chat/tests.rs` WebSocket unit tests exercise the real `ChatServer` through the generated handler, in-memory socket adapter, and in-memory connection manager.
-- HTTP-only checks use `axum-test` mock transport; the router-level WebSocket check binds an ephemeral local port and verifies persisted messages and disconnect cleanup.
-- Both suites create temporary directories for runtime data and support concurrent test execution.
-
-## Known Coverage Gaps
-
-Areas for additional test coverage:
-1. Deployment-level connection and login-attempt rate limiting hooks; configuration validation is covered, but the chat service currently enforces only per-user message limits
-2. Reconnection behavior beyond disconnect cleanup
-3. Performance and load testing
+- connection and login-attempt rate limits, which the server validates but does not enforce
+- reconnecting after a disconnect
+- performance and load

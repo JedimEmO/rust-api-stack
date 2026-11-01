@@ -1,7 +1,7 @@
-# 1. Design The Contract
+# Design the contract
 
-Start with workflows, not with Axum routes or database tables. Write down what
-clients need to do and which operations need identity.
+Start with workflows, not with Axum routes or database tables.
+Write down what clients need to do, and which operations need to know who is calling.
 
 For the team workspace, the first pass looks like this:
 
@@ -12,10 +12,10 @@ For the team workspace, the first pass looks like this:
 | live task activity | [`jsonrpc_bidirectional_service!`](../macros/bidirectional-jsonrpc-service.md) | typed WebSocket notifications |
 | command-heavy workflows | [`jsonrpc_service!`](../macros/jsonrpc-service.md) | optional alternative for RPC-style APIs |
 
-## Name Permissions Early
+## Name permissions early
 
-Permissions should be stable application concepts, not incidental handler
-details. Good permission names usually describe the capability:
+Permissions should be stable application concepts, not incidental handler details.
+A good permission name describes a capability:
 
 ```text
 project:read
@@ -34,18 +34,18 @@ POST WITH_PERMISSIONS(["task:write"]) projects/{project_id: String}/tasks(Create
 DELETE WITH_PERMISSIONS(["admin"] | ["project:owner"]) projects/{project_id: String}() -> (),
 ```
 
-`WITH_PERMISSIONS(["a", "b"])` means the authenticated user needs both
-permissions. `WITH_PERMISSIONS(["a"] | ["b", "c"])` means either the first group
-or the second group is enough. `WITH_PERMISSIONS([])` means authenticated, with
-no extra permission requirement. `UNAUTHORIZED` is fully public, and
-`OPTIONAL_AUTH` is public but hands the handler a `Caller` so it can tailor the
-response when a valid credential is present (see
-[Auth In The API Contract](../auth-in-api-contract.md)).
+`WITH_PERMISSIONS(["a", "b"])` means the authenticated user needs both permissions.
+`WITH_PERMISSIONS(["a"] | ["b", "c"])` means either group is enough.
+`WITH_PERMISSIONS([])` means any authenticated user, with no specific permission.
+`UNAUTHORIZED` is fully public.
+`OPTIONAL_AUTH` is public too, but hands the handler a `Caller`,
+so it can tailor the response when a valid credential is present.
+[Auth in the API contract](../auth-in-api-contract.md) has the details.
 
-## Keep DTOs Boring
+## Keep DTOs boring
 
-DTOs should be explicit, serializable, and independent of storage models. Avoid
-exposing database-specific fields just because they exist.
+DTOs should be explicit, serializable and independent of storage models.
+Do not expose database-specific fields just because they exist.
 
 ```rust,ignore
 #[cfg(feature = "server")]
@@ -78,10 +78,11 @@ pub struct CreateTaskRequest {
 }
 ```
 
-The `JsonSchema` derive is gated because only server/spec generation needs it.
-Shared serialization stays available with no transport feature enabled.
+The `JsonSchema` derive is gated on the `server` feature,
+because only the server side generates the OpenAPI documents.
+Serialization stays available with no transport feature enabled.
 
-## Sketch The Service
+## Sketch the service
 
 A REST task service definition can stay close to the client workflow:
 
@@ -101,15 +102,15 @@ rest_service!({
 });
 ```
 
-At this point you have made the most important design decisions: operation
-names, path parameters, request/response types, and auth requirements. The
-server implementation can change later without changing this contract.
+At this point you have made the most important design decisions:
+operation names, path parameters, request and response types, and auth requirements.
+The server implementation can change later without changing this contract.
 
-## Show A Request That Works
+## Show a request that works
 
-The schemas say what a request may contain. A reader of the generated docs also
-wants to see one request that works, and what comes back. Add examples to the
-operations people will try first:
+The schemas say what a request may contain.
+A reader of the generated docs also wants to see one request that works, and what comes back.
+Add examples to the operations people will try first:
 
 ```rust,ignore
 POST WITH_PERMISSIONS(["task:write"]) projects/{project_id: String}/tasks(CreateTaskRequest) -> Task {
@@ -117,21 +118,36 @@ POST WITH_PERMISSIONS(["task:write"]) projects/{project_id: String}/tasks(Create
         /// A task with a title only.
         minimal {
             path: { project_id: "proj-1".to_string() },
-            body: CreateTaskRequest { title: "Write the launch notes".to_string() },
-            response: Task { id: "task-1".to_string(), title: "Write the launch notes".to_string() },
+            body: CreateTaskRequest {
+                title: "Write the launch notes".to_string(),
+                assignee_id: None,
+            },
+            status: 201,
+            response: Task {
+                id: "task-1".to_string(),
+                project_id: "proj-1".to_string(),
+                title: "Write the launch notes".to_string(),
+                status: TaskStatus::Open,
+                assignee_id: None,
+            },
         },
         /// The project does not exist.
         unknown_project {
             path: { project_id: "proj-404".to_string() },
-            body: CreateTaskRequest { title: "Write the launch notes".to_string() },
+            body: CreateTaskRequest {
+                title: "Write the launch notes".to_string(),
+                assignee_id: None,
+            },
             error: { status: 404, message: "Project not found" },
         },
     ],
 },
 ```
 
-The examples are typed Rust values, so they keep compiling only while they match
-the contract. They appear in the OpenAPI document and in the API explorer, where
-"Use" fills in the request. The [`rest_service!` guide](../macros/rest-service.md#examples)
-lists the rules.
+The examples are typed Rust values, so they compile only while they match the contract.
+They appear in the OpenAPI document and in the API explorer, where "Use" fills in the request.
+A success example states its status when it is not 200;
+the handler in a later chapter answers this request with `201 Created`.
+An error example gives the status and message the handler's `RestError` carries.
+The [`rest_service!` guide](../macros/rest-service.md#examples) lists the rules.
 

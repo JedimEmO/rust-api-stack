@@ -18,7 +18,7 @@ pub struct AuthorizationRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthorizationResponse {
     /// Authorization code; absent when the provider redirected back with an
-    /// `error` (e.g. `access_denied`) instead (I5).
+    /// `error` (e.g. `access_denied`) instead.
     #[serde(default)]
     pub code: Option<String>,
     pub state: String,

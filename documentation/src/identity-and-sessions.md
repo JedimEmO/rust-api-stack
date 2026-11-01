@@ -1,66 +1,95 @@
-# Identity And Sessions
+# Identity and sessions
 
-RAS separates service-level authorization from identity-provider concerns. The
-service macros ask an `AuthProvider` to authenticate credentials and check
-permissions. The identity crates help build those credentials and permission
-sets.
+A generated service only needs to answer one question per request:
+which user does this token belong to, and what may they do?
+It asks an `AuthProvider` from `ras-auth-core`.
+The identity crates answer the questions before that one:
+how a user proves who they are, and how that proof becomes a token.
 
-## Core Pieces
+## The crates
 
-- `ras-auth-core` defines `AuthProvider`, `AuthenticatedUser`, `AuthError`,
-  bearer/cookie transport helpers, and CSRF configuration.
-- `ras-identity-core` defines identity-provider traits.
-- `ras-identity-local` provides username/password verification with Argon2.
-- `ras-identity-oauth2` provides OAuth2 with PKCE support.
-- `ras-identity-session` issues and verifies JWT sessions and can attach
-  permissions to authenticated identities.
+- `ras-auth-core` defines `AuthProvider`, `AuthenticatedUser`, `AuthError`, `Caller`,
+  the bearer and cookie transport helpers, and `CsrfConfig`.
+- `ras-identity-core` defines `IdentityProvider`, which verifies a login,
+  and `UserPermissions`, which maps a verified identity to permissions.
+- `ras-identity-local` verifies usernames and passwords against Argon2id hashes held in memory.
+- `ras-identity-oauth2` runs the OAuth2 authorization-code flow with PKCE, state and login-CSRF binding.
+- `ras-identity-session` issues and verifies HMAC-signed JWTs,
+  and its `JwtAuthProvider` implements `AuthProvider` on top of them.
 
-## Typical Flow
+## Typical flow
 
-1. A public endpoint such as `sign_in` or an OAuth2 callback verifies an
-   identity.
-2. The application creates a JWT session through the session crate.
-3. Protected generated services receive bearer tokens or configured secure
-   cookies.
-4. The generated service calls the configured `AuthProvider`.
-5. Handler methods receive `&AuthenticatedUser` only after auth succeeds.
+1. A public endpoint, such as `sign_in` or an OAuth2 callback,
+   passes the login payload to `SessionService::begin_session`.
+2. The session service asks the registered `IdentityProvider` to verify it,
+   asks the `UserPermissions` source for permissions, and returns a signed JWT.
+3. The client sends the JWT as a bearer token or in a secure cookie.
+4. The generated service passes it to the configured `AuthProvider`,
+   which is `JwtAuthProvider` in this setup.
+5. A `WITH_PERMISSIONS` handler runs only after authentication and the permission check succeed,
+   and receives `&AuthenticatedUser`.
+   An `OPTIONAL_AUTH` handler always runs, and receives a `Caller`.
 
 ```rust,ignore
-let jwt_auth = JwtAuthProvider::new(Arc::new(session_service));
+let session_service = Arc::new(SessionService::new(session_config)?);
+let jwt_auth = JwtAuthProvider::new(session_service.clone());
 
 let app = UserServiceBuilder::new(UserServiceImpl)
     .auth_provider(jwt_auth)
     .build();
 ```
 
+The permissions are copied into the JWT when the session begins.
+They are not reloaded on each request,
+so a permission change reaches a user at their next login,
+or sooner if you end their session.
+
+## Sessions and revocation
+
+`SessionConfig::new(secret, issuer, audience)` requires a secret of at least 32 bytes,
+and rejects secrets that look like placeholders.
+Tokens expire after 24 hours unless you set `jwt_ttl`.
+
+By default `enforce_active_sessions` is on:
+the service records each session's `jti` in memory,
+and `verify_session` rejects a token whose `jti` is not there.
+That is what makes `end_session(jti)` revoke a token at once.
+It also means sessions belong to one process.
+A restart logs every user out,
+and a second instance rejects tokens the first one issued.
+Turn the setting off to accept any valid, unexpired token on any instance,
+at the cost of revocation: a token then stays valid until it expires.
+
 ## Permissions
 
-Permissions are ordinary strings stored on `AuthenticatedUser`. The default
-`AuthProvider::check_permissions` requires all permissions in a group. Override
-it when permissions are tenant-aware, role-derived, time-bound, or backed by an
-external policy service.
+Permissions are plain strings stored on `AuthenticatedUser`.
+A `WITH_PERMISSIONS` requirement is a list of groups;
+the user must hold every permission in at least one group.
+The default `AuthProvider::check_permissions` does the per-group check.
+Override it when permissions are tenant-aware, role-derived, time-bound,
+or held by an external policy service.
 
-Use `WITH_PERMISSIONS([])` when an operation only needs a logged-in user and no
-specific permission.
+Use `WITH_PERMISSIONS([])` when an operation needs a signed-in user and no specific permission.
 
-## Secure Browser Sessions
+## Browser sessions
 
-Browser-facing services can use secure `HttpOnly` cookies instead of manually
-placing bearer tokens in JavaScript. Cookie auth is not two independent knobs:
-because the browser attaches cookies automatically, cookie credentials are
-**always** paired with CSRF protection. Calling `.auth_cookie(...)` installs a
-default double-submit `CsrfConfig` for you, and a transport that enables cookies
-without a CSRF config fails to `build()`. Override the default with
-`.csrf_protection(...)` if you need a session-bound token or a custom header, but
-there is deliberately no builder path to cookie auth without CSRF.
+A browser client can carry the JWT in a secure `HttpOnly` cookie
+instead of keeping a bearer token where JavaScript can read it.
+The browser attaches that cookie to cross-site requests too,
+so cookie auth always comes with CSRF protection.
+Calling `.auth_cookie(...)` on a generated builder installs a default double-submit `CsrfConfig`,
+and `build()` refuses a transport that has cookies without a CSRF config:
+the REST and file builders panic, and the JSON-RPC builder returns an error.
+Override the default with `.csrf_protection(...)` to use a custom header or cookie name.
 
-`CsrfConfig` also offers two weaker modes, `dangerous_header_presence_only(...)`
-and `dangerous_static_value(...)`. They are named that way on purpose: neither
-binds the CSRF token to the session, and pairing either with cookie auth emits a
-`tracing::warn!` at startup. Prefer the default double-submit cookie.
+`CsrfConfig` also has two weaker modes,
+`dangerous_header_presence_only(...)` and `dangerous_static_value(...)`.
+Neither binds the CSRF token to the session,
+and pairing either with cookie auth logs a `tracing::warn!`.
+Prefer the default double-submit cookie.
 
-CSRF is enforced only for cookie credentials on unsafe methods (`POST`, `PUT`,
-`PATCH`, `DELETE`). Bearer tokens and safe methods remain exempt.
+CSRF is enforced only for cookie credentials on unsafe methods (`POST`, `PUT`, `PATCH`, `DELETE`).
+Bearer tokens and safe methods are exempt.
 
-See the OAuth2 example in
-[examples/oauth2-demo](https://github.com/JedimEmO/rust-api-stack/tree/master/examples/oauth2-demo).
+The [OAuth2 example](https://github.com/JedimEmO/rust-api-stack/tree/master/examples/oauth2-demo)
+puts these pieces together with Google sign-in.

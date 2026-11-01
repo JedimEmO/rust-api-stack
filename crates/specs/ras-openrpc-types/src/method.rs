@@ -92,7 +92,9 @@ pub struct Method {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum TagOrReference {
+    /// An inline Tag Object.
     Tag(Tag),
+    /// A `$ref` to a Tag Object in `components`.
     Reference(Reference),
 }
 
@@ -100,7 +102,9 @@ pub enum TagOrReference {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ContentDescriptorOrReference {
+    /// An inline Content Descriptor Object.
     ContentDescriptor(Box<ContentDescriptor>),
+    /// A `$ref` to a Content Descriptor Object in `components`.
     Reference(Reference),
 }
 
@@ -108,7 +112,9 @@ pub enum ContentDescriptorOrReference {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ErrorOrReference {
+    /// An inline Error Object.
     Error(ErrorObject),
+    /// A `$ref` to a Error Object in `components`.
     Reference(Reference),
 }
 
@@ -116,7 +122,9 @@ pub enum ErrorOrReference {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum LinkOrReference {
+    /// An inline Link Object.
     Link(Box<Link>),
+    /// A `$ref` to a Link Object in `components`.
     Reference(Reference),
 }
 
@@ -124,7 +132,9 @@ pub enum LinkOrReference {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ExamplePairingOrReference {
+    /// An inline Example Pairing Object.
     ExamplePairing(Box<ExamplePairing>),
+    /// A `$ref` to a Example Pairing Object in `components`.
     Reference(Reference),
 }
 
@@ -132,8 +142,11 @@ pub enum ExamplePairingOrReference {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ParameterStructure {
+    /// Params are sent as an object keyed by parameter name (`by-name`).
     ByName,
+    /// Params are sent as an array in declaration order (`by-position`).
     ByPosition,
+    /// The server accepts both forms (`either`).
     Either,
 }
 

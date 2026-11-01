@@ -402,7 +402,10 @@ async fn main() -> Result<()> {
         .route("/success", get(success_handler))
         .route("/error", get(error_handler))
         .route("/api-docs", get(api_docs_handler))
-        .nest_service("/static", ServeDir::new("../static"))
+        .nest_service(
+            "/static",
+            ServeDir::new(concat!(env!("CARGO_MANIFEST_DIR"), "/static")),
+        )
         .layer(
             // Restrict CORS to the demo's own origin rather than `Any`.
             CorsLayer::new()

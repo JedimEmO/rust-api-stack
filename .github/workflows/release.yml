@@ -1,0 +1,81 @@
+name: Release
+
+# Publishes every crate whose version in master is not on crates.io yet,
+# using crates.io trusted publishing, then tags each one `<crate>-v<version>`.
+# Each crate must already exist on crates.io with a trusted publisher for this
+# workflow; see VERSIONING.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Package and verify only; publish nothing
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  plan:
+    name: Find and verify unpublished versions
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.plan.outputs.packages }}
+      tags: ${{ steps.plan.outputs.tags }}
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Find unpublished versions
+        id: plan
+        run: .github/scripts/unpublished-crates.sh >> "$GITHUB_OUTPUT"
+      - name: Package and verify
+        if: steps.plan.outputs.packages != ''
+        env:
+          PACKAGES: ${{ steps.plan.outputs.packages }}
+        run: |
+          # Word splitting is intended: PACKAGES is `-p name -p name ...`.
+          # shellcheck disable=SC2086
+          cargo publish --dry-run --locked $PACKAGES
+
+  publish:
+    name: Publish to crates.io
+    needs: plan
+    if: ${{ !inputs.dry_run && needs.plan.outputs.packages != '' }}
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write # push the release tags
+      id-token: write # trusted publishing
+    steps:
+      - uses: actions/checkout@v6.0.2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rust-lang/crates-io-auth-action@v1.0.6
+        id: auth
+      - name: Publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          PACKAGES: ${{ needs.plan.outputs.packages }}
+        run: |
+          # The plan job verified these packages; cargo publishes them in dependency order.
+          # shellcheck disable=SC2086
+          cargo publish --locked --no-verify $PACKAGES
+      - name: Tag the published versions
+        env:
+          TAGS: ${{ needs.plan.outputs.tags }}
+        run: |
+          for tag in $TAGS; do
+            git tag "$tag"
+          done
+          # shellcheck disable=SC2086
+          git push origin $TAGS

@@ -1,322 +1,105 @@
-# Google OAuth2 Example
+# OAuth2 demo server
 
-An example demonstrating Google OAuth2 integration with the Rust Agent Stack identity management system. It covers the OAuth2 Authorization Code flow with PKCE, JWT session management, and role-based access control through a JSON-RPC API.
+The runnable server for the [OAuth2 demo](../README.md).
+It signs users in with Google, issues a JWT session through `ras-identity-session`,
+and serves the `GoogleOAuth2Service` JSON-RPC API from [`oauth2-demo-api`](../api/README.md),
+where each method requires a permission derived from the Google identity.
 
-## Features
+The pieces:
 
-- **Secure OAuth2 flow**: Authorization Code with PKCE for enhanced security
-- **Role-based permissions**: Dynamic permission assignment based on user attributes
-- **JSON-RPC API**: Type-safe API endpoints with compile-time validation
-- **JWT session management**: Stateless authentication with embedded permissions
-- **CSRF protection**: State parameter validation and secure token handling
-- **Interactive documentation**: Built-in API documentation and testing interface
+- `OAuth2Provider` from `ras-identity-oauth2` runs the authorization-code flow with PKCE.
+  An in-memory state store and an `HttpOnly` binding cookie protect the callback against login CSRF.
+- `SessionService` turns the verified identity into a JWT and keeps the active sessions in memory.
+- `GoogleOAuth2Permissions` in [src/permissions.rs](src/permissions.rs) decides the permissions.
+- `JwtAuthProvider` checks the bearer token on each JSON-RPC call.
 
-## Architecture
+## Google Cloud setup
 
-This example demonstrates how several Rust Agent Stack components fit together:
+1. Open the [Google Cloud Console](https://console.cloud.google.com/) and create or pick a project.
+2. Configure the OAuth consent screen.
+3. Under **Credentials**, create an **OAuth client ID** of type **Web application**.
+4. Add `http://localhost:3000/auth/callback` as an authorized redirect URI.
 
-```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   Frontend      │────│   Axum Server    │────│  JSON-RPC API   │
-│   (HTML/JS)     │    │                  │    │   (Macro Gen)   │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-                               │
-                        ┌──────┴──────┐
-                        │             │
-                ┌───────▼────┐ ┌──────▼──────┐
-                │ OAuth2     │ │ Session     │
-                │ Provider   │ │ Service     │
-                └────────────┘ └─────────────┘
-                        │             │
-                ┌───────▼────┐ ┌──────▼──────┐
-                │ State      │ │ Permissions │
-                │ Store      │ │ Provider    │
-                └────────────┘ └─────────────┘
-```
+## Configuration
 
-### Key Components
+Copy [.env.example](.env.example) to `.env` in this directory and fill it in.
+The server loads this file even when started from the workspace root.
 
-1. **OAuth2Provider**: Handles Google OAuth2 flow with PKCE
-2. **SessionService**: Manages JWT tokens and session lifecycle
-3. **GoogleOAuth2Permissions**: Custom permission assignment logic
-4. **JSON-RPC Service**: Type-safe API with automatic auth validation
-5. **State Management**: In-memory state store for OAuth2 CSRF protection
+| Variable | Required | Default |
+|---|---|---|
+| `GOOGLE_CLIENT_ID` | yes | |
+| `GOOGLE_CLIENT_SECRET` | yes | |
+| `JWT_SECRET` | yes | |
+| `REDIRECT_URI` | no | `http://localhost:3000/auth/callback` |
+| `SERVER_HOST` | no | `0.0.0.0` |
+| `SERVER_PORT` | no | `3000` |
 
-## Setup Instructions
+`JWT_SECRET` must be at least 32 bytes and must not contain placeholder words such as `secret` or `example`.
+Generate one with `openssl rand -hex 32`.
 
-### 1. Google Cloud Console Setup
-
-1. Go to the [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a new project or select an existing one
-3. Enable the Google+ API (or Google People API)
-4. Navigate to **Credentials** → **Create Credentials** → **OAuth 2.0 Client ID**
-5. Configure the OAuth consent screen
-6. Set **Authorized redirect URIs** to include:
-   ```
-   http://localhost:3000/auth/callback
-   ```
-
-### 2. Environment Configuration
-
-1. Copy the example environment file:
-   ```bash
-   cp .env.example .env
-   ```
-
-2. Edit `.env` with your Google OAuth2 credentials:
-   ```bash
-   GOOGLE_CLIENT_ID=000000000000-example.apps.googleusercontent.com
-   GOOGLE_CLIENT_SECRET=GOCSPX-local-demo-secret
-   REDIRECT_URI=http://localhost:3000/auth/callback
-   JWT_SECRET=2fb8fe6949e27ef7df9919203cb2fe10160dabc5f48b655c  # generate your own: openssl rand -hex 32
-   ```
-
-### 3. Run the Application
-
-From the workspace root:
+## Run
 
 ```bash
-# Build the example
-cargo build -p oauth2-demo-server --locked
-
-# Run the server
 cargo run -p oauth2-demo-server --locked
 ```
 
-The server will start on `http://localhost:3000`.
+1. Open `http://localhost:3000` and choose **Sign in with Google**.
+2. After Google redirects back, the success page reads the JWT from the URL fragment,
+   keeps it in `sessionStorage` and shows it.
+3. Copy the token and set `JWT_TOKEN` to it to call the API.
 
-## Usage Guide
+The build script writes the OpenRPC document to `target/openrpc/googleoauth2service.json`
+and the permission manifest to `target/ras-permissions/oauth2-demo.json`, both under this directory.
 
-### 1. Authentication Flow
+## Calling the API
 
-1. Navigate to `http://localhost:3000`
-2. Click **"Sign in with Google"**
-3. Complete OAuth2 authorization with Google
-4. You'll be redirected back with a JWT token
-5. Use the token to access protected API endpoints
-
-### 2. Testing the API
-
-The application provides several test endpoints demonstrating different permission levels:
-
-Set `JWT_TOKEN` to the token shown after completing the browser login flow.
-
-#### Basic User Operations
-```bash
-# Get user information
-curl -X POST http://localhost:3000/api/rpc \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $JWT_TOKEN" \
-  -d '{
-    "jsonrpc": "2.0",
-    "method": "get_user_info",
-    "params": {},
-    "id": 1
-  }'
-
-# List documents
-curl -X POST http://localhost:3000/api/rpc \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $JWT_TOKEN" \
-  -d '{
-    "jsonrpc": "2.0",
-    "method": "list_documents",
-    "params": {"limit": 10},
-    "id": 2
-  }'
-```
-
-#### Content Creation (Elevated Permissions)
-```bash
-# Create document (requires content:create permission)
-curl -X POST http://localhost:3000/api/rpc \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $JWT_TOKEN" \
-  -d '{
-    "jsonrpc": "2.0",
-    "method": "create_document",
-    "params": {
-      "title": "My New Document",
-      "content": "This document was created through the JSON-RPC demo API.",
-      "tags": ["example", "api"]
-    },
-    "id": 3
-  }'
-```
-
-#### Admin Operations
-```bash
-# Delete document (requires admin:write permission)
-curl -X POST http://localhost:3000/api/rpc \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $JWT_TOKEN" \
-  -d '{
-    "jsonrpc": "2.0",
-    "method": "delete_document",
-    "params": {"document_id": "doc_123"},
-    "id": 4
-  }'
-
-# System status (requires system:admin permission)
-curl -X POST http://localhost:3000/api/rpc \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $JWT_TOKEN" \
-  -d '{
-    "jsonrpc": "2.0",
-    "method": "get_system_status",
-    "params": {},
-    "id": 5
-  }'
-```
-
-## Permission System
-
-The application demonstrates a sophisticated permission system based on user attributes:
-
-### Permission Assignment Rules
-
-| User Type | Criteria | Permissions |
-|-----------|----------|-------------|
-| **Basic User** | Any authenticated user | `user:read`, `profile:read` |
-| **Verified User** | Email verified by OAuth provider | + `email:verified` |
-| **Trusted Domain** | Email ends with `@trusted-domain.com` | + `user:write`, `content:create`, `content:edit` |
-| **Admin User** | Email ends with `@example.com` | + `admin:read`, `admin:write`, `system:manage` |
-| **System Admin** | Special subject ID | + `system:admin`, `debug:access` |
-| **Beta User** | Subject starts with `beta_` | + `beta:access`, `feature:preview` |
-
-### Testing Different Permission Levels
-
-To test different permission levels, you can:
-
-1. **Use different email domains** during OAuth2 login
-2. **Modify the permission logic** in `src/permissions.rs`
-3. **Create test users** with specific subject IDs
-
-## Security Features
-
-### OAuth2 Security
-- **PKCE (Proof Key for Code Exchange)** for enhanced security
-- **State parameter validation** to prevent CSRF attacks
-- **Secure token exchange** with proper error handling
-- **Configurable scopes** for minimal access principle
-
-### JWT Security
-- **Configurable JWT secrets** (change in production!)
-- **Token expiration** with configurable TTL
-- **JWT session creation** with permissions embedded in claims
-- **Embedded permissions** for stateless authorization
-
-### API Security
-- **Authentication required** for all endpoints
-- **Permission-based authorization** for fine-grained access control
-- **Input validation** and error handling
-- **CORS configuration** for cross-origin requests
-
-## Development
-
-### Project Structure
-
-```
-examples/oauth2-demo/
-├── api/                    # Shared JSON-RPC API definitions
-└── server/
-    ├── src/
-    │   ├── main.rs         # Main application and server setup
-    │   ├── permissions.rs  # Custom permission provider
-    │   └── service.rs      # JSON-RPC service implementation
-    ├── static/             # Frontend and API documentation pages
-    ├── Cargo.toml          # Dependencies and metadata
-    └── README.md           # This file
-```
-
-### Key Dependencies
-
-- **ras-identity-oauth2**: OAuth2 provider implementation
-- **ras-identity-session**: JWT session management
-- **ras-jsonrpc-macro**: Type-safe JSON-RPC service generation
-- **axum**: Web framework for HTTP handling
-- **tower-http**: Middleware for CORS and static files
-
-### Running Tests
+The JSON-RPC endpoint is `POST http://localhost:3000/api/rpc`.
+The page at `/api-docs` describes the methods.
 
 ```bash
-# Run all tests
-cargo test -p oauth2-demo-server --locked
-
-# Run with output
-cargo test -p oauth2-demo-server --locked -- --nocapture
-
-# Run specific test
-cargo test -p oauth2-demo-server --locked test_basic_user_permissions
+curl -X POST http://localhost:3000/api/rpc \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $JWT_TOKEN" \
+  -d '{"jsonrpc": "2.0", "method": "get_user_info", "params": {}, "id": 1}'
 ```
 
-### Development Tips
+`get_user_info` returns your user id and permissions, which tells you which of the other methods you may call.
 
-1. **Enable debug logging**:
-   ```bash
-   RUST_LOG=debug cargo run -p oauth2-demo-server --locked
-   ```
+| Method | Permission | Example `params` |
+|---|---|---|
+| `get_user_info` | none | `{}` |
+| `list_documents` | `user:read` | `{"limit": 10}` |
+| `create_document` | `content:create` | `{"title": "Notes", "content": "Hello", "tags": ["demo"]}` |
+| `delete_document` | `admin:write` | `{"document_id": "doc_123"}` |
+| `get_system_status` | `system:admin` | `{}` |
+| `get_beta_features` | `beta:access` | `{}` |
 
-2. **Use ngrok for HTTPS testing**:
-   ```bash
-   ngrok http 3000
-   # Update REDIRECT_URI to use the ngrok URL
-   ```
+## Permission rules
 
-3. **Modify permissions** in `src/permissions.rs` to test different access patterns
+`GoogleOAuth2Permissions` grants:
 
-4. **Add new API endpoints** by extending the service in `src/service.rs`
+| Who | Permissions added |
+|---|---|
+| every signed-in user | `user:read`, `profile:read` |
+| a verified email | `email:verified` |
+| a verified email ending in `@trusted-domain.com` | `user:write`, `content:create`, `content:edit` |
+| a verified email ending in `@example.com` | `admin:read`, `admin:write`, `user:write`, `system:manage` |
+| a `locale` claim starting with `en` | `content:english` |
+| the hard-coded subject `104872499792737890123` | `system:admin`, `debug:access` |
+| a subject starting with `beta_` | `beta:access`, `feature:preview` |
 
-## Common Issues
+Domain rules apply only when Google reports the email as verified,
+because an unverified address proves nothing about who owns it.
+A normal Google account gets only the first rows,
+so to try the other methods, edit the rules in [src/permissions.rs](src/permissions.rs).
 
-### OAuth2 Redirect URI Mismatch
-- Ensure the redirect URI in Google Cloud Console matches exactly
-- Check for trailing slashes or protocol mismatches
-- Verify the REDIRECT_URI environment variable
+## Before you build on this
 
-### JWT Token Issues
-- Ensure JWT_SECRET is properly set and consistent
-- Check token expiration times
-- Verify the Authorization header format: `Bearer TOKEN`
-
-### Permission Denied Errors
-- Check user's email domain against permission rules
-- Verify the required permissions for the endpoint
-- Use `get_user_info` to see current user permissions
-
-### CORS Issues
-- The application includes CORS middleware for development
-- Modify CORS settings in `main.rs` for production use
-
-## Production Considerations
-
-### Security
-- **Change JWT_SECRET** to a strong, random value
-- **Use HTTPS** in production (update redirect URIs)
-- **Implement rate limiting** for authentication endpoints
-- **Add request logging** and monitoring
-- **Review permission logic** for your specific use case
-
-### Scalability
-- **Replace InMemoryStateStore** with Redis or database
-- **Implement session storage** backend (Redis/database)
-- **Add connection pooling** for external services
-- **Configure proper timeouts** and retry logic
-
-### Monitoring
-- **Add health check endpoints**
-- **Implement metrics collection**
-- **Set up error tracking** and alerting
-- **Monitor OAuth2 provider rate limits**
-
-## Related Examples
-
-- [`examples/basic-jsonrpc`](../../basic-jsonrpc/) - Simpler JSON-RPC service with authentication and generated OpenRPC docs
-- [`examples/bidirectional-chat`](../../bidirectional-chat/) - WebSocket authentication and session-backed login
-
-## Contributing
-
-This example is part of the Rust Agent Stack project. See the main project README for contribution guidelines.
+This is a local demo.
+It runs over plain HTTP, so the binding cookie has no `Secure` flag,
+and the OAuth2 state and the sessions live in process memory.
+A real deployment needs HTTPS, shared storage for state and sessions,
+and permission rules that fit its own users.
 
 ## Checks
 
@@ -324,7 +107,3 @@ This example is part of the Rust Agent Stack project. See the main project READM
 cargo test -p oauth2-demo-server --locked
 cargo clippy -p oauth2-demo-server --all-targets --all-features --locked -- -D warnings
 ```
-
-## License
-
-This example follows the same license as the Rust Agent Stack project.

@@ -1,4 +1,17 @@
-//! Core identity provider traits and types.
+//! Identity provider and permission traits for Rust API Stack.
+//!
+//! An [`IdentityProvider`] verifies a login payload and returns a [`VerifiedIdentity`];
+//! a [`UserPermissions`] implementation maps that identity to permission strings.
+//! `ras-identity-local` and `ras-identity-oauth2` implement [`IdentityProvider`], and
+//! `ras-identity-session` uses both traits to issue JWT sessions. Depend on this crate
+//! directly when you write your own provider or permission source.
+//!
+//! [`NoopPermissions`] and [`StaticPermissions`] are ready-made permission sources.
+//! Errors are reported as [`IdentityError`].
+//!
+//! The crate has no Cargo features. See the
+//! [README](https://github.com/JedimEmO/rust-api-stack/blob/master/crates/core/ras-identity-core/README.md)
+//! for a provider example.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

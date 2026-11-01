@@ -95,7 +95,7 @@ const PRUNE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 /// opportunistically (at most once every 10 seconds) so abandoned flows do not
 /// accumulate without an external `cleanup_expired` schedule. When the store
 /// is full, the flow closest to expiry is evicted to make room for the new one
-/// rather than refusing it (I3), so a burst of flow starts degrades to "the
+/// rather than refusing it, so a burst of flow starts degrades to "the
 /// oldest pending login must be restarted" instead of "nobody can log in".
 ///
 /// This makes an attacker's cost for evicting legitimate flows one request per

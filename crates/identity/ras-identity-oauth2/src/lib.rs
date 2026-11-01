@@ -1,8 +1,22 @@
-//! OAuth2 identity provider implementation with PKCE support.
+//! An OAuth2 sign-in provider for Rust API Stack services.
 //!
-//! This crate provides a generic OAuth2 client that supports the Authorization Code flow
-//! with PKCE (Proof Key for Code Exchange) for enhanced security. It integrates with the
-//! ras-identity-core traits to provide OAuth2-based authentication.
+//! [`OAuth2Provider`] runs the authorization-code flow with PKCE and implements
+//! [`IdentityProvider`] under the ID `"oauth2"`, so `ras-identity-session` can turn a
+//! completed flow into a JWT. Start a flow with [`OAuth2Provider::start_flow`], which returns
+//! the authorization URL and a login-CSRF binding to store in a cookie; complete it by
+//! passing an [`OAuth2AuthPayload::Callback`] to the session service.
+//!
+//! The callback checks the single-use `state`, the binding, and, when the provider returns
+//! an `id_token`, its issuer, audience, expiry, nonce and subject. The `id_token` signature
+//! is not verified. Set [`OAuth2ProviderConfig::issuer`] for any OpenID Connect provider;
+//! an `id_token` is rejected without it.
+//!
+//! [`InMemoryStateStore`] keeps pending flows in one process; implement
+//! [`OAuth2StateStore`] to share them between instances.
+//!
+//! The crate has no Cargo features. See the
+//! [README](https://github.com/JedimEmO/rust-api-stack/blob/master/crates/identity/ras-identity-oauth2/README.md)
+//! for configuration, the full list of checks and provider compatibility.
 
 mod client;
 mod config;

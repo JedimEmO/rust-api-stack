@@ -56,7 +56,7 @@ name = "Announcements"
 description = "Server announcements and updates"
 
 [logging]
-# Log level (trace, debug, info, warn, error)
+# Log level (trace, debug, info, warn, error) or a RUST_LOG-style filter
 # Can also use RUST_LOG env var for more control
 level = "info"
 # Log format (pretty, json, compact)
@@ -74,10 +74,10 @@ thread_ids = true
 # Auto-create admin users on startup
 auto_create = true
 
-# Admin users to create
-# Note: In production, use environment variables or secure key management
-# Example: CHAT__ADMIN__USERS__0__USERNAME=admin
-# Example: CHAT__ADMIN__USERS__0__PASSWORD=secure_password
+# Admin users to create.
+# Environment variables cannot set or override these entries, because the
+# config loader cannot address a list item from a variable name.
+# In production, keep this file out of version control and readable only by the server.
 [[admin.users]]
 username = "admin"
 password = "admin123456"  # Change this in production! (min 8 chars)
@@ -124,14 +124,10 @@ login_attempts_per_hour = 20
 # - CHAT__CHAT__MAX_USERS_PER_ROOM: Maximum users per room
 #
 # Logging:
-# - RUST_LOG: Log level and filters
+# - RUST_LOG: Log level or a full filter, such as info,ras_jsonrpc_bidirectional_server=debug
 # - CHAT__LOGGING__FORMAT: Log format
 #
-# Admin Users (example for first admin user):
-# - CHAT__ADMIN__USERS__0__USERNAME: Admin username
-# - CHAT__ADMIN__USERS__0__PASSWORD: Admin password
-# - CHAT__ADMIN__USERS__0__EMAIL: Admin email
-# - CHAT__ADMIN__USERS__0__DISPLAY_NAME: Admin display name
+# Admin users ([[admin.users]]) cannot be set from the environment; list them in this file.
 #
 # Rate Limiting:
 # - CHAT__RATE_LIMIT__ENABLED: Enable rate limiting

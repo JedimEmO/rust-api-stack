@@ -1,32 +1,35 @@
-# Basic JSON-RPC Service
+# Basic JSON-RPC service
 
-Runnable JSON-RPC task service demonstrating the `jsonrpc_service!` macro,
-authentication, generated OpenRPC documentation, and Prometheus-compatible
-metrics.
+The runnable server for the [basic JSON-RPC example](../README.md).
+It implements the `MyService` contract from [`basic-jsonrpc-api`](../api/README.md),
+keeps tasks in memory, and records request metrics through `ras-observability-otel`.
 
 ## Run
-
-From the workspace root:
 
 ```bash
 cargo run -p basic-jsonrpc-service --locked
 ```
 
-The service listens on `http://localhost:3000`:
+The service listens on `0.0.0.0:3000`:
 
-- JSON-RPC endpoint: `POST /rpc`
-- Explorer UI: `/rpc/explorer`
-- OpenRPC document: `/rpc/explorer/openrpc.json`
-- Prometheus metrics: `/metrics`
+- JSON-RPC endpoint: `POST http://localhost:3000/rpc`
+- API explorer: `http://localhost:3000/rpc/explorer`
+- OpenRPC document: `http://localhost:3000/rpc/explorer/openrpc.json`
+- Prometheus metrics: `http://localhost:3000/metrics`
+
+Tasks live in memory and are gone when the process stops.
 
 ## Credentials
 
-The example uses fixed demo credentials:
+Authentication is a fixed demo: `sign_in` checks two hard-coded accounts
+and returns a fixed bearer token instead of a real JWT.
 
-- User: `user` / `password`, returns bearer token `valid_token`
-- Admin: `admin` / `secret`, returns bearer token `admin_token`
+| Username | Password | Token | Permissions |
+|---|---|---|---|
+| `user` | `password` | `valid_token` | `user` |
+| `admin` | `secret` | `admin_token` | `user`, `admin` |
 
-## Sign In
+## Sign in
 
 ```bash
 curl -X POST http://localhost:3000/rpc \
@@ -44,7 +47,7 @@ curl -X POST http://localhost:3000/rpc \
   }'
 ```
 
-Successful admin response:
+The response carries the token:
 
 ```json
 {
@@ -58,7 +61,10 @@ Successful admin response:
 }
 ```
 
-## Authenticated Request
+## Call a protected method
+
+Methods whose request type is `()` take no `params`.
+Leave the field out, or send `null`; an empty object is rejected as invalid params.
 
 ```bash
 curl -X POST http://localhost:3000/rpc \
@@ -67,32 +73,51 @@ curl -X POST http://localhost:3000/rpc \
   -d '{
     "jsonrpc": "2.0",
     "method": "delete_everything",
-    "params": {},
     "id": 2
+  }'
+```
+
+Create a task with the user token:
+
+```bash
+curl -X POST http://localhost:3000/rpc \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer valid_token" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "create_task",
+    "params": {
+      "title": "Ship the example",
+      "description": "Exercise the generated client",
+      "priority": "High"
+    },
+    "id": 3
   }'
 ```
 
 ## Metrics
 
-The service wires `ras-observability-otel` into the generated JSON-RPC builder
-with `with_usage_tracker` and `with_method_duration_tracker`.
+The service passes the trackers from `ras-observability-otel`
+to the generated builder with `with_usage_tracker` and `with_method_duration_tracker`.
+The Prometheus endpoint exposes three metrics:
 
-Prometheus metrics use low-cardinality labels:
+- `requests_started_total`, labelled `method` and `protocol`
+- `requests_completed_total`, labelled `method`, `protocol` and `success`
+- `method_duration_milliseconds`, a histogram labelled `method` and `protocol`
 
-- `requests_started_total`: labels `method`, `protocol`
-- `requests_completed_total`: labels `method`, `protocol`, `success`
-- `method_duration_milliseconds`: labels `method`, `protocol`
+`success` is `false` when the call ended in a JSON-RPC error,
+such as invalid params or a handler error.
+Calls rejected by authentication or authorization, and calls to unknown methods,
+are not counted at all; they are logged at `warn` instead.
 
-The trackers log authenticated user details with `tracing`, but the metrics do
-not include user ids, session ids, request ids, or arbitrary path values.
-
-Check metrics after making a request:
+User ids go to the `tracing` log, not into metric labels,
+so the number of time series does not grow with the number of users.
 
 ```bash
 curl http://localhost:3000/metrics
 ```
 
-Example output shape:
+After one `sign_in` call, the output contains lines of this shape:
 
 ```text
 requests_started_total{method="sign_in",protocol="JSON-RPC"} 1
@@ -100,13 +125,9 @@ requests_completed_total{method="sign_in",protocol="JSON-RPC",success="true"} 1
 method_duration_milliseconds_bucket{method="sign_in",protocol="JSON-RPC",le="5"} 1
 ```
 
-## OpenTelemetry Collector
-
-This example exposes Prometheus text metrics. To forward them to an OTLP backend,
-run an OpenTelemetry Collector that scrapes `http://localhost:3000/metrics` and
-exports to your OTLP destination.
-
-Minimal collector sketch:
+The service does not export OTLP itself.
+To send the metrics to an OTLP backend, run an OpenTelemetry Collector
+that scrapes `/metrics` and forwards them:
 
 ```yaml
 receivers:
@@ -117,31 +138,20 @@ receivers:
           static_configs:
             - targets: ['host.docker.internal:3000']
 
-processors:
-  batch:
-
 exporters:
   otlp:
-    endpoint: "tempo:4317"
+    endpoint: "your-otlp-backend:4317"
 
 service:
   pipelines:
     metrics:
       receivers: [prometheus]
-      processors: [batch]
       exporters: [otlp]
 ```
 
-## Tests
-
-The service has focused unit tests for authentication, task lifecycle behavior,
-profile methods, and missing-task errors:
-
-```bash
-cargo test -p basic-jsonrpc-service --locked
-```
-
 ## Checks
+
+The unit tests cover the demo authentication, the task lifecycle, the profile methods and missing-task errors.
 
 ```bash
 cargo test -p basic-jsonrpc-service --locked

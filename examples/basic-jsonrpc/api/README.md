@@ -1,23 +1,35 @@
 # Basic JSON-RPC API
 
-Shared API contract for the [basic JSON-RPC example](../README.md). This crate defines the request and response types and invokes `ras-jsonrpc-macro` to generate the `MyService` server trait, router builder, optional client, OpenRPC document, and explorer routes.
+The contract crate for the [basic JSON-RPC example](../README.md).
+It defines the request and response types and calls `jsonrpc_service!`,
+which generates the `MyServiceTrait` server trait, the `MyServiceBuilder` router builder,
+the `MyServiceClient` client, the OpenRPC document and the explorer routes.
 
-## Generated Service
+## Methods
 
-The contract is defined in [src/lib.rs](src/lib.rs). It includes:
+The contract is in [src/lib.rs](src/lib.rs).
 
-- `sign_in`, `sign_out`, and `delete_everything`
-- task CRUD methods
-- profile read/update methods
-- dashboard statistics
+| Method | Access |
+|---|---|
+| `sign_in` | public |
+| `sign_out` | any signed-in user |
+| `delete_everything` | `admin` permission |
+| `list_tasks`, `create_task`, `update_task`, `delete_task`, `get_task` | any signed-in user |
+| `get_profile`, `update_profile` | any signed-in user |
+| `get_dashboard_stats` | any signed-in user |
 
-The service route is selected by the server crate when it builds the generated router. See [../service/README.md](../service/README.md) for the runnable server.
+`create_task` and `get_task` carry authored examples.
+They appear in the OpenRPC document and in the explorer:
+a successful `create_task` call, the `1001` error the service returns for a duplicate title,
+and a `get_task` lookup that returns `null`.
+
+The server picks the mount path; [the service](../service/README.md) mounts it at `/rpc`.
 
 ## Features
 
-- `server` - enables generated server-side types and Axum integration.
-- `client` - enables the generated HTTP client with the default reqwest transport.
-- default: no generated transport code.
+- `server` generates the server trait, the router builder and the explorer routes.
+- `client` generates the client with the default reqwest transport.
+- With no features, the crate has only the shared types and the OpenRPC document functions.
 
 ## Checks
 

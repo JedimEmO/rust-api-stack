@@ -67,19 +67,19 @@ rest_service!({
         /// Look up one user by id.
         GET UNAUTHORIZED users/{id: String}() -> User {
             examples: [
-                /// An existing user.
-                alice {
-                    path: { id: "user-1".to_string() },
+                /// A user from the demo data.
+                john {
+                    path: { id: "1".to_string() },
                     response: User {
-                        id: "user-1".to_string(),
-                        name: "Alice".to_string(),
-                        email: "alice@example.com".to_string(),
-                        role: "admin".to_string(),
+                        id: "1".to_string(),
+                        name: "John Doe".to_string(),
+                        email: "john@example.com".to_string(),
+                        role: "user".to_string(),
                     },
                 },
                 /// An id that matches no user.
                 unknown {
-                    path: { id: "user-404".to_string() },
+                    path: { id: "404".to_string() },
                     error: { status: 404, message: "User not found" },
                 },
             ],

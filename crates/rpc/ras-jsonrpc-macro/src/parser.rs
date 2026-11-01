@@ -59,6 +59,7 @@ impl Parse for ServiceDefinition {
         let mut require_json_content_type = true;
         let mut body_limit = None;
         let mut docs_require_auth = false;
+        let mut explorer_span = None;
 
         while content.peek(Ident) {
             let field_name = content.fork().parse::<Ident>()?;
@@ -85,6 +86,7 @@ impl Parse for ServiceDefinition {
                     openrpc = Some(OpenRpcConfig::WithPath(path.value()));
                 }
             } else if field_name == "explorer" {
+                explorer_span = Some(field_name.span());
                 if content.peek(syn::LitBool) {
                     let enabled = content.parse::<syn::LitBool>()?;
                     if enabled.value() {
@@ -119,6 +121,19 @@ impl Parse for ServiceDefinition {
             }
 
             let _ = content.parse::<Token![,]>()?;
+        }
+
+        // The explorer loads the generated OpenRPC document, so it cannot exist
+        // without one. Reject the combination instead of dropping the explorer.
+        if let Some(span) = explorer_span
+            && explorer.is_some()
+            && openrpc.is_none()
+        {
+            return Err(syn::Error::new(
+                span,
+                "`explorer` needs `openrpc: true` (or `openrpc: { output: \"...\" }`): \
+                 the explorer serves the generated OpenRPC document",
+            ));
         }
 
         let _ = content.parse::<Ident>()?; // "methods"
@@ -634,6 +649,43 @@ mod example_diagnostics {
         for (input, expected) in cases {
             let message = error(input);
             assert!(message.contains(expected), "{input}\n  gave: {message}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod explorer_diagnostics {
+    use super::*;
+
+    fn parse(options: &str) -> syn::Result<ServiceDefinition> {
+        syn::parse_str(&format!(
+            "{{ service_name: S, {options} methods: [ UNAUTHORIZED m(()) -> () ] }}"
+        ))
+    }
+
+    #[test]
+    fn explorer_without_openrpc_is_rejected_at_explorer() {
+        for options in [
+            "explorer: true,",
+            "openrpc: false, explorer: true,",
+            "explorer: { path: \"/docs\" },",
+        ] {
+            let message = parse(options).expect_err(options).to_string();
+            assert!(
+                message.contains("`explorer` needs `openrpc: true`"),
+                "{options}\n  gave: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn explorer_with_openrpc_parses() {
+        for options in [
+            "openrpc: true, explorer: true,",
+            "explorer: { path: \"/docs\" }, openrpc: { output: \"api.json\" },",
+            "explorer: false,",
+        ] {
+            parse(options).unwrap_or_else(|error| panic!("{options}: {error}"));
         }
     }
 }

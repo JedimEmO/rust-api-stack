@@ -137,7 +137,7 @@ impl UsageTracker for MockUsageTracker {
 }
 
 struct MockMethodDurationTracker {
-    durations: Arc<Mutex<Vec<(String, Duration)>>>, // method, duration
+    durations: Arc<Mutex<Vec<(String, Duration, bool)>>>, // method, duration, success
 }
 
 impl MockMethodDurationTracker {
@@ -155,11 +155,12 @@ impl MethodDurationTracker for MockMethodDurationTracker {
         context: &RequestContext,
         _user: Option<&AuthenticatedUser>,
         duration: Duration,
+        success: bool,
     ) {
         self.durations
             .lock()
             .await
-            .push((context.method.clone(), duration));
+            .push((context.method.clone(), duration, success));
     }
 }
 
@@ -235,12 +236,15 @@ async fn test_method_duration_tracker_trait() {
     let context = RequestContext::rest("POST", "/api/data");
     let duration = Duration::from_millis(150);
 
-    tracker.track_duration(&context, None, duration).await;
+    tracker
+        .track_duration(&context, None, duration, false)
+        .await;
 
     let durations = tracker.durations.lock().await;
     assert_eq!(durations.len(), 1);
     assert_eq!(durations[0].0, "POST /api/data");
     assert_eq!(durations[0].1, duration);
+    assert!(!durations[0].2);
 }
 
 #[test]
@@ -261,69 +265,6 @@ fn test_service_metrics_trait() {
     let duration = Duration::from_secs(1);
     metrics.record_method_duration(&context, duration);
     assert_eq!(metrics.method_durations.try_lock().unwrap().len(), 1);
-}
-
-#[tokio::test]
-async fn test_observability_builder_with_usage_tracker() {
-    let call_count = Arc::new(Mutex::new(0));
-    let call_count_clone = call_count.clone();
-
-    let builder =
-        ObservabilityBuilder::new().with_usage_tracker(move |_headers, _user, _context| {
-            let count = call_count_clone.clone();
-            async move {
-                *count.lock().await += 1;
-            }
-        });
-
-    let config = builder.build();
-    assert!(config.usage_tracker.is_some());
-
-    // Test that the tracker function works
-    let tracker_fn = config.usage_tracker.unwrap();
-    let fut = tracker_fn(
-        HeaderMap::new(),
-        None,
-        RequestContext::jsonrpc("test".to_string()),
-    );
-    fut.await;
-
-    assert_eq!(*call_count.lock().await, 1);
-}
-
-#[tokio::test]
-async fn test_observability_builder_with_duration_tracker() {
-    let duration_sum = Arc::new(Mutex::new(Duration::ZERO));
-    let duration_sum_clone = duration_sum.clone();
-
-    let builder = ObservabilityBuilder::new().with_method_duration_tracker(
-        move |_context, _user, duration| {
-            let sum = duration_sum_clone.clone();
-            async move {
-                *sum.lock().await += duration;
-            }
-        },
-    );
-
-    let config = builder.build();
-    assert!(config.duration_tracker.is_some());
-
-    // Test that the tracker function works
-    let tracker_fn = config.duration_tracker.unwrap();
-    let test_duration = Duration::from_millis(100);
-    let fut = tracker_fn(RequestContext::rest("GET", "/test"), None, test_duration);
-    fut.await;
-
-    assert_eq!(*duration_sum.lock().await, test_duration);
-}
-
-#[test]
-fn test_observability_builder_default() {
-    let builder = ObservabilityBuilder::default();
-    let config = builder.build();
-
-    assert!(config.usage_tracker.is_none());
-    assert!(config.duration_tracker.is_none());
 }
 
 #[test]

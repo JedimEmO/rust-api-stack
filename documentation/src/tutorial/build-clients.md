@@ -1,7 +1,7 @@
-# 4. Build Clients
+# Build clients
 
 Client crates depend on the same API crate with `features = ["client"]`.
-Enable the API crate's `fs` feature too when using generated file-upload helpers
+Enable the API crate's `fs` feature too when you use the generated file-upload helpers
 that read parts from disk.
 
 ```toml
@@ -9,10 +9,10 @@ that read parts from disk.
 workspace-api = { path = "../workspace-api", default-features = false, features = ["client"] }
 ```
 
-## Rust REST Client
+## The Rust REST client
 
-The generated REST client turns paths, query values, and request bodies into
-typed method arguments.
+The generated REST client turns path parameters, query values and request bodies
+into typed method arguments.
 
 ```rust,ignore
 use workspace_api::{CreateTaskRequest, TaskServiceClient};
@@ -38,12 +38,12 @@ let created = client
     .await?;
 ```
 
-The client method names mirror the generated handler names, so compiler errors
-surface contract changes immediately.
+The client method names match the generated handler names,
+so a contract change shows up as a compiler error in the client.
 
-## Rust File Client
+## The Rust file client
 
-The generated file client builds multipart requests and download requests.
+The generated file client builds the multipart upload requests and the download requests.
 
 ```rust,ignore
 use workspace_api::{AttachmentServiceClient, AttachmentServiceTasksByTaskIdUploadMultipart};
@@ -68,22 +68,23 @@ let response = client
 let bytes = response.bytes().await?;
 ```
 
-For tests or browser-like buffered content, generated multipart builders also
-provide `*_bytes` helpers where file parts are declared.
-
-If you use the disk-streaming `file(...)` helper above, depend on the API crate
-with both `client` and `fs` enabled:
+The disk-streaming `file(...)` helper above needs both `client` and `fs` on the API crate:
 
 ```toml
 [dependencies]
 workspace-api = { path = "../workspace-api", default-features = false, features = ["client", "fs"] }
 ```
 
-## TypeScript Clients From OpenAPI
+For tests, or content already in memory as in a browser,
+each file part also gets a `*_bytes` helper, such as `file_bytes(bytes, "notes.pdf", None)`.
+It needs no `fs` feature and works in WASM builds.
+
+## TypeScript clients from OpenAPI
 
 If your browser app is TypeScript, generate a fetch client from the OpenAPI
-files emitted by the server build. Generated clients usually accept one config
-object per call:
+files that the server build writes.
+The function names come from each operation's `operationId`.
+Most generators take one config object per call:
 
 ```typescript
 import {
@@ -110,10 +111,11 @@ const created = await postProjectsProjectIdTasks({
 });
 ```
 
-File uploads use `FormData` or the generator's multipart object shape:
+File-service operation IDs start with `upload` or `download` instead of the HTTP method.
+Uploads use `FormData` or the generator's multipart object shape:
 
 ```typescript
-await postTasksTaskIdUpload({
+await uploadTasksTaskIdUpload({
   baseUrl: 'https://workspace.example.com/api/v1/attachments',
   headers: { Authorization: `Bearer ${token}` },
   path: { task_id: 'task-123' },
@@ -121,10 +123,9 @@ await postTasksTaskIdUpload({
 });
 ```
 
-## WebSocket Notifications
+## WebSocket notifications
 
-The bidirectional client registers typed notification handlers before
-connecting:
+The bidirectional client registers typed notification handlers before it connects:
 
 ```rust,ignore
 let mut activity = ActivityServiceClientBuilder::new("wss://workspace.example.com/ws")
@@ -140,5 +141,5 @@ activity.connect().await?;
 activity.subscribe_project("project-123".to_string()).await?;
 ```
 
-Use generated clients directly at application edges, then wrap them in small
-domain-specific adapters if the UI needs a simpler interface.
+Use the generated clients directly at the edges of the application,
+and wrap them in small domain-specific adapters if the UI needs a simpler interface.

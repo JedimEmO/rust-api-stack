@@ -475,14 +475,14 @@ impl Config {
             anyhow::bail!("Maximum room name length must be greater than 0");
         }
 
-        // Validate log level
-        let valid_levels = ["trace", "debug", "info", "warn", "error"];
-        let level_lower = self.logging.level.to_lowercase();
-        if !valid_levels.contains(&level_lower.as_str()) {
+        // A plain level or a full RUST_LOG-style filter; log_filter() turns
+        // either into the filter the subscriber is built from.
+        if let Err(e) = tracing_subscriber::EnvFilter::try_new(self.log_filter()) {
             anyhow::bail!(
-                "Invalid log level '{}'. Must be one of: {:?}",
+                "Invalid log level '{}': {}. Use a level (trace, debug, info, warn, error) \
+                 or a RUST_LOG-style filter such as 'info,ras_jsonrpc_bidirectional_server=debug'",
                 self.logging.level,
-                valid_levels
+                e
             );
         }
 
@@ -677,6 +677,22 @@ mod tests {
         // Fix port but break message length
         config.server.port = 3000;
         config.chat.max_message_length = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn log_level_accepts_rust_log_filters() {
+        let mut config = Config::default();
+        config.logging.level = "warn".to_string();
+        assert!(config.validate().is_ok());
+
+        config.logging.level = "info,ras_jsonrpc_bidirectional_server=debug".to_string();
+        assert!(config.validate().is_ok(), "{:?}", config.validate());
+
+        config.logging.level = "verbose".to_string();
+        assert!(config.validate().is_err());
+
+        config.logging.level = "tower_http=loud".to_string();
         assert!(config.validate().is_err());
     }
 }

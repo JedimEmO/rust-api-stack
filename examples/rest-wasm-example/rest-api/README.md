@@ -1,26 +1,29 @@
-# REST API Contract Example
+# REST API contract
 
-Shared REST API contract for the REST/OpenAPI TypeScript usage sample.
+The contract crate for the [REST example](../README.md).
+It defines the request and response types and calls `rest_service!` to declare `UserService` at `/api/v1`.
+[`rest-backend`](../rest-backend/README.md) implements it,
+and [`typescript-example`](../typescript-example/README.md) calls it through a generated client.
 
-This crate defines the DTOs and `rest_service!` declaration used by:
+## What the declaration shows
 
-- `rest-backend`: Axum server implementation
-- `../typescript-example/src/example.ts`: generated-client usage sample
+[src/lib.rs](src/lib.rs) uses most of the endpoint syntax:
 
-## Generated API
+- path parameters, as in `users/{id: String}` and `users/{user_id: String}/tasks/{task_id: String}`
+- query parameters, as in `search/users ? q: String & limit: Option<u32> & offset: Option<u32>`
+- public endpoints with `UNAUTHORIZED` and protected ones with `WITH_PERMISSIONS(["admin"])` or `WITH_PERMISSIONS(["user"])`
+- doc comments, which become the operation summaries
+- authored examples on `GET users/{id}`, one success and one 404 error, and on `GET search/users`
+- `serve_docs: true` with `docs_path: "/docs"`, which serves the API explorer and the OpenAPI document at `/api/v1/docs`
 
-The service declaration in `src/lib.rs` generates:
-
-- Server trait and Axum router builder with the `server` feature
-- Rust client helpers with the `client` feature
-- OpenAPI document generation for TypeScript client generators
-- Built-in API explorer routes when served by the backend
+The example ids and names in the authored examples are illustrative;
+they do not match the backend's demo data.
 
 ## Features
 
-- `server`: enables generated server-side types and router integration
-- `client`: enables generated Rust client helpers with the default reqwest transport
-- default: no generated server or client transport code
+- `server` generates the server trait, the router builder, the explorer routes and the OpenAPI functions.
+- `client` generates the Rust client with the default reqwest transport.
+- With no features, the crate holds only the shared types.
 
 ## Checks
 
@@ -34,13 +37,8 @@ cargo test -p rest-api --features server --locked
 cargo clippy -p rest-api --all-targets --all-features --locked -- -D warnings
 ```
 
-The backend package runs the server-side implementation tests:
+The handler tests live in the backend:
 
 ```bash
 cargo test -p rest-backend --locked
 ```
-
-## Related Files
-
-- `../rest-backend/README.md` - runnable backend, demo tokens, and endpoint map
-- `../typescript-example/README.md` - minimal generated TypeScript client usage

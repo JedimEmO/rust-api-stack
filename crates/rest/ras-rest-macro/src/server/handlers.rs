@@ -42,49 +42,25 @@ pub(super) fn generate_handler_body(
             } else {
                 quote! {}
             };
+            let tracked = tracked_handler(
+                method,
+                path,
+                quote! {
+                    #json_handling
+                    match service.#handler_name(#(#args),*).await {
+                        Ok(rest_response) => {
+                            let status_code = axum::http::StatusCode::from_u16(rest_response.status)
+                                .unwrap_or(axum::http::StatusCode::OK);
+                            __ras_success_response(status_code, rest_response.body)
+                        },
+                        Err(rest_error) => __ras_rest_error_response(rest_error),
+                    }
+                },
+            );
 
             quote! {
-                #json_handling
-
-                if let Some(tracker) = &with_usage_tracker {
-                    let tracker_headers =
-                        ras_auth_core::redact_sensitive_headers_for_auth_transport(&headers, &auth_transport);
-                    tracker(&tracker_headers, None, #method, #path).await;
-                }
-
-                let start_time = std::time::Instant::now();
-
-                let result = match service.#handler_name(#(#args),*).await {
-                    Ok(rest_response) => {
-                        let status_code = axum::http::StatusCode::from_u16(rest_response.status)
-                            .unwrap_or(axum::http::StatusCode::OK);
-                        __ras_success_response(status_code, rest_response.body)
-                    },
-                    Err(rest_error) => {
-                        use axum::response::IntoResponse;
-
-                        if let Some(internal) = &rest_error.internal_error {
-                            ras_rest_core::tracing::error!(error = ?internal, "Request failed with status {}", rest_error.status);
-                        }
-
-                        let status_code = axum::http::StatusCode::from_u16(rest_error.status)
-                            .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
-
-                        (
-                            status_code,
-                            axum::Json(serde_json::json!({
-                                "error": &rest_error.message
-                            }))
-                        ).into_response()
-                    },
-                };
-
-                let duration = start_time.elapsed();
-                if let Some(tracker) = &with_method_duration_tracker {
-                    tracker(#method, #path, None, duration).await;
-                }
-
-                result
+                let __ras_tracker_user: Option<&ras_auth_core::AuthenticatedUser> = None;
+                #tracked
             }
         }
         AuthRequirement::OptionalAuth => {
@@ -116,6 +92,21 @@ pub(super) fn generate_handler_body(
             } else {
                 quote! {}
             };
+            let tracked = tracked_handler(
+                method,
+                path,
+                quote! {
+                    #json_handling
+                    match service.#handler_name(#(#args),*).await {
+                        Ok(rest_response) => {
+                            let status_code = axum::http::StatusCode::from_u16(rest_response.status)
+                                .unwrap_or(axum::http::StatusCode::OK);
+                            __ras_success_response(status_code, rest_response.body)
+                        },
+                        Err(rest_error) => __ras_rest_error_response(rest_error),
+                    }
+                },
+            );
 
             quote! {
                 // Best-effort authentication for an OPTIONAL_AUTH route: never
@@ -130,47 +121,8 @@ pub(super) fn generate_handler_body(
                 // Snapshot the user for tracking; `caller` is moved into the handler.
                 let __ras_caller_user = caller.authenticated().cloned();
 
-                #json_handling
-
-                if let Some(tracker) = &with_usage_tracker {
-                    let tracker_headers =
-                        ras_auth_core::redact_sensitive_headers_for_auth_transport(&headers, &auth_transport);
-                    tracker(&tracker_headers, __ras_caller_user.as_ref(), #method, #path).await;
-                }
-
-                let start_time = std::time::Instant::now();
-
-                let result = match service.#handler_name(#(#args),*).await {
-                    Ok(rest_response) => {
-                        let status_code = axum::http::StatusCode::from_u16(rest_response.status)
-                            .unwrap_or(axum::http::StatusCode::OK);
-                        __ras_success_response(status_code, rest_response.body)
-                    },
-                    Err(rest_error) => {
-                        use axum::response::IntoResponse;
-
-                        if let Some(internal) = &rest_error.internal_error {
-                            ras_rest_core::tracing::error!(error = ?internal, "Request failed with status {}", rest_error.status);
-                        }
-
-                        let status_code = axum::http::StatusCode::from_u16(rest_error.status)
-                            .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
-
-                        (
-                            status_code,
-                            axum::Json(serde_json::json!({
-                                "error": &rest_error.message
-                            }))
-                        ).into_response()
-                    },
-                };
-
-                let duration = start_time.elapsed();
-                if let Some(tracker) = &with_method_duration_tracker {
-                    tracker(#method, #path, __ras_caller_user.as_ref(), duration).await;
-                }
-
-                result
+                let __ras_tracker_user: Option<&ras_auth_core::AuthenticatedUser> = __ras_caller_user.as_ref();
+                #tracked
             }
         }
         AuthRequirement::WithPermissions(_) => {
@@ -201,6 +153,21 @@ pub(super) fn generate_handler_body(
             } else {
                 quote! {}
             };
+            let tracked = tracked_handler(
+                method,
+                path,
+                quote! {
+                    #json_handling
+                    match service.#handler_name(#(#args),*).await {
+                        Ok(rest_response) => {
+                            let status_code = axum::http::StatusCode::from_u16(rest_response.status)
+                                .unwrap_or(axum::http::StatusCode::OK);
+                            __ras_success_response(status_code, rest_response.body)
+                        },
+                        Err(rest_error) => __ras_rest_error_response(rest_error),
+                    }
+                },
+            );
 
             quote! {
                 // Authenticate and authorize: credential → CSRF → authenticate
@@ -217,48 +184,46 @@ pub(super) fn generate_handler_body(
                 };
 
                 // Read and parse the body only after auth has succeeded
-                #json_handling
-
-                if let Some(tracker) = &with_usage_tracker {
-                    let tracker_headers =
-                        ras_auth_core::redact_sensitive_headers_for_auth_transport(&headers, &auth_transport);
-                    tracker(&tracker_headers, Some(&user), #method, #path).await;
-                }
-
-                let start_time = std::time::Instant::now();
-
-                let result = match service.#handler_name(#(#args),*).await {
-                    Ok(rest_response) => {
-                        let status_code = axum::http::StatusCode::from_u16(rest_response.status)
-                            .unwrap_or(axum::http::StatusCode::OK);
-                        __ras_success_response(status_code, rest_response.body)
-                    },
-                    Err(rest_error) => {
-                        use axum::response::IntoResponse;
-
-                        if let Some(internal) = &rest_error.internal_error {
-                            ras_rest_core::tracing::error!(error = ?internal, "Request failed with status {}", rest_error.status);
-                        }
-
-                        let status_code = axum::http::StatusCode::from_u16(rest_error.status)
-                            .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
-
-                        (
-                            status_code,
-                            axum::Json(serde_json::json!({
-                                "error": &rest_error.message
-                            }))
-                        ).into_response()
-                    },
-                };
-
-                let duration = start_time.elapsed();
-                if let Some(tracker) = &with_method_duration_tracker {
-                    tracker(#method, #path, Some(&user), duration).await;
-                }
-
-                result
+                let __ras_tracker_user: Option<&ras_auth_core::AuthenticatedUser> = Some(&user);
+                #tracked
             }
         }
+    }
+}
+
+/// Wraps request decoding and the handler call in the usage and duration trackers.
+///
+/// Authorization runs before this code and may return early; such a rejection
+/// reaches neither tracker. `body` runs inside an async block, so an early
+/// `return` there (a body that does not decode, a failed migration) still
+/// produces a response that the duration tracker records. The request counts as
+/// a success unless the response status is 4xx or 5xx.
+///
+/// Expects `__ras_tracker_user: Option<&AuthenticatedUser>` in scope.
+pub(super) fn tracked_handler(
+    method: &str,
+    path: &str,
+    body: proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    quote! {
+        if let Some(tracker) = &with_usage_tracker {
+            let tracker_headers =
+                ras_auth_core::redact_sensitive_headers_for_auth_transport(&headers, &auth_transport);
+            tracker(&tracker_headers, __ras_tracker_user, #method, #path).await;
+        }
+
+        let __ras_start = std::time::Instant::now();
+        let __ras_response: axum::response::Response = async {
+            #body
+        }
+        .await;
+
+        if let Some(tracker) = &with_method_duration_tracker {
+            let __ras_status = __ras_response.status();
+            let __ras_success = !(__ras_status.is_client_error() || __ras_status.is_server_error());
+            tracker(#method, #path, __ras_tracker_user, __ras_start.elapsed(), __ras_success).await;
+        }
+
+        __ras_response
     }
 }

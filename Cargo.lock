@@ -272,8 +272,6 @@ dependencies = [
  "ras-jsonrpc-bidirectional-client",
  "ras-jsonrpc-bidirectional-macro",
  "ras-jsonrpc-bidirectional-server",
- "ras-jsonrpc-bidirectional-types",
- "ras-jsonrpc-types",
  "ras-permission-manifest",
  "ras-rest-core",
  "ras-rest-macro",
@@ -282,7 +280,6 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
- "tokio",
  "tracing",
 ]
 
@@ -2876,6 +2873,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "http",
+ "httpdate",
  "ras-auth-core",
  "thiserror 2.0.18",
  "tracing",
@@ -3052,6 +3050,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -3163,7 +3162,6 @@ name = "ras-openrpc-types"
 version = "0.1.1"
 dependencies = [
  "bon",
- "schemars",
  "serde",
  "serde_json",
 ]

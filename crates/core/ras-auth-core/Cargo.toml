@@ -3,11 +3,13 @@ name = "ras-auth-core"
 version = "0.3.0"
 edition = "2024"
 rust-version = "1.88"
-description = "Core authentication and authorization traits for Rust Agent Stack services"
+description = "Core authentication and authorization traits for Rust API Stack services"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/JedimEmO/rust-api-stack"
 homepage = "https://github.com/JedimEmO/rust-api-stack"
 readme = "README.md"
+categories = ["authentication", "web-programming"]
+keywords = ["auth", "authorization", "permissions", "api"]
 
 [dependencies]
 cookie = { workspace = true }

@@ -137,3 +137,41 @@ fn test_optional_auth_rejected_on_server_to_client_calls() {
         "unexpected error: {err}"
     );
 }
+
+#[test]
+fn test_with_permissions_rejected_on_server_to_client_calls() {
+    // The server makes the call, so no inbound caller exists to check. Accepting
+    // the keyword would promise a check that never runs.
+    let input = r#"{
+            service_name: Demo,
+            client_to_server: [],
+            server_to_client: [],
+            server_to_client_calls: [
+                WITH_PERMISSIONS(["admin"]) get_status(String) -> bool,
+            ]
+        }"#;
+
+    let err = syn::parse_str::<BidirectionalServiceDefinition>(input)
+        .expect_err("WITH_PERMISSIONS must be rejected on server_to_client calls");
+    assert!(
+        err.to_string()
+            .contains("WITH_PERMISSIONS is not supported"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_unauthorized_and_bare_server_to_client_calls_parse() {
+    let input = r#"{
+            service_name: Demo,
+            client_to_server: [],
+            server_to_client: [],
+            server_to_client_calls: [
+                get_status(String) -> bool,
+                UNAUTHORIZED get_version(()) -> String,
+            ]
+        }"#;
+
+    let parsed: BidirectionalServiceDefinition = syn::parse_str(input).unwrap();
+    assert_eq!(parsed.server_to_client_calls.len(), 2);
+}

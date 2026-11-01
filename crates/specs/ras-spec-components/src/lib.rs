@@ -1,7 +1,22 @@
-//! Schema component assembly for generated OpenRPC and OpenAPI documents.
+//! Schema component assembly for the OpenRPC and OpenAPI documents that
+//! `ras-jsonrpc-macro` and `ras-rest-macro` generate. You do not add this crate
+//! yourself.
 //!
-//! The service macros embed [`SOURCE`] in their output as a private module.
-//! See the README for why it is source and not a library dependency.
+//! [`SOURCE`] is the text of this crate's `src/components.rs`. The macros parse
+//! it and paste it into each service's generated code as a private module, so
+//! it compiles in the consumer's crate against the consumer's `schemars`,
+//! `serde` and `serde_json`, and the consumer declares no extra dependency.
+//! Because pasted code compiles under the consumer's edition, `components.rs`
+//! keeps to syntax that edition 2018 accepts; this crate is edition 2021 so its
+//! tests reject 2024-only syntax such as `let` chains.
+//!
+//! [`SpecGenerationError`] is the one ordinary item. The generated
+//! `try_generate_*` functions return it, and `ras-jsonrpc-types` and
+//! `ras-rest-core` re-export it.
+//!
+//! The crate has no dependencies and no Cargo features. The
+//! [README](https://github.com/JedimEmO/rust-api-stack/blob/master/crates/specs/ras-spec-components/README.md)
+//! explains the design and what the embedded code does.
 
 /// The text of `src/components.rs`, for the macros to embed.
 pub const SOURCE: &str = include_str!("components.rs");

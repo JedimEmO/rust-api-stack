@@ -1,7 +1,26 @@
-//! Runtime facade for generated JSON-RPC services.
+//! Runtime support for the JSON-RPC servers that `jsonrpc_service!` from
+//! `ras-jsonrpc-macro` generates.
 //!
-//! Re-exports authentication, protocol, version-migration, and tracing APIs so
-//! generated server code can use a single runtime dependency.
+//! The crate has no code of its own. It re-exports the auth, version
+//! migration and logging items the generated server refers to, so an API crate
+//! declares one dependency for them. The generated code names
+//! `ras-jsonrpc-types` directly as well, so an API crate depends on both.
+//!
+//! - `ras-auth-core`: [`AuthProvider`], [`AuthenticatedUser`], [`Caller`],
+//!   [`AuthError`], [`AuthCookieConfig`], [`CsrfConfig`],
+//!   [`AuthTransportConfig`] and the credential and CSRF helpers.
+//! - `ras-jsonrpc-types`: [`JsonRpcRequest`], [`JsonRpcResponse`],
+//!   [`JsonRpcError`], [`error_codes`], [`PublicRpcError`] and
+//!   [`SpecGenerationError`].
+//! - `ras-version-core`: [`VersionMigration`].
+//! - [`tracing`], so generated code can log without the API crate declaring it.
+//!
+//! Your own server code uses it to implement [`AuthProvider`] and to name
+//! [`AuthenticatedUser`] and [`Caller`] in handler signatures.
+//! The crate has no Cargo features.
+//!
+//! See the [README](https://github.com/JedimEmO/rust-api-stack/blob/master/crates/rpc/ras-jsonrpc-core/README.md)
+//! and the [`jsonrpc_service!` guide](https://github.com/JedimEmO/rust-api-stack/blob/master/documentation/src/macros/jsonrpc-service.md).
 
 // Re-export authentication types from ras-auth-core
 pub use ras_auth_core::*;

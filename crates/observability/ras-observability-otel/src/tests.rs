@@ -97,12 +97,12 @@ async fn test_otel_method_duration_tracker() {
 
     // Test with authenticated user
     tracker
-        .track_duration(&context, Some(&user), Duration::from_millis(250))
+        .track_duration(&context, Some(&user), Duration::from_millis(250), true)
         .await;
 
     // Test with anonymous user
     tracker
-        .track_duration(&context, None, Duration::from_millis(100))
+        .track_duration(&context, None, Duration::from_millis(100), false)
         .await;
 }
 
@@ -280,16 +280,16 @@ async fn test_various_duration_scales() {
 
     // Test various duration scales
     tracker
-        .track_duration(&context, None, Duration::from_nanos(100))
+        .track_duration(&context, None, Duration::from_nanos(100), true)
         .await;
     tracker
-        .track_duration(&context, None, Duration::from_micros(500))
+        .track_duration(&context, None, Duration::from_micros(500), true)
         .await;
     tracker
-        .track_duration(&context, None, Duration::from_millis(50))
+        .track_duration(&context, None, Duration::from_millis(50), true)
         .await;
     tracker
-        .track_duration(&context, None, Duration::from_secs(2))
+        .track_duration(&context, None, Duration::from_secs(2), true)
         .await;
 }
 

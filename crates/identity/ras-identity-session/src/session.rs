@@ -12,7 +12,7 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 /// Minimum spacing between lazy expired-session sweeps triggered from
-/// `begin_session`/`verify_session` (S1).
+/// `begin_session`/`verify_session`.
 const LAZY_CLEANUP_INTERVAL_SECS: u64 = 60;
 
 pub struct SessionService {
@@ -23,7 +23,7 @@ pub struct SessionService {
     permissions_provider: Option<Arc<dyn UserPermissions>>,
     /// Reference point for `next_lazy_cleanup`.
     created_at: Instant,
-    /// Seconds since `created_at` at which the next lazy sweep is due (S1).
+    /// Seconds since `created_at` at which the next lazy sweep is due.
     next_lazy_cleanup: AtomicU64,
 }
 impl SessionService {
@@ -39,7 +39,7 @@ impl SessionService {
         })
     }
 
-    /// Lazy fallback sweep (S1): prunes expired sessions at most once per
+    /// Lazy fallback sweep: prunes expired sessions at most once per
     /// [`LAZY_CLEANUP_INTERVAL_SECS`], so deployments that never start
     /// [`start_cleanup_task`](Self::start_cleanup_task) still get bounded
     /// growth without taking the write lock on every request.

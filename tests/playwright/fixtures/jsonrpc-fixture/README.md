@@ -1,4 +1,4 @@
-# Playwright JSON-RPC Fixture
+# Playwright JSON-RPC fixture
 
 Socket-bound fixture server for the JSON-RPC API explorer browser tests. It is not a reusable example server; it exists so Playwright can load a real explorer page and exercise browser behavior.
 
@@ -22,7 +22,7 @@ PLAYWRIGHT_JSONRPC_ADDR=127.0.0.1:3102 cargo run --locked -p playwright-jsonrpc-
 
 The Playwright config starts this server automatically. Use `PLAYWRIGHT_JSONRPC_PORT` when running the full browser suite to avoid local port collisions.
 
-## Test Tokens
+## Test tokens
 
 - `user-token`
 - `admin-token`

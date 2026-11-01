@@ -26,7 +26,7 @@ pub struct AuthRevalidation {
 }
 
 /// Policy applied when a live connection's permissions change on
-/// re-validation (W1).
+/// re-validation.
 ///
 /// In both modes every held subscription is re-run through
 /// [`MessageHandler::authorize_subscribe`](super::MessageHandler::authorize_subscribe) against the refreshed user and
@@ -42,7 +42,7 @@ pub enum PermissionChangePolicy {
     Close,
 }
 
-/// Server-side keepalive for a connection (W4).
+/// Server-side keepalive for a connection.
 ///
 /// The server sends a WebSocket ping every `ping_interval`; browsers and
 /// tungstenite answer pings automatically, and any inbound frame (including

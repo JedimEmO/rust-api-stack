@@ -1,42 +1,51 @@
 # ras-observability-core
 
-Core traits and types for unified observability across REST and JSON-RPC services in Rust Agent Stack.
+Backend-neutral traits and types for request metrics in Rust API Stack services.
+They describe a request the same way whether it came through REST, JSON-RPC or a WebSocket,
+so one metrics backend can serve all three.
 
-## Features
+This crate holds no metrics backend.
+`ras-observability-otel` implements the traits with OpenTelemetry and a Prometheus `/metrics` endpoint;
+use that crate unless you are writing your own backend.
 
-- **Protocol-agnostic**: Works with both REST and JSON-RPC services
-- **Type-safe**: Compile-time checked metric definitions
-- **Extensible**: Trait-based design allows custom implementations
-- **Zero-overhead**: Minimal runtime cost when not in use
+## Installation
 
-## Core Concepts
-
-### RequestContext
-
-A unified representation of requests across different protocols:
-
-```rust
-use ras_observability_core::{RequestContext, Protocol};
-
-// For REST services
-let context = RequestContext::rest("GET", "/api/v1/users");
-
-// For JSON-RPC services  
-let context = RequestContext::jsonrpc("getUser".to_string());
-
-// Add metadata
-let context = context.with_metadata("request_id", "12345");
+```toml
+[dependencies]
+ras-observability-core = "0.2"
 ```
 
-### Traits
+## Request context
 
-- `UsageTracker`: Track requests before processing
-- `MethodDurationTracker`: Track execution duration
-- `ServiceMetrics`: Common metrics interface
+`RequestContext` names the operation and its protocol:
 
-## Integration
+```rust
+use ras_observability_core::RequestContext;
 
-This crate provides the core abstractions. For an OpenTelemetry and Prometheus implementation, see `ras-observability-otel`.
+let rest = RequestContext::rest("GET", "/api/v1/users"); // method "GET /api/v1/users"
+let rpc = RequestContext::jsonrpc("getUser".to_string());
+let ws = RequestContext::websocket("send_message");
+
+let rest = rest.with_metadata("request_id", "12345");
+```
+
+The `method` and `protocol` fields become metric labels in `ras-observability-otel`.
+Keep `method` to a bounded set of values, such as a route template rather than a path with IDs in it,
+or the number of metric series grows with your traffic.
+
+## Traits
+
+- `UsageTracker::track_request` runs before a request is handled,
+  with the request headers, the authenticated user if any, and the context.
+- `MethodDurationTracker::track_duration` runs once the response is built,
+  with the elapsed time and whether the request succeeded.
+  `success` is `false` when the request ended in an error response.
+- `ServiceMetrics` is the synchronous counter and histogram interface:
+  requests started, requests completed with a success flag, and method duration.
+
+The `extractors` module has two helpers, `user_agent` and `user_attributes`.
+`user_attributes` returns the user ID and the full permission list,
+so keep its output out of metric labels.
 
 ## Checks
 

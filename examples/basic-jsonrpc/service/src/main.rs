@@ -5,7 +5,7 @@ use basic_jsonrpc_api::{
     UserProfile,
 };
 use chrono::Utc;
-use ras_jsonrpc_core::{AuthFuture, AuthProvider, AuthenticatedUser};
+use ras_jsonrpc_core::{AuthFuture, AuthProvider, AuthenticatedUser, PublicRpcError};
 use ras_observability_core::{MethodDurationTracker, RequestContext, UsageTracker};
 use ras_observability_otel::OtelSetupBuilder;
 use std::{
@@ -61,7 +61,12 @@ impl TaskStorage {
         }
     }
 
-    fn create_task(&self, req: CreateTaskRequest) -> Task {
+    /// Returns `None` when a task with the same title exists.
+    fn create_task(&self, req: CreateTaskRequest) -> Option<Task> {
+        let mut tasks = self.tasks.lock().unwrap();
+        if tasks.values().any(|task| task.title == req.title) {
+            return None;
+        }
         let task = Task {
             id: Uuid::new_v4().to_string(),
             title: req.title,
@@ -72,11 +77,8 @@ impl TaskStorage {
             updated_at: Utc::now().to_rfc3339(),
         };
 
-        self.tasks
-            .lock()
-            .unwrap()
-            .insert(task.id.clone(), task.clone());
-        task
+        tasks.insert(task.id.clone(), task.clone());
+        Some(task)
     }
 
     fn update_task(&self, req: UpdateTaskRequest) -> Option<Task> {
@@ -198,7 +200,13 @@ impl MyServiceTrait for MyServiceImpl {
         _user: &AuthenticatedUser,
         request: CreateTaskRequest,
     ) -> Result<Task, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(self.storage.create_task(request))
+        self.storage.create_task(request).ok_or_else(|| {
+            // A public error reaches the client with its code and message.
+            Box::new(PublicRpcError::new(
+                1001,
+                "A task with this title already exists",
+            )) as Box<dyn std::error::Error + Send + Sync>
+        })
     }
 
     async fn update_task(
@@ -335,14 +343,15 @@ async fn main() -> anyhow::Result<()> {
         let duration_tracker = otel.method_duration_tracker();
         move |method: &str,
               user: Option<&ras_jsonrpc_core::AuthenticatedUser>,
-              duration: std::time::Duration| {
+              duration: std::time::Duration,
+              success: bool| {
             let context = RequestContext::jsonrpc(method.to_string());
             let duration_tracker = duration_tracker.clone();
             let user_clone = user.cloned();
 
             async move {
                 duration_tracker
-                    .track_duration(&context, user_clone.as_ref(), duration)
+                    .track_duration(&context, user_clone.as_ref(), duration, success)
                     .await;
             }
         }
@@ -467,6 +476,31 @@ mod tests {
             failure,
             SignInResponse::Failure { ref msg } if msg == "Invalid credentials"
         ));
+    }
+
+    #[tokio::test]
+    async fn duplicate_title_is_the_documented_public_error() {
+        let service = service();
+        let user = auth_user("user123", &["user"]);
+        let request = || CreateTaskRequest {
+            title: "Ship the example".to_string(),
+            description: String::new(),
+            priority: TaskPriority::Low,
+        };
+
+        service
+            .create_task(&user, request())
+            .await
+            .expect("first create");
+        let error = service
+            .create_task(&user, request())
+            .await
+            .expect_err("duplicate title");
+        let public = error
+            .downcast_ref::<PublicRpcError>()
+            .expect("a public error");
+        assert_eq!(public.code, 1001);
+        assert_eq!(public.message, "A task with this title already exists");
     }
 
     #[tokio::test]

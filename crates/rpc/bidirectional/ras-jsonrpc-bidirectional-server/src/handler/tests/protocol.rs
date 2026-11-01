@@ -27,6 +27,15 @@ fn jsonrpc_error_from_server_error_sends_generic_message_not_handler_detail() {
         error_codes::INVALID_REQUEST
     );
     assert_eq!(
+        jsonrpc_error_from_server_error(&ServerError::InvalidParams("missing field".into())).code,
+        error_codes::INVALID_PARAMS
+    );
+    assert_eq!(
+        jsonrpc_error_from_server_error(&ServerError::InvalidParams("missing field".into()))
+            .message,
+        "Invalid params"
+    );
+    assert_eq!(
         jsonrpc_error_from_server_error(&ServerError::HandlerNotFound("m".into())).code,
         error_codes::METHOD_NOT_FOUND
     );

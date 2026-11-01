@@ -6,10 +6,11 @@ use crate::{
 use anyhow::Result;
 use axum::{Router, routing::get};
 use bidirectional_chat_api::auth::ChatAuthServiceBuilder;
+use bidirectional_chat_api::{ChatServiceBuilder, ChatServiceHandler};
 use ras_identity_local::LocalUserProvider;
 use ras_identity_session::{JwtAlgorithm, JwtAuthProvider, SessionConfig, SessionService};
 use ras_jsonrpc_bidirectional_server::{
-    DefaultConnectionManager, WebSocketServiceBuilder,
+    DefaultConnectionManager,
     service::{BuiltWebSocketService, websocket_handler},
 };
 use std::sync::Arc;
@@ -128,30 +129,18 @@ pub async fn build_application(
     let connection_manager = Arc::new(DefaultConnectionManager::new());
 
     // Create chat server with configuration
-    let chat_server = Arc::new(
+    let chat_server =
         ChatServer::new_with_rate_limit(config.chat.clone(), config.rate_limit.clone())
             .await
             .map_err(|e| {
                 error!("Failed to create chat server: {}", e);
                 e
-            })?,
-    );
+            })?;
 
-    // Create handler with the service and connection manager
-    let handler = Arc::new(
-        bidirectional_chat_api::ChatServiceHandler::new(
-            chat_server.clone(),
-            connection_manager.clone(),
-        )
-        .with_auth_provider(auth_provider.clone()),
-    );
-
-    // Build WebSocket service
-    let ws_service = WebSocketServiceBuilder::builder()
-        .handler(handler)
-        .auth_provider(auth_provider.clone())
+    // Build the WebSocket service around the shared connection manager, so
+    // the rest of the server can send through the same one.
+    let ws_service = ChatServiceBuilder::new(chat_server, auth_provider.as_ref().clone())
         .require_auth(true)
-        .build()
         .build_with_manager(connection_manager.clone());
 
     // Create auth handlers with the shared identity provider
@@ -172,7 +161,7 @@ pub async fn build_application(
 
     // Create WebSocket endpoint
     type ChatServiceType = BuiltWebSocketService<
-        bidirectional_chat_api::ChatServiceHandler<ChatServer, DefaultConnectionManager>,
+        ChatServiceHandler<ChatServer, DefaultConnectionManager>,
         JwtAuthProvider,
         DefaultConnectionManager,
     >;

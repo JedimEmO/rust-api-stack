@@ -561,6 +561,7 @@ fn jsonrpc_error_from_server_error(error: &ServerError) -> JsonRpcError {
         ServerError::AuthenticationFailed(_) => error_codes::AUTHENTICATION_REQUIRED,
         ServerError::PermissionDenied(_) => error_codes::INSUFFICIENT_PERMISSIONS,
         ServerError::InvalidRequest(_) => error_codes::INVALID_REQUEST,
+        ServerError::InvalidParams(_) => error_codes::INVALID_PARAMS,
         ServerError::HandlerNotFound(_) => error_codes::METHOD_NOT_FOUND,
         ServerError::SerializationError(_) => error_codes::INVALID_PARAMS,
         ServerError::UpgradeFailed(_)

@@ -4,7 +4,7 @@ mod avatar;
 mod ui;
 
 use anyhow::Result;
-use app::{AppEvent, AppScreen, AppState, AuthField, ChatClient};
+use app::{AppEvent, AppScreen, AppState, AuthField, ChatClient, room_index_for_key};
 use auth::AuthClient;
 use crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
@@ -226,9 +226,10 @@ async fn run_app(
                             }
                         }
                     }
-                    KeyCode::Char(c) if c.is_ascii_digit() => {
-                        let index = c.to_digit(10).unwrap() as usize - 1;
-                        if index < app.rooms.len() {
+                    KeyCode::Char(c) => {
+                        if let Some(index) =
+                            room_index_for_key(c).filter(|&index| index < app.rooms.len())
+                        {
                             let room_name = app.rooms[index].room_name.clone();
                             drop(app);
 

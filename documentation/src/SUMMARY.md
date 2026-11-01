@@ -2,28 +2,28 @@
 
 [Introduction](introduction.md)
 
-- [Why Typed Service Definitions](why-typed-service-definitions.md)
-- [Auth In The API Contract](auth-in-api-contract.md)
+- [Why typed service definitions](why-typed-service-definitions.md)
+- [Auth in the API contract](auth-in-api-contract.md)
 
-# Application Tutorial
+# Application tutorial
 
-- [Build A Typed Workspace App](tutorial/index.md)
-  - [1. Design The Contract](tutorial/design-the-contract.md)
-  - [2. Create The API Crate](tutorial/create-the-api-crate.md)
-  - [3. Implement The Server](tutorial/implement-the-server.md)
-  - [4. Build Clients](tutorial/build-clients.md)
-  - [5. Test, Ship, And Evolve](tutorial/test-ship-and-evolve.md)
+- [Build a typed workspace app](tutorial/index.md)
+  - [Design the contract](tutorial/design-the-contract.md)
+  - [Create the API crate](tutorial/create-the-api-crate.md)
+  - [Implement the server](tutorial/implement-the-server.md)
+  - [Build clients](tutorial/build-clients.md)
+  - [Test, ship and evolve](tutorial/test-ship-and-evolve.md)
 
-# Macro Guides
+# Macro guides
 
 - [`jsonrpc_service!`](macros/jsonrpc-service.md)
 - [`rest_service!`](macros/rest-service.md)
 - [`file_service!`](macros/file-service.md)
 - [`jsonrpc_bidirectional_service!`](macros/bidirectional-jsonrpc-service.md)
 
-# Integration Topics
+# Integration topics
 
-- [Generated Specs And Clients](generated-specs-and-clients.md)
-- [Permission Manifests](permission-manifests.md)
-- [Identity And Sessions](identity-and-sessions.md)
+- [Generated specs and clients](generated-specs-and-clients.md)
+- [Permission manifests](permission-manifests.md)
+- [Identity and sessions](identity-and-sessions.md)
 - [Observability](observability.md)

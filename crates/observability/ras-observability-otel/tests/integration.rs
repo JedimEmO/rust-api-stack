@@ -12,7 +12,7 @@ use ras_auth_core::AuthenticatedUser;
 use ras_observability_core::{MethodDurationTracker, RequestContext, ServiceMetrics, UsageTracker};
 use ras_observability_otel::{OtelMethodDurationTracker, OtelSetupBuilder, OtelUsageTracker};
 use serde::{Deserialize, Serialize};
-use std::{sync::Arc, time::Instant};
+use std::time::Instant;
 use tokio::{
     sync::{Mutex, MutexGuard},
     time::{Duration, sleep},
@@ -28,7 +28,6 @@ async fn otel_test_guard() -> MutexGuard<'static, ()> {
 struct AppState {
     usage_tracker: OtelUsageTracker,
     duration_tracker: OtelMethodDurationTracker,
-    metrics: Arc<ras_observability_otel::OtelMetrics>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -57,7 +56,6 @@ async fn create_user(
         .usage_tracker
         .track_request(&headers, None, &context)
         .await;
-    state.metrics.increment_requests_started(&context);
 
     // Create response
     let response = UserResponse {
@@ -69,9 +67,8 @@ async fn create_user(
     let duration = start.elapsed();
     state
         .duration_tracker
-        .track_duration(&context, None, duration)
+        .track_duration(&context, None, duration, true)
         .await;
-    state.metrics.increment_requests_completed(&context, true);
 
     Ok(Json(response))
 }
@@ -86,15 +83,13 @@ async fn health_check(State(state): State<AppState>, headers: HeaderMap) -> Stat
         .usage_tracker
         .track_request(&headers, None, &context)
         .await;
-    state.metrics.increment_requests_started(&context);
 
     // Track completion
     let duration = start.elapsed();
     state
         .duration_tracker
-        .track_duration(&context, None, duration)
+        .track_duration(&context, None, duration, true)
         .await;
-    state.metrics.increment_requests_completed(&context, true);
 
     StatusCode::OK
 }
@@ -121,7 +116,6 @@ async fn get_profile(
         .usage_tracker
         .track_request(&headers, Some(&user), &context)
         .await;
-    state.metrics.increment_requests_started(&context);
 
     let response = UserResponse {
         id: user.user_id.clone(),
@@ -132,9 +126,8 @@ async fn get_profile(
     let duration = start.elapsed();
     state
         .duration_tracker
-        .track_duration(&context, Some(&user), duration)
+        .track_duration(&context, Some(&user), duration, true)
         .await;
-    state.metrics.increment_requests_completed(&context, true);
 
     Ok(Json(response))
 }
@@ -152,7 +145,6 @@ async fn test_full_service_integration() {
     let state = AppState {
         usage_tracker: setup.usage_tracker(),
         duration_tracker: setup.method_duration_tracker(),
-        metrics: setup.metrics(),
     };
 
     // Build the application
@@ -235,7 +227,6 @@ async fn test_jsonrpc_protocol_tracking() {
         .build()
         .expect("Failed to set up OpenTelemetry");
 
-    let metrics = setup.metrics();
     let usage_tracker = setup.usage_tracker();
     let duration_tracker = setup.method_duration_tracker();
 
@@ -248,13 +239,11 @@ async fn test_jsonrpc_protocol_tracking() {
 
         // Track request
         usage_tracker.track_request(&headers, None, &context).await;
-        metrics.increment_requests_started(&context);
 
         // Track completion
         duration_tracker
-            .track_duration(&context, None, Duration::from_millis(10))
+            .track_duration(&context, None, Duration::from_millis(10), true)
             .await;
-        metrics.increment_requests_completed(&context, true);
     }
 
     // Force flush metrics to ensure they're recorded
@@ -395,7 +384,6 @@ async fn test_high_cardinality_protection() {
         usage_tracker
             .track_request(&headers, Some(&user), &context)
             .await;
-        metrics.increment_requests_started(&context);
         metrics.record_method_duration(&context, Duration::from_millis(i as u64 % 100));
         metrics.increment_requests_completed(&context, true);
     }
@@ -413,4 +401,51 @@ async fn test_high_cardinality_protection() {
     assert!(!metrics_text.contains("item_id"));
     assert!(!metrics_text.contains("session_id"));
     assert!(!metrics_text.contains("req-"));
+}
+
+#[tokio::test]
+async fn test_duration_tracker_records_the_outcome() {
+    let _guard = otel_test_guard().await;
+
+    let setup = OtelSetupBuilder::new("outcome_test_service")
+        .build()
+        .expect("Failed to set up OpenTelemetry");
+    let duration_tracker = setup.method_duration_tracker();
+
+    duration_tracker
+        .track_duration(
+            &RequestContext::jsonrpc("outcomeOk".to_string()),
+            None,
+            Duration::from_millis(3),
+            true,
+        )
+        .await;
+    duration_tracker
+        .track_duration(
+            &RequestContext::jsonrpc("outcomeFailed".to_string()),
+            None,
+            Duration::from_millis(3),
+            false,
+        )
+        .await;
+
+    setup.force_flush().expect("Failed to flush metrics");
+    let server = TestServer::builder()
+        .mock_transport()
+        .build(setup.metrics_router())
+        .unwrap();
+    let metrics_text = server.get("/metrics").await.text();
+
+    let completed_line = |method: &str| {
+        metrics_text
+            .lines()
+            .find(|line| {
+                line.starts_with("requests_completed")
+                    && line.contains(&format!("method=\"{method}\""))
+            })
+            .unwrap_or_else(|| panic!("no requests_completed line for {method}:\n{metrics_text}"))
+            .to_string()
+    };
+    assert!(completed_line("outcomeOk").contains("success=\"true\""));
+    assert!(completed_line("outcomeFailed").contains("success=\"false\""));
 }

@@ -51,7 +51,9 @@ pub struct OpenRpc {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum MethodOrReference {
+    /// An inline Method Object.
     Method(Box<Method>),
+    /// A `$ref` to a Method Object in `components`.
     Reference(Reference),
 }
 

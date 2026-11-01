@@ -177,7 +177,9 @@ pub struct ExamplePairing {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ExampleOrReference {
+    /// An inline Example Object.
     Example(Box<Example>),
+    /// A `$ref` to a Example Object in `components`.
     Reference(Reference),
 }
 

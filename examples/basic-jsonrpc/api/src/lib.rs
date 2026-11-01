@@ -111,7 +111,7 @@ jsonrpc_service!({
                         updated_at: "2026-05-23T12:00:00Z".to_string(),
                     },
                 },
-                /// Titles are unique per user.
+                /// Titles are unique.
                 duplicate_title {
                     params: CreateTaskRequest {
                         title: "Ship the example".to_string(),

@@ -224,12 +224,19 @@ pub struct Schema {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SchemaType {
+    /// `null`.
     Null,
+    /// `boolean`.
     Boolean,
+    /// `object`.
     Object,
+    /// `array`.
     Array,
+    /// `number`, any JSON number.
     Number,
+    /// `string`.
     String,
+    /// `integer`, a number with no fractional part.
     Integer,
 }
 
@@ -237,7 +244,9 @@ pub enum SchemaType {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum SchemaOrBool {
+    /// A schema the value must match.
     Schema(Box<Schema>),
+    /// `true` allows any value; `false` allows none.
     Bool(bool),
 }
 
@@ -245,7 +254,9 @@ pub enum SchemaOrBool {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum SchemaOrReference {
+    /// An inline schema.
     Schema(Box<Schema>),
+    /// A `$ref` to a schema in `components`.
     Reference(Reference),
 }
 
@@ -253,7 +264,10 @@ pub enum SchemaOrReference {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum SchemaOrStringArray {
+    /// A schema the whole object must match when the property is present.
     Schema(Box<Schema>),
+    /// Property names that must also be present when the property is
+    /// present.
     StringArray(Vec<String>),
 }
 

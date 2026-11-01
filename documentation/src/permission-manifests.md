@@ -1,14 +1,22 @@
-# Permission Manifests
+# Permission manifests
 
-The service macros can emit a typed permission manifest from the same auth
-declarations used by the generated server. This is useful for audits, admin UI
-tooling, test assertions, and token issuing code that should not repeat
-permission strings by hand.
+A service definition says, for every operation,
+whether it is public, needs a login, or needs certain permissions.
+The generated server enforces that.
+Other code needs the same facts:
+an audit wants a list, an admin UI wants to show it,
+and the code that issues tokens has to spell the same permission strings.
+Copying those strings by hand lets them drift from the service.
 
-## Enable The Feature
+With the `permissions` feature, the service macros also emit the auth declarations as data:
+a manifest function, and constants for every permission and every protected operation.
+The types live in `ras-permission-manifest`.
 
-Enable manifest generation on the macro crate. The generated API refers to
-`ras-permission-manifest`, so add that crate beside the macro dependency:
+## Enabling the feature
+
+Turn on `permissions` in the macro crate.
+The generated code refers to `ras-permission-manifest` by name,
+so add that crate next to the macro:
 
 ```toml
 [dependencies]
@@ -16,38 +24,23 @@ ras-rest-macro = { version = "0.4.0", default-features = false, features = ["per
 ras-permission-manifest = "0.1.0"
 ```
 
-For file services and JSON-RPC services, use the equivalent macro crate:
+The other service macros have the same feature:
 
 ```toml
-ras-file-macro = { version = "0.3.0", default-features = false, features = ["permissions"] }
 ras-jsonrpc-macro = { version = "0.4.0", default-features = false, features = ["permissions"] }
+ras-file-macro = { version = "0.3.0", default-features = false, features = ["permissions"] }
+ras-jsonrpc-bidirectional-macro = { version = "0.3.0", default-features = false, features = ["permissions"] }
 ```
 
-The `permissions` switch belongs to the macro crate. The macro emits the
-manifest functions and constants only when that macro feature is enabled; the
-generated code does not branch on a `permissions` feature in your API crate.
+The feature belongs to the macro crate.
+The macro emits the manifest function and the constants only when it is on,
+and the generated code does not check a `permissions` feature in your API crate.
+The output does not depend on the macro's `server` or `client` features either,
+so a client build of the API crate sees the same constants.
 
-If your API crate exposes optional server/client outputs, those features can
-forward to the macro crate:
+## Generated items
 
-```toml
-[features]
-server = ["ras-rest-macro/server", "dep:axum", "dep:ras-rest-core"]
-client = ["ras-rest-macro/reqwest", "ras-transport-core/reqwest"]
-```
-
-Server build scripts then depend on the API crate feature that makes the
-generated service/spec functions available:
-
-```toml
-[build-dependencies]
-workspace-api = { path = "../workspace-api", features = ["server"] }
-ras-permission-manifest = "0.1.0"
-```
-
-## Generated API
-
-For a service named `UserService`, the macro emits:
+For a REST service named `UserService`, the macro emits:
 
 ```rust,ignore
 pub fn generate_userservice_permission_manifest()
@@ -63,13 +56,38 @@ pub mod userservice_permissions {
 }
 ```
 
-Permission constants are generated from every permission string used by the
-service. Operation constants are generated for protected operations and preserve
-the same OR/AND grouping used by runtime checks.
+The function and module names use the service name in lower case.
 
-## Build-Time Artifact
+Each permission string used anywhere in the service gets a `PermissionRef` constant.
+The constant name is the string in upper case,
+with every run of other characters turned into `_`:
+`task:write` becomes `TASK_WRITE`.
+When two strings map to the same name, both names get a hash suffix.
 
-Aggregate service manifests explicitly from `build.rs`:
+Each protected operation gets a `StaticPermissionRequirement` constant in `operations`,
+with the same OR-of-AND groups the server checks.
+Public and `OPTIONAL_AUTH` operations get none.
+
+A caller meets a requirement by holding every permission of one group.
+With no groups, or only empty ones, any authenticated caller does.
+An empty group next to non-empty ones is ignored, as it is on the server,
+so `["admin"] | []` requires `admin`.
+The service macros reject that shape anyway;
+the rule matters when code builds requirements by hand.
+The constant is named after the operation:
+
+| Macro | Constant name from |
+|---|---|
+| `rest_service!` | the handler name, such as `post_users` for `POST users` |
+| `jsonrpc_service!` | the method name |
+| `file_service!` | the endpoint name |
+| `jsonrpc_bidirectional_service!` | `client_to_server_<method>`; server-to-client calls take no permissions, so they have no constant |
+
+A versioned operation also gets one constant per old version, with the version appended.
+
+## Writing the manifest from a build script
+
+Combine the services into one `PermissionManifest` and write it as JSON:
 
 ```rust,ignore
 fn main() {
@@ -86,36 +104,87 @@ fn main() {
 }
 ```
 
-The JSON distinguishes public operations, authenticated-only operations, and
-permission groups. For versioned compatibility endpoints, every callable wire
-method or path appears in the manifest.
+The build script needs the API crate and `ras-permission-manifest` as build dependencies:
 
-## Token Issuing
+```toml
+[build-dependencies]
+workspace-api = { path = "../workspace-api" }
+ras-permission-manifest = "0.1.0"
+```
 
-Use generated constants when constructing permission claims:
+The manifest functions need no API crate feature.
+If the same build script also writes the OpenAPI or OpenRPC document,
+enable the API crate feature that turns on the macro's `server` feature, usually `server`.
+
+A build script runs in the package directory,
+so the relative path above lands in that package's `target/` directory,
+not necessarily the workspace one.
+
+`from_services` sorts services and operations, so the file only changes when the auth declarations do.
+An entry looks like this:
+
+```json
+{
+  "operation_id": "UserService.post_users",
+  "operation_name": "post_users",
+  "kind": "rest_endpoint",
+  "wire": { "kind": "rest", "method": "POST", "path": "/api/v1/users" },
+  "auth": { "type": "permissions", "any_of": [{ "all_of": ["admin"] }] },
+  "version": null,
+  "canonical_operation_id": null
+}
+```
+
+`auth` is one of `public`, `optional` (`OPTIONAL_AUTH`), `authenticated`, or `permissions`.
+A versioned operation appears once per callable wire method or path;
+its old versions carry the `version` and point at the current operation through `canonical_operation_id`.
+The top-level `schema_version` field lets tooling check that it understands the format.
+
+## Issuing tokens with the constants
+
+The permission constants are useful where tokens are issued.
+`ras-identity-session` asks a `UserPermissions` implementation
+for the permissions of each identity that signs in.
+Build that list from the generated constants:
 
 ```rust,ignore
+use async_trait::async_trait;
+use ras_identity_core::{IdentityResult, UserPermissions, VerifiedIdentity};
+use ras_identity_session::SessionService;
 use ras_permission_manifest::PermissionSet;
+use std::sync::Arc;
 use workspace_api::userservice_permissions;
 
+struct WorkspacePermissions;
+
+#[async_trait]
+impl UserPermissions for WorkspacePermissions {
+    async fn get_permissions(&self, identity: &VerifiedIdentity) -> IdentityResult<Vec<String>> {
+        let mut permissions = PermissionSet::new().with(userservice_permissions::TASK_WRITE);
+        if identity.subject == "admin" {
+            permissions.insert(userservice_permissions::ADMIN);
+        }
+        Ok(permissions.into_hash_set().into_iter().collect())
+    }
+}
+
+let session_service =
+    SessionService::new(session_config)?.with_permissions(Arc::new(WorkspacePermissions));
+```
+
+A misspelled constant is a compile error, where a misspelled string would be a token that never passes a check.
+
+The operation constants test a permission set against an operation,
+which suits unit tests for a role's grants:
+
+```rust,ignore
 let permissions = PermissionSet::new()
-    .with(userservice_permissions::TASK_WRITE)
     .with(userservice_permissions::ADMIN)
     .into_hash_set();
 
-session_service.begin_session(user_id, permissions).await?;
+assert!(userservice_permissions::operations::POST_USERS.is_satisfied_by(&permissions));
 ```
 
-You can also test whether a candidate token satisfies a generated operation
-requirement:
-
-```rust,ignore
-assert!(
-    userservice_permissions::operations::POST_USERS
-        .is_satisfied_by(&permissions)
-);
-```
-
-The manifest does not replace the runtime auth model. JWT/session claims still
-carry strings, but token issuing code can now import compile-checked constants
-from the API contract instead of spelling those strings repeatedly.
+The manifest does not replace the runtime checks.
+Tokens and `AuthenticatedUser` still carry plain strings,
+and the generated server checks them with the configured `AuthProvider`.

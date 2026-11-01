@@ -1,4 +1,28 @@
-//! Authentication, authorization, and HTTP credential handling for RAS services.
+//! Authentication, authorization and HTTP credential handling for Rust API Stack services.
+//!
+//! This crate is the contract between the generated services and your authentication
+//! logic. The REST, JSON-RPC, bidirectional JSON-RPC and file service macros generate code
+//! against it; `ras-identity-session` implements [`AuthProvider`] for JWT sessions.
+//! Implement [`AuthProvider`] yourself when tokens come from somewhere else.
+//!
+//! The main items:
+//!
+//! - [`AuthProvider`] validates a token and returns an [`AuthenticatedUser`], or an
+//!   [`AuthError`]. Its default `check_permissions` requires every listed permission.
+//! - [`Caller`] is what an `OPTIONAL_AUTH` handler receives: anonymous or authenticated.
+//! - [`authorize_request`] and [`resolve_caller`] run the credential, CSRF, authentication
+//!   and permission steps for the generated REST and file servers.
+//! - [`check_permission_groups`] implements the OR-of-AND permission groups of
+//!   `WITH_PERMISSIONS([...] | [...])`.
+//! - [`AuthTransportConfig`], [`AuthCookieConfig`] and [`CsrfConfig`] decide whether the
+//!   token arrives as a bearer header or a cookie. Cookie auth always carries a CSRF check;
+//!   the default is a double-submit cookie compared in constant time.
+//!
+//! The crate has no Cargo features. The
+//! [README](https://github.com/JedimEmO/rust-api-stack/blob/master/crates/core/ras-auth-core/README.md)
+//! covers cookie defaults and CSRF modes, and the
+//! [identity and sessions guide](https://github.com/JedimEmO/rust-api-stack/blob/master/documentation/src/identity-and-sessions.md)
+//! shows how the pieces fit together.
 
 mod authorize;
 mod transport;

@@ -66,6 +66,7 @@ impl Parse for ServiceDefinition {
         let mut feature_gated = false;
         let mut require_json_content_type = true;
         let mut docs_require_auth = false;
+        let mut serve_docs_flag = None;
 
         while content.peek(Ident) {
             let field_name = content.fork().parse::<Ident>()?;
@@ -95,18 +96,13 @@ impl Parse for ServiceDefinition {
                 let _ = content.parse::<Token![:]>()?;
                 let enabled = content.parse::<syn::LitBool>()?;
                 static_hosting.serve_docs = enabled.value();
+                serve_docs_flag = Some(enabled);
                 let _ = content.parse::<Token![,]>()?;
             } else if field_name == "docs_path" {
                 let _ = content.parse::<Ident>()?; // "docs_path"
                 let _ = content.parse::<Token![:]>()?;
                 let path = content.parse::<LitStr>()?;
                 static_hosting.docs_path = path.value();
-                let _ = content.parse::<Token![,]>()?;
-            } else if field_name == "ui_theme" {
-                let _ = content.parse::<Ident>()?; // "ui_theme"
-                let _ = content.parse::<Token![:]>()?;
-                let theme = content.parse::<LitStr>()?;
-                static_hosting.ui_theme = theme.value();
                 let _ = content.parse::<Token![,]>()?;
             } else if field_name == "body_limit" {
                 let _ = content.parse::<Ident>()?; // "body_limit"
@@ -140,6 +136,19 @@ impl Parse for ServiceDefinition {
                     format!("Unknown field: {}", field_name),
                 ));
             }
+        }
+
+        // The docs page loads the generated OpenAPI document, so it cannot exist
+        // without one. Say so here rather than letting the expansion fail on a
+        // missing `try_generate_*_openapi` function.
+        if let Some(flag) = serve_docs_flag.filter(|flag| flag.value())
+            && openapi.is_none()
+        {
+            return Err(syn::Error::new(
+                flag.span(),
+                "`serve_docs: true` needs `openapi: true` (or `openapi: { output: \"...\" }`): \
+                 the docs page serves the generated OpenAPI document",
+            ));
         }
 
         let _ = content.parse::<Ident>()?; // "endpoints"
@@ -884,5 +893,39 @@ mod example_diagnostics {
         }
         // A `()` response may leave `response` out.
         parse("DELETE UNAUTHORIZED items () -> () { examples: [ a { } ] }").unwrap();
+    }
+}
+
+#[cfg(test)]
+mod docs_diagnostics {
+    use super::*;
+
+    fn parse(options: &str) -> syn::Result<ServiceDefinition> {
+        syn::parse_str(&format!(
+            "{{ service_name: S, base_path: \"/api\", {options} endpoints: [ GET UNAUTHORIZED items() -> Item ] }}"
+        ))
+    }
+
+    #[test]
+    fn serve_docs_without_openapi_is_rejected_at_serve_docs() {
+        for options in ["serve_docs: true,", "openapi: false, serve_docs: true,"] {
+            let error = parse(options).expect_err(options);
+            let message = error.to_string();
+            assert!(
+                message.contains("`serve_docs: true` needs `openapi: true`"),
+                "{options}\n  gave: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn serve_docs_with_openapi_parses() {
+        for options in [
+            "openapi: true, serve_docs: true,",
+            "serve_docs: true, openapi: { output: \"api.json\" },",
+            "serve_docs: false,",
+        ] {
+            parse(options).unwrap_or_else(|error| panic!("{options}: {error}"));
+        }
     }
 }

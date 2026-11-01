@@ -1,7 +1,32 @@
-//! Server-side WebSocket handling for bidirectional JSON-RPC communication
+//! The Axum WebSocket server for bidirectional JSON-RPC: clients call methods on the server, and
+//! the server sends notifications and calls back over the same socket.
 //!
-//! This crate provides the server infrastructure for handling WebSocket connections
-//! with JSON-RPC message routing, authentication, and connection management.
+//! Most services use this crate through the code that `ras-jsonrpc-bidirectional-macro`
+//! generates, which implements [`MessageHandler`] and builds the service. Used by hand, the main
+//! items are:
+//!
+//! - [`MessageRouter`], a [`MessageHandler`] that maps method names to closures;
+//! - [`WebSocketServiceBuilder`], which turns a handler and an [`AuthProvider`] into a service,
+//!   with limits on message size, connections and subscriptions, keepalive, and periodic
+//!   re-validation of the connection's token;
+//! - [`service::websocket_handler`], the Axum handler that serves a [`WebSocketService`];
+//! - [`DefaultConnectionManager`], which tracks connections and topic subscriptions and sends or
+//!   broadcasts to them;
+//! - [`ServerError`], whose [`ServerError::Rpc`] variant carries an error the client may see,
+//!   and whose [`ServerError::InvalidParams`] is sent as `-32602`.
+//!
+//! The crate re-exports [`async_trait`](macro@async_trait), [`ConnectionId`], [`ConnectionManager`],
+//! [`AuthenticatedUser`] and [`Caller`], the names an implementation of a generated
+//! `<Name>Service` trait needs.
+//!
+//! The connection is authenticated during the upgrade, from an `Authorization: Bearer` header, a
+//! `token.<jwt>` WebSocket subprotocol for browsers, or an `X-Auth-Token` header. A JSON-RPC
+//! request without an `id` is a notification and never gets a response.
+//!
+//! The crate has no Cargo features. See the [README] and the [macro guide].
+//!
+//! [README]: https://github.com/JedimEmO/rust-api-stack/blob/master/crates/rpc/bidirectional/ras-jsonrpc-bidirectional-server/README.md
+//! [macro guide]: https://github.com/JedimEmO/rust-api-stack/blob/master/documentation/src/macros/bidirectional-jsonrpc-service.md
 
 pub mod connection;
 pub mod error;
@@ -11,6 +36,10 @@ pub mod router;
 pub mod service;
 mod subscriptions;
 pub mod upgrade;
+
+#[doc(hidden)]
+#[path = "private.rs"]
+pub mod __private;
 
 pub use connection::{
     ChannelMessageSender, ConnectionContext, OutboundMessage, SubscriptionPolicy,
@@ -32,7 +61,14 @@ pub use ras_jsonrpc_bidirectional_types::{
 };
 
 // Re-export auth types for convenience
-pub use ras_auth_core::{AuthError, AuthProvider, AuthenticatedUser};
+pub use ras_auth_core::{AuthError, AuthProvider, AuthenticatedUser, Caller};
+
+// Types that appear in the signatures of a generated `<Name>Service` trait.
+pub use ras_jsonrpc_bidirectional_types::ConnectionManager;
+
+/// The attribute a `<Name>Service` implementation needs, re-exported so the implementing crate
+/// does not have to depend on `async-trait` itself.
+pub use async_trait::async_trait;
 
 // Re-export JSON-RPC types
 pub use ras_jsonrpc_types::{JsonRpcRequest, JsonRpcResponse};

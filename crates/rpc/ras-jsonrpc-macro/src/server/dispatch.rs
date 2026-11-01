@@ -138,31 +138,65 @@ fn generate_jsonrpc_canonical_dispatch(method: &MethodDefinition) -> proc_macro2
         }
     };
 
+    let body = quote! {
+        #parse_params
+
+        match #handler_call {
+            Ok(result) => {
+                match serde_json::to_value(result) {
+                    Ok(result_value) => ras_jsonrpc_types::JsonRpcResponse::success(result_value, request.id.clone()),
+                    Err(e) => ras_jsonrpc_types::JsonRpcResponse::error(
+                        ras_jsonrpc_types::JsonRpcError::internal_error(e.to_string()),
+                        request.id.clone()
+                    ),
+                }
+            }
+            Err(e) => #handler_error,
+        }
+    };
+
+    tracked_method_arm(&method_wire, &auth_check, &tracker_user, body)
+}
+
+/// Wraps a method's decoding and handler call in the usage and duration trackers.
+///
+/// Authorization runs first and may return early; such a rejection reaches
+/// neither tracker. Everything after it runs inside an async block, so an early
+/// `return` there (bad params, a failed migration) still produces a response
+/// that the duration tracker records, with `success` false for any error.
+fn tracked_method_arm(
+    method_wire: &impl quote::ToTokens,
+    auth_check: &proc_macro2::TokenStream,
+    tracker_user: &proc_macro2::TokenStream,
+    body: proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
     quote! {
         #method_wire => {
             #auth_check
-            #parse_params
 
-            let start_time = std::time::Instant::now();
-            let handler_result = #handler_call;
-            let duration = start_time.elapsed();
+            if let Some(tracker) = &self.usage_tracker {
+                let tracker_headers =
+                    ras_jsonrpc_core::redact_sensitive_headers_for_auth_transport(&headers, &self.auth_transport);
+                tracker(&tracker_headers, authenticated_user.as_ref(), &request).await;
+            }
+
+            let __ras_start = std::time::Instant::now();
+            let __ras_response: ras_jsonrpc_types::JsonRpcResponse = async {
+                #body
+            }
+            .await;
 
             if let Some(duration_tracker) = &self.method_duration_tracker {
-                duration_tracker(#method_wire, #tracker_user, duration).await;
+                duration_tracker(
+                    #method_wire,
+                    #tracker_user,
+                    __ras_start.elapsed(),
+                    __ras_response.error.is_none(),
+                )
+                .await;
             }
 
-            match handler_result {
-                Ok(result) => {
-                    match serde_json::to_value(result) {
-                        Ok(result_value) => ras_jsonrpc_types::JsonRpcResponse::success(result_value, request.id.clone()),
-                        Err(e) => ras_jsonrpc_types::JsonRpcResponse::error(
-                            ras_jsonrpc_types::JsonRpcError::internal_error(e.to_string()),
-                            request.id.clone()
-                        ),
-                    }
-                }
-                Err(e) => #handler_error,
-            }
+            __ras_response
         }
     }
 }
@@ -194,9 +228,7 @@ fn generate_jsonrpc_legacy_dispatch(
         }
     };
 
-    quote! {
-        #method_wire => {
-            #auth_check
+    let body = quote! {
             #parse_params
 
             let #params_ident: #canonical_request_type =
@@ -208,15 +240,7 @@ fn generate_jsonrpc_legacy_dispatch(
                     ),
                 };
 
-            let start_time = std::time::Instant::now();
-            let handler_result = #handler_call;
-            let duration = start_time.elapsed();
-
-            if let Some(duration_tracker) = &self.method_duration_tracker {
-                duration_tracker(#method_wire, #tracker_user, duration).await;
-            }
-
-            match handler_result {
+            match #handler_call {
                 Ok(result) => {
                     let result: #legacy_response_type =
                         match <#migration_type as ras_jsonrpc_core::VersionMigration<#canonical_response_type, #legacy_response_type>>::migrate(result) {
@@ -237,8 +261,9 @@ fn generate_jsonrpc_legacy_dispatch(
                 }
                 Err(e) => #handler_error,
             }
-        }
-    }
+    };
+
+    tracked_method_arm(method_wire, &auth_check, &tracker_user, body)
 }
 
 /// Turns a handler's `Err(e)` into a response: a returned `PublicRpcError`

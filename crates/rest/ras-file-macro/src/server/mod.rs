@@ -24,6 +24,8 @@ pub fn generate_server(definition: &FileServiceDefinition) -> TokenStream {
     let trait_methods = generate_trait_methods(definition, &trait_name);
     let handler_functions = generate_handlers(definition, &trait_name);
     let router_construction = generate_router_construction(&definition.endpoints, base_path);
+    let usage_tracker_type = routes::usage_tracker_type();
+    let duration_tracker_type = routes::duration_tracker_type();
 
     quote! {
         pub type #error_name = ::ras_file_core::FileError;
@@ -39,8 +41,8 @@ pub fn generate_server(definition: &FileServiceDefinition) -> TokenStream {
             service: S,
             auth_provider: Option<A>,
             auth_transport: ::ras_auth_core::AuthTransportConfig,
-            usage_tracker: Option<Box<dyn Fn(&::axum::http::HeaderMap, &str, &str) + Send + Sync>>,
-            duration_tracker: Option<Box<dyn Fn(&str, &str, std::time::Duration) + Send + Sync>>,
+            usage_tracker: Option<#usage_tracker_type>,
+            method_duration_tracker: Option<#duration_tracker_type>,
         }
 
         impl<S, A> #builder_name<S, A>
@@ -54,7 +56,7 @@ pub fn generate_server(definition: &FileServiceDefinition) -> TokenStream {
                     auth_provider: None,
                     auth_transport: ::ras_auth_core::AuthTransportConfig::default(),
                     usage_tracker: None,
-                    duration_tracker: None,
+                    method_duration_tracker: None,
                 }
             }
 
@@ -81,19 +83,39 @@ pub fn generate_server(definition: &FileServiceDefinition) -> TokenStream {
                 self
             }
 
-            pub fn with_usage_tracker<F>(mut self, tracker: F) -> Self
+            /// Set the usage tracker.
+            ///
+            /// Called once for each request that passes authorization, before its path
+            /// or body is decoded. It receives the request headers (credentials
+            /// redacted), the authenticated user (if any), the HTTP method and the route
+            /// path, such as `/download/{id}`. Requests rejected for a missing or invalid
+            /// credential or a missing permission reach neither tracker.
+            pub fn with_usage_tracker<F, Fut>(mut self, tracker: F) -> Self
             where
-                F: Fn(&::axum::http::HeaderMap, &str, &str) + Send + Sync + 'static,
+                F: Fn(&::axum::http::HeaderMap, Option<&::ras_auth_core::AuthenticatedUser>, &str, &str) -> Fut + Send + Sync + 'static,
+                Fut: ::std::future::Future<Output = ()> + Send + 'static,
             {
-                self.usage_tracker = Some(Box::new(tracker));
+                self.usage_tracker = Some(::std::sync::Arc::new(move |headers, user, method, path| {
+                    Box::pin(tracker(headers, user, method, path))
+                }));
                 self
             }
 
-            pub fn with_duration_tracker<F>(mut self, tracker: F) -> Self
+            /// Set the method duration tracker.
+            ///
+            /// Called once for every request the usage tracker saw, after the response is
+            /// built. It receives the HTTP method, the route path, the authenticated user
+            /// (if any), the time from the usage tracker to the finished response, and
+            /// whether the request succeeded: `false` when the response status is 4xx or
+            /// 5xx, such as a rejected multipart part or a handler error.
+            pub fn with_method_duration_tracker<F, Fut>(mut self, tracker: F) -> Self
             where
-                F: Fn(&str, &str, std::time::Duration) + Send + Sync + 'static,
+                F: Fn(&str, &str, Option<&::ras_auth_core::AuthenticatedUser>, ::std::time::Duration, bool) -> Fut + Send + Sync + 'static,
+                Fut: ::std::future::Future<Output = ()> + Send + 'static,
             {
-                self.duration_tracker = Some(Box::new(tracker));
+                self.method_duration_tracker = Some(::std::sync::Arc::new(move |method, path, user, duration, success| {
+                    Box::pin(tracker(method, path, user, duration, success))
+                }));
                 self
             }
 
@@ -107,8 +129,8 @@ pub fn generate_server(definition: &FileServiceDefinition) -> TokenStream {
                 let service = ::std::sync::Arc::new(self.service);
                 let auth_provider = self.auth_provider.map(::std::sync::Arc::new);
                 let auth_transport = self.auth_transport;
-                let usage_tracker = self.usage_tracker.map(::std::sync::Arc::new);
-                let duration_tracker = self.duration_tracker.map(::std::sync::Arc::new);
+                let usage_tracker = self.usage_tracker;
+                let method_duration_tracker = self.method_duration_tracker;
 
                 #router_construction
             }

@@ -13,6 +13,10 @@ pub struct ErrorObject {
     /// This MUST be an integer. The error codes from and including -32768 to -32000
     /// are reserved for pre-defined errors. These pre-defined errors SHOULD be assumed
     /// to be returned from any JSON-RPC api.
+    ///
+    /// [`Validate::validate`] accepts a reserved code only when it is one of the
+    /// [`error_codes`] constants or a server error in `-32099..=-32000`; see
+    /// [`validate_error_code`](crate::validate_error_code).
     pub code: i64,
 
     /// A String providing a short description of the error.
@@ -120,10 +124,7 @@ impl Validate for ErrorObject {
             return Err(crate::error::OpenRpcError::missing_field("message"));
         }
 
-        // Validate error code if it's not in reserved range
-        if !self.is_reserved_code() {
-            crate::validation::validate_error_code(self.code)?;
-        }
+        crate::validation::validate_error_code(self.code)?;
 
         // Validate extensions
         self.extensions.validate()?;
@@ -231,6 +232,40 @@ mod tests {
         // Reserved codes are allowed in validation (they're pre-defined)
         let error = ErrorObject::parse_error();
         assert!(error.validate().is_ok());
+    }
+
+    #[test]
+    fn validation_accepts_pre_defined_server_and_application_codes() {
+        for code in [
+            error_codes::PARSE_ERROR,
+            error_codes::INVALID_REQUEST,
+            error_codes::METHOD_NOT_FOUND,
+            error_codes::INVALID_PARAMS,
+            error_codes::INTERNAL_ERROR,
+            error_codes::SERVER_ERROR_MIN,
+            -32050,
+            error_codes::SERVER_ERROR_MAX,
+            -31999,
+            -32769,
+            -1,
+            0,
+            1000,
+        ] {
+            assert!(
+                ErrorObject::new(code, "error").validate().is_ok(),
+                "code {code} should be valid"
+            );
+        }
+    }
+
+    #[test]
+    fn validation_rejects_codes_reserved_for_future_use() {
+        for code in [-32768, -32701, -32699, -32604, -32599, -32100] {
+            assert!(
+                ErrorObject::new(code, "error").validate().is_err(),
+                "code {code} should be rejected"
+            );
+        }
     }
 
     #[test]

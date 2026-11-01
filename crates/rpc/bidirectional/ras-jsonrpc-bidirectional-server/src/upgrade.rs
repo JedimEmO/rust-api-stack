@@ -57,8 +57,19 @@ impl WebSocketUpgrade {
             + Send
             + 'static,
     {
-        // Authenticate before upgrading
-        let auth_result = self.authenticate(auth_provider).await;
+        // Authenticate before upgrading. Without `require_auth` a bad credential
+        // connects anonymously, as public HTTP routes ignore it; methods that
+        // need a user still refuse the anonymous connection.
+        let auth_result = match self.authenticate(auth_provider).await {
+            Err(e) if !require_auth => {
+                warn!(
+                    "Ignoring invalid WebSocket credential; connecting anonymously: {}",
+                    e
+                );
+                Ok(None)
+            }
+            result => result,
+        };
 
         match auth_result {
             Ok(user) => {

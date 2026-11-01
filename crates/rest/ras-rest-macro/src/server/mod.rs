@@ -160,8 +160,8 @@ pub(crate) fn generate_server_code(
                     "Insufficient permissions",
                 ),
             };
-            // Rejections are otherwise invisible to the usage/duration trackers,
-            // which only run on the post-auth happy path; log them here so a
+            // Rejections never reach the usage/duration trackers, which run
+            // only once authorization has passed; log them here so a
             // client hammering an endpoint with a bad credential is observable.
             // The `error` detail is logged server-side only; the client gets the
             // generic `message`.
@@ -195,6 +195,27 @@ pub(crate) fn generate_server_code(
             }
         }
 
+        /// Turn a handler's `RestError` into a response. The message is sent as
+        /// written; the internal error, if any, is only logged.
+        #[allow(dead_code)]
+        fn __ras_rest_error_response(rest_error: ras_rest_core::RestError) -> axum::response::Response {
+            use axum::response::IntoResponse;
+
+            if let Some(internal) = &rest_error.internal_error {
+                ras_rest_core::tracing::error!(error = ?internal, "Request failed with status {}", rest_error.status);
+            }
+
+            let status_code = axum::http::StatusCode::from_u16(rest_error.status)
+                .unwrap_or(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+
+            (
+                status_code,
+                axum::Json(serde_json::json!({
+                    "error": &rest_error.message
+                }))
+            ).into_response()
+        }
+
         /// Generated service trait
         #[async_trait::async_trait]
         #[allow(private_interfaces, private_bounds)]
@@ -208,7 +229,7 @@ pub(crate) fn generate_server_code(
             auth_provider: Option<std::sync::Arc<dyn ras_auth_core::AuthProvider>>,
             auth_transport: ras_auth_core::AuthTransportConfig,
             with_usage_tracker: Option<std::sync::Arc<dyn Fn(&axum::http::HeaderMap, Option<&ras_auth_core::AuthenticatedUser>, &str, &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync>>,
-            with_method_duration_tracker: Option<std::sync::Arc<dyn Fn(&str, &str, Option<&ras_auth_core::AuthenticatedUser>, std::time::Duration) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync>>,
+            with_method_duration_tracker: Option<std::sync::Arc<dyn Fn(&str, &str, Option<&ras_auth_core::AuthenticatedUser>, std::time::Duration, bool) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync>>,
         }
 
         const _: () = {
@@ -273,8 +294,13 @@ pub(crate) fn generate_server_code(
                 self
             }
 
-            /// Set the usage tracker - called before each request
-            /// The tracker receives the headers, authenticated user (if any), HTTP method, and path
+            /// Set the usage tracker.
+            ///
+            /// Called once for each request that passes authorization, before its body
+            /// is decoded. It receives the request headers (credentials redacted), the
+            /// authenticated user (if any), the HTTP method and the route path. Requests
+            /// rejected for a missing or invalid credential or a missing permission reach
+            /// neither tracker.
             pub fn with_usage_tracker<F, Fut>(mut self, tracker: F) -> Self
             where
                 F: Fn(&axum::http::HeaderMap, Option<&ras_auth_core::AuthenticatedUser>, &str, &str) -> Fut + Send + Sync + 'static,
@@ -286,15 +312,20 @@ pub(crate) fn generate_server_code(
                 self
             }
 
-            /// Set the method duration tracker - called after each request completes
-            /// The tracker receives the HTTP method, path, authenticated user (if any), and execution duration
+            /// Set the method duration tracker.
+            ///
+            /// Called once for every request the usage tracker saw, after the response is
+            /// built. It receives the HTTP method, the route path, the authenticated user
+            /// (if any), the time from the usage tracker to the finished response, and
+            /// whether the request succeeded: `false` when the response status is 4xx or
+            /// 5xx, such as a body that does not decode or a handler error.
             pub fn with_method_duration_tracker<F, Fut>(mut self, tracker: F) -> Self
             where
-                F: Fn(&str, &str, Option<&ras_auth_core::AuthenticatedUser>, std::time::Duration) -> Fut + Send + Sync + 'static,
+                F: Fn(&str, &str, Option<&ras_auth_core::AuthenticatedUser>, std::time::Duration, bool) -> Fut + Send + Sync + 'static,
                 Fut: std::future::Future<Output = ()> + Send + 'static,
             {
-                self.with_method_duration_tracker = Some(std::sync::Arc::new(move |method, path, user, duration| {
-                    Box::pin(tracker(method, path, user, duration))
+                self.with_method_duration_tracker = Some(std::sync::Arc::new(move |method, path, user, duration, success| {
+                    Box::pin(tracker(method, path, user, duration, success))
                 }));
                 self
             }

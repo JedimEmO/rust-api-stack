@@ -29,6 +29,9 @@ const DEFAULT_MAX_MESSAGE_SIZE: usize = 1024 * 1024;
 /// deployment cannot be driven to memory exhaustion by connection count;
 /// pass `max_connections(None)` explicitly to lift it.
 pub const DEFAULT_MAX_CONNECTIONS: usize = 10_000;
+/// How long a generated `<Name>ClientHandle` waits for a client to answer a
+/// server-to-client call, unless the handle or the generated builder sets another value.
+pub const DEFAULT_CLIENT_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Trait for services that handle WebSocket JSON-RPC communication
 #[allow(async_fn_in_trait)]
@@ -244,6 +247,10 @@ where
     let channel_capacity = service.message_channel_capacity().max(1);
     let (message_tx, message_rx) = mpsc::channel(channel_capacity);
     let sender = ChannelMessageSender::new(connection_id, message_tx);
+
+    // An anonymous connection may carry a credential that failed to
+    // authenticate; it has nothing to re-validate.
+    let auth_token = auth_token.filter(|_| user.is_some());
 
     let mut info = ConnectionInfo::new(connection_id);
     if let Some(user) = user.clone() {
@@ -656,6 +663,12 @@ mod tests {
                 Ok(Some(true)) => panic!("an admitted connection finished before release"),
                 _ => panic!("timed out waiting for refusals"),
             }
+        }
+        // An admitted connection takes its permit before it registers with the
+        // manager, so the last refusal can arrive before the last registration.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while manager.connection_count() < CAP && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(5)).await;
         }
         assert_eq!(manager.connection_count(), CAP, "never more than the cap");
 

@@ -1,37 +1,26 @@
-# File Service OpenAPI Usage Sample
+# File service with a generated TypeScript client
 
-This example demonstrates the `file_service!` macro with an Axum backend,
-generated OpenAPI, and a minimal TypeScript usage sample that calls a generated
-fetch client.
+A `file_service!` contract shared by an Axum backend, the generated Rust client,
+and a TypeScript sample that calls a client generated from the OpenAPI document.
 
-## Structure
+- [`file-service-api/`](file-service-api/README.md) declares the upload and download endpoints.
+- [`file-service-backend/`](file-service-backend/README.md) implements them and stores files on disk.
+- [`typescript-example/`](typescript-example/README.md) shows the calls a browser frontend makes.
 
-- `file-service-api/` - The API library crate that contains the service definition
-- `file-service-backend/` - Axum server implementation and OpenAPI generation
-- `typescript-example/` - Minimal TypeScript usage sample for a generated client
-
-## How it Works
-
-1. The `file_service!` macro defines upload, download, and secured file endpoints.
-2. The backend build script writes the generated OpenAPI document.
-3. A TypeScript OpenAPI generator can create a fetch client from the generated document.
-4. `typescript-example/src/example.ts` shows the generated client call shape.
-
-## Running the Example
-
-Run these commands from the repository root.
+## Run
 
 ```bash
-cargo check -p file-service-backend --locked
+cargo run -p file-service-backend --locked
 ```
 
-To exercise the calls manually, run the backend at `http://localhost:3000` and
-use the functions shown in `typescript-example/src/example.ts`.
+The backend listens on `127.0.0.1:3000` and serves the endpoints under `/api/documents`.
+Building it also writes the OpenAPI document to
+`examples/file-service-wasm/file-service-backend/target/openapi/documentservice.json`.
 
-## Native And Browser Client Shape
+## The two clients
 
-The Rust client and TypeScript usage sample both come from the same API
-definition. Native Rust uploads stream files from disk:
+Both clients come from the same declaration.
+The Rust client, with the `fs` feature, streams an upload from a file on disk:
 
 ```rust
 let form = DocumentServiceUploadMultipart::new()
@@ -41,19 +30,7 @@ let form = DocumentServiceUploadMultipart::new()
 let response = client.upload(form).await?;
 ```
 
-The TypeScript sample assumes a generated fetch client at
-`typescript-example/src/generated`, which is intentionally ignored. That client
-uses browser `Blob | File` values for multipart uploads; see
-`typescript-example/src/example.ts`.
-
-## TypeScript Usage
-
-See `typescript-example/src/example.ts` for public upload/download calls and
-the bearer-token variants for protected endpoints.
-
-## Server Implementation
-
-The backend depends on the shared API crate with the `server` feature enabled
-and implements the generated `DocumentServiceTrait`. The checked-in
-implementation is in [file_service.rs](file-service-backend/src/file_service.rs)
-and stores uploaded files through [storage.rs](file-service-backend/src/storage.rs).
+The TypeScript sample expects a client generated from the OpenAPI document into `typescript-example/src/generated`,
+which git ignores.
+Uploads there take a browser `Blob` or `File`; see
+[example.ts](typescript-example/src/example.ts).

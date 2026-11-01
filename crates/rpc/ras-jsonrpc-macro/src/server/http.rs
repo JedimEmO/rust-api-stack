@@ -136,13 +136,18 @@ pub(super) fn generate_http_methods(service_def: &ServiceDefinition) -> proc_mac
         quote! {}
     };
 
-    // Wire names of OPTIONAL_AUTH methods (canonical + legacy versions). The
-    // request-level auth step rejects bad credentials globally; for these methods
-    // we instead downgrade to anonymous so the route stays lenient/public.
-    let optional_auth_wire_names: Vec<String> = service_def
+    // Wire names of UNAUTHORIZED and OPTIONAL_AUTH methods (canonical + legacy
+    // versions). A bad credential rejects a call to any other method; for these
+    // it downgrades to anonymous, as in the REST and file services.
+    let public_wire_names: Vec<String> = service_def
         .methods
         .iter()
-        .filter(|method| matches!(method.auth, AuthRequirement::OptionalAuth))
+        .filter(|method| {
+            matches!(
+                method.auth,
+                AuthRequirement::Unauthorized | AuthRequirement::OptionalAuth
+            )
+        })
         .flat_map(|method| {
             std::iter::once(jsonrpc_method_wire_name(method)).chain(
                 method
@@ -152,10 +157,10 @@ pub(super) fn generate_http_methods(service_def: &ServiceDefinition) -> proc_mac
             )
         })
         .collect();
-    let optional_method_check = if optional_auth_wire_names.is_empty() {
+    let public_method_check = if public_wire_names.is_empty() {
         quote! { false }
     } else {
-        quote! { matches!(request.method.as_str(), #(#optional_auth_wire_names)|*) }
+        quote! { matches!(request.method.as_str(), #(#public_wire_names)|*) }
     };
 
     let method_dispatch = service_def
@@ -204,8 +209,8 @@ pub(super) fn generate_http_methods(service_def: &ServiceDefinition) -> proc_mac
                             axum::http::StatusCode::OK
                         };
 
-                        // Rejections otherwise bypass the usage/duration trackers
-                        // (which run mid-dispatch); log auth/CSRF/permission
+                        // Rejections never reach the usage/duration trackers (which
+                        // run after authorization); log auth/CSRF/permission
                         // rejections here so a bad-credential caller is observable.
                         if status_code != axum::http::StatusCode::OK {
                             if let Some(ref error) = response.error {
@@ -282,10 +287,11 @@ pub(super) fn generate_http_methods(service_def: &ServiceDefinition) -> proc_mac
                 let request_id = request.id.clone();
 
                 // Resolve the credential to Ok(Some/None) or Err(error response), then
-                // apply a single downgrade decision: OPTIONAL_AUTH methods are public,
-                // so any credential failure (failed CSRF, invalid/expired token)
-                // downgrades to anonymous rather than rejecting the whole request.
-                let __ras_method_is_optional = #optional_method_check;
+                // apply a single downgrade decision: UNAUTHORIZED and OPTIONAL_AUTH
+                // methods are public, so any credential failure (failed CSRF,
+                // invalid/expired token) downgrades to anonymous rather than
+                // rejecting the whole request.
+                let __ras_method_is_public = #public_method_check;
 
                 let auth_outcome: Result<
                     Option<ras_jsonrpc_core::AuthenticatedUser>,
@@ -327,7 +333,7 @@ pub(super) fn generate_http_methods(service_def: &ServiceDefinition) -> proc_mac
                 let authenticated_user = match auth_outcome {
                     Ok(user) => user,
                     Err(error_response) => {
-                        if __ras_method_is_optional {
+                        if __ras_method_is_public {
                             None
                         } else {
                             return error_response;
@@ -335,13 +341,8 @@ pub(super) fn generate_http_methods(service_def: &ServiceDefinition) -> proc_mac
                     }
                 };
 
-                if let Some(tracker) = &self.usage_tracker {
-                    let user_ref = authenticated_user.as_ref();
-                    let tracker_headers =
-                        ras_jsonrpc_core::redact_sensitive_headers_for_auth_transport(&headers, &self.auth_transport);
-                    tracker(&tracker_headers, user_ref, &request).await;
-                }
-
+                // Each method arm runs the usage and duration trackers itself, once
+                // the call has passed authorization.
                 match request.method.as_str() {
                     #(#method_dispatch)*
                     _ => ras_jsonrpc_types::JsonRpcResponse::error(

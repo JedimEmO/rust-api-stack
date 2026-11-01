@@ -1,7 +1,19 @@
-//! OpenTelemetry implementation for Rust Agent Stack observability
+//! Request metrics for Rust API Stack services, recorded with OpenTelemetry and exported
+//! for Prometheus.
 //!
-//! This crate provides an OpenTelemetry implementation with Prometheus export
-//! support and standard metric definitions.
+//! [`standard_setup`] (or [`OtelSetupBuilder`]) installs a meter provider as the OpenTelemetry
+//! global and returns an [`OtelSetup`]. From it you get an [`OtelUsageTracker`] and an
+//! [`OtelMethodDurationTracker`], which implement the `ras-observability-core` tracker
+//! traits, the shared [`OtelMetrics`], and an axum router serving `/metrics`.
+//!
+//! The generated service builders take closures, so you call the trackers from a closure
+//! passed to `with_usage_tracker` and `with_method_duration_tracker`. Metrics carry only
+//! `method`, `protocol` and (on completion) `success` labels, where `success` is the
+//! outcome the duration hook reports; user details go to the `info` log instead.
+//!
+//! The crate has no Cargo features. The
+//! [README](https://github.com/JedimEmO/rust-api-stack/blob/master/crates/observability/ras-observability-otel/README.md)
+//! shows the wiring for each service macro and lists the exported metrics.
 
 use async_trait::async_trait;
 use axum::{
@@ -131,7 +143,8 @@ impl UsageTracker for OtelUsageTracker {
     }
 }
 
-/// Method duration tracker implementation
+/// Method duration tracker: logs the request at `info`, records its duration, and counts
+/// it as completed with the `success` label the hook passes in.
 #[derive(Clone)]
 pub struct OtelMethodDurationTracker {
     metrics: Arc<OtelMetrics>,
@@ -150,6 +163,7 @@ impl MethodDurationTracker for OtelMethodDurationTracker {
         context: &RequestContext,
         user: Option<&AuthenticatedUser>,
         duration: Duration,
+        success: bool,
     ) {
         // Log includes user for debugging, but metrics don't to avoid cardinality issues
         let user_id = user.map(|u| u.user_id.as_str()).unwrap_or("anonymous");
@@ -159,11 +173,12 @@ impl MethodDurationTracker for OtelMethodDurationTracker {
             method = %context.method,
             user_id = %user_id,
             duration_ms = %duration.as_millis(),
+            success,
             "Request completed"
         );
 
         self.metrics.record_method_duration(context, duration);
-        self.metrics.increment_requests_completed(context, true);
+        self.metrics.increment_requests_completed(context, success);
     }
 }
 

@@ -1,11 +1,7 @@
-# Why Typed Service Definitions
+# Why typed service definitions
 
-RAS service macros are intentionally strict. They ask you to describe endpoints
-with concrete Rust request and response types, then generate the repetitive
-boundary code from that description.
-
-This matters for API builders because the API boundary is where drift usually
-appears:
+The API boundary is where a service and its clients drift apart.
+The drift has a few familiar shapes:
 
 - server handlers accept one shape while clients send another;
 - documentation falls behind the real implementation;
@@ -14,28 +10,33 @@ appears:
 - file uploads buffer too much data or validate too late;
 - renamed fields break older clients without an explicit migration path.
 
-With RAS, the service definition is the source of truth. The generated trait
-forces every declared endpoint to be implemented. Request and response types are
-serialized through `serde`, documented through `schemars` where specs are
-generated, and reused by generated clients. When an endpoint is protected, the
-generated trait signature receives an `AuthenticatedUser`, so handler code can
-depend on authenticated identity without repeating token parsing.
+RAS service macros attack this by being strict.
+They ask you to describe every endpoint with concrete Rust request and response types,
+then generate the repetitive boundary code from that description.
 
-The macros do not remove runtime validation. They move the easy-to-forget
-plumbing to generated code and leave the service implementation focused on
-domain behavior: read typed input, apply business rules, return typed output.
+The service definition is the source of truth.
+The generated trait forces every declared endpoint to be implemented.
+Request and response types are serialized through `serde`,
+described through `schemars` where specs are generated, and reused by the generated clients.
+A protected operation hands its handler the authenticated user,
+so handler code can depend on the caller's identity without parsing tokens.
 
-## What The Macros Generate
+The macros do not remove runtime validation.
+They move the easy-to-forget plumbing into generated code,
+and leave the service implementation focused on domain behaviour:
+read typed input, apply business rules, return typed output.
 
-Depending on the macro and enabled features, a service definition can generate:
+## What the macros generate
+
+Depending on the macro and the enabled features, a service definition can generate:
 
 - a trait that lists every handler method with typed parameters;
-- an Axum router, WebSocket service, or runtime adapter;
-- authentication and permission checks before handlers run;
-- native Rust clients, including WASM-compatible clients for browser use;
-- OpenRPC or OpenAPI documents with schemas and auth metadata;
-- explorer UIs for supported HTTP services;
-- version compatibility routes or methods where the macro supports migrations.
+- an Axum router or WebSocket service;
+- authentication and permission checks that run before the handler;
+- native Rust clients, which also compile to WASM for browser use;
+- OpenRPC or OpenAPI documents with schemas, auth metadata and authored examples;
+- an API explorer page for JSON-RPC and REST services;
+- routes or methods that serve older payload shapes, for macros that support versioned migrations.
 
 The result is a narrower contract between API design, server implementation,
-client usage, and published documentation.
+client usage and published documentation.

@@ -1,31 +1,31 @@
-# OAuth2 Demo API
+# OAuth2 demo API
 
-Shared JSON-RPC API contract for the [OAuth2 demo](../README.md). This crate defines the service payloads and uses `ras-jsonrpc-macro` to generate the `GoogleOAuth2Service` server trait, optional reqwest-backed Rust client, and OpenRPC document consumed by the demo server.
+The contract crate for the [OAuth2 demo](../README.md).
+It defines the request and response types and calls `jsonrpc_service!`,
+which generates the `GoogleOAuth2Service` server trait, a Rust client and the OpenRPC document.
 
-## Generated Service
+## Methods
 
-The contract in [src/lib.rs](src/lib.rs) includes permission-gated methods for:
+The contract is in [src/lib.rs](src/lib.rs). Each method requires a signed-in user and, for most, one permission:
 
-- current user information
-- document listing
-- document creation
-- document deletion
-- system status
-- beta feature access
+| Method | Permission |
+|---|---|
+| `get_user_info` | none beyond signing in |
+| `list_documents` | `user:read` |
+| `create_document` | `content:create` |
+| `delete_document` | `admin:write` |
+| `get_system_status` | `system:admin` |
+| `get_beta_features` | `beta:access` |
 
-The runnable OAuth2 server is documented in [../server/README.md](../server/README.md).
+The contract only names the permissions.
+The [server](../server/README.md#permission-rules) decides which Google users hold them.
 
-## Permissions
+## Features
 
-The generated service metadata declares these permission checks:
+The service uses `feature_gated: true`, so this crate's features choose what is generated:
 
-- `user:read`
-- `content:create`
-- `admin:write`
-- `system:admin`
-- `beta:access`
-
-The server decides how OAuth2 identities map to those permissions.
+- `server` generates the server trait and the router builder.
+- `client` generates the Rust client with the default reqwest transport.
 
 ## Checks
 

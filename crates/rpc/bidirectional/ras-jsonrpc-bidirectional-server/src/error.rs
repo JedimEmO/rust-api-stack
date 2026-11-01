@@ -46,6 +46,11 @@ pub enum ServerError {
     #[error("Invalid request: {0}")]
     InvalidRequest(String),
 
+    /// The method exists but its params do not decode into the request type.
+    /// Sent to the client as JSON-RPC `-32602`.
+    #[error("Invalid params: {0}")]
+    InvalidParams(String),
+
     /// Handler not found for method
     #[error("No handler found for method: {0}")]
     HandlerNotFound(String),
@@ -76,6 +81,7 @@ impl ServerError {
             ServerError::PermissionDenied(_) => "Insufficient permissions",
             ServerError::ConnectionNotFound(_) => "Connection not found",
             ServerError::InvalidRequest(_) => "Invalid request",
+            ServerError::InvalidParams(_) => "Invalid params",
             ServerError::HandlerNotFound(_) => "Method not found",
             ServerError::SerializationError(_) => "Invalid parameters",
             ServerError::UpgradeFailed(_)
@@ -93,7 +99,9 @@ impl ServerError {
             ServerError::AuthenticationFailed(_) => StatusCode::UNAUTHORIZED,
             ServerError::PermissionDenied(_) => StatusCode::FORBIDDEN,
             ServerError::ConnectionNotFound(_) => StatusCode::NOT_FOUND,
-            ServerError::InvalidRequest(_) => StatusCode::BAD_REQUEST,
+            ServerError::InvalidRequest(_) | ServerError::InvalidParams(_) => {
+                StatusCode::BAD_REQUEST
+            }
             ServerError::HandlerNotFound(_) => StatusCode::NOT_IMPLEMENTED,
             ServerError::UpgradeFailed(_)
             | ServerError::RoutingFailed(_)

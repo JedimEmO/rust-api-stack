@@ -1,27 +1,28 @@
 # Introduction
 
-Rust Agent Stack (RAS) is a set of Rust crates for building type-safe,
-authenticated service APIs. The central idea is that the API contract should be
-declared once, in Rust, and then used to generate the server boundary, handler
-trait, clients, API documents, and authentication checks.
+Rust API Stack (RAS) is a set of Rust crates for building typed,
+authenticated HTTP and WebSocket APIs on Axum.
+You declare an API once, in Rust,
+and a macro generates the server boundary, the handler trait, the clients,
+the API documents and the auth checks from that one declaration.
 
-The main service macros are:
+There is one macro per kind of API:
 
-- `jsonrpc_service!` for HTTP JSON-RPC services.
+- `jsonrpc_service!` for JSON-RPC over HTTP.
 - `rest_service!` for conventional JSON REST APIs.
-- `file_service!` for streaming upload and download APIs.
-- `jsonrpc_bidirectional_service!` for typed bidirectional JSON-RPC over
-  WebSockets.
+- `file_service!` for streaming uploads and downloads.
+- `jsonrpc_bidirectional_service!` for typed JSON-RPC in both directions over a WebSocket.
 
-Each macro follows the same shape: define the wire contract, implement the
-generated trait, configure an auth provider when protected calls exist, then
-mount the generated server or use the generated client.
+They share one workflow.
+Define the wire contract, implement the generated trait,
+configure an auth provider when protected operations exist,
+then mount the generated router or call the generated client.
 
-If you want a guided application design flow, start with the
-[application tutorial](tutorial/index.md). It walks through crate boundaries,
-auth, server implementation, generated clients, tests, and evolution.
+The [application tutorial](tutorial/index.md) walks through that workflow for a small app,
+from crate boundaries and auth to the server, the clients, tests and API evolution.
+The macro guides are the reference for each macro's syntax and options.
 
-The repository contains runnable
-[examples](https://github.com/JedimEmO/rust-api-stack/tree/master/examples),
-including JSON-RPC, REST, file services, OAuth2, bidirectional chat, and
-browser/WASM clients.
+The repository has runnable
+[examples](https://github.com/JedimEmO/rust-api-stack/tree/master/examples)
+for JSON-RPC, REST, file services, OAuth2, a bidirectional chat,
+and browser clients in TypeScript and Rust/WASM.

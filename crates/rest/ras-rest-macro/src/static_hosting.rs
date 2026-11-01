@@ -11,8 +11,6 @@ pub struct StaticHostingConfig {
     pub serve_docs: bool,
     /// URL path for documentation (default "/docs").
     pub docs_path: String,
-    /// UI theme selection retained for macro compatibility.
-    pub ui_theme: String,
 }
 
 impl Default for StaticHostingConfig {
@@ -20,7 +18,6 @@ impl Default for StaticHostingConfig {
         Self {
             serve_docs: false,
             docs_path: "/docs".to_string(),
-            ui_theme: "default".to_string(),
         }
     }
 }

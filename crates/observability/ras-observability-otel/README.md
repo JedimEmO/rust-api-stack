@@ -1,107 +1,129 @@
 # ras-observability-otel
 
-OpenTelemetry implementation for Rust Agent Stack observability, providing runtime metrics collection with Prometheus export.
+Request metrics for Rust API Stack services, recorded with OpenTelemetry and exported for Prometheus.
+It implements the `ras-observability-core` traits
+and serves the collected metrics from an axum `/metrics` route.
 
-## Quick Start
+## Installation
+
+```toml
+[dependencies]
+ras-observability-otel = "0.2"
+ras-observability-core = "0.2" # brings the tracker traits into scope
+```
+
+## Quick start
 
 ```rust
 use ras_observability_otel::standard_setup;
 
-// Build the OpenTelemetry/Prometheus setup.
 let otel = standard_setup("my-service")?;
 
-// Use `otel.metrics_router()` for /metrics and wire the trackers into service
-// builders with their observability hooks.
+let app = axum::Router::new()
+    // .merge(your service routers)
+    .merge(otel.metrics_router());
 ```
 
-## Features
+`standard_setup` is `OtelSetupBuilder::new(name).build()`.
+Use the builder to pass in an existing `prometheus::Registry` with `with_prometheus_registry`.
+Building installs the meter provider as the OpenTelemetry global,
+so build one `OtelSetup` per process.
 
-- **Convenience setup**: Sensible defaults with optional builder customization
-- **Prometheus integration**: Built-in `/metrics` endpoint
-- **Standard metrics**: Request counts and duration histograms
-- **Axum integration**: Ready-to-use metrics router
-- **Type-safe**: Leverages Rust's type system for safety
+`OtelSetup` hands out three things:
 
-## Usage with Service Builders
+- `usage_tracker()`, an `OtelUsageTracker` that logs the request and counts it as started.
+- `method_duration_tracker()`, an `OtelMethodDurationTracker` that logs the duration,
+  records it, and counts the request as completed with the outcome the hook reports.
+- `metrics()`, the shared `OtelMetrics`, for recording through `ServiceMetrics` yourself.
 
-The observability crates integrate with the REST and JSON-RPC macro builders:
+## Wiring the trackers into a generated service
+
+The generated builders take closures, not tracker objects,
+so each closure builds a `RequestContext` and calls the tracker.
+This is the shape for a `rest_service!` builder;
+the REST hooks receive the HTTP method and the route path:
 
 ```rust
-use ras_observability_core::{RequestContext, UsageTracker};
+use ras_observability_core::{MethodDurationTracker, RequestContext, UsageTracker};
 use ras_observability_otel::OtelSetupBuilder;
 
-// The service builders can use the trackers like this:
 let otel = OtelSetupBuilder::new("my-service").build()?;
 
-// REST service builders receive headers, user, method, and path.
-let rest_usage_tracker = {
-    let tracker = otel.usage_tracker();
-    move |headers, user, method, path| {
-        let context = RequestContext::rest(method, path);
-        let tracker = tracker.clone();
-        let headers = headers.clone();
-        let user = user.cloned();
-        async move {
-            tracker.track_request(&headers, user.as_ref(), &context).await;
+let router = MyServiceBuilder::new(MyServiceImpl::new())
+    .with_usage_tracker({
+        let tracker = otel.usage_tracker();
+        move |headers, user, method, path| {
+            let context = RequestContext::rest(method, path);
+            let tracker = tracker.clone();
+            let headers = headers.clone();
+            let user = user.cloned();
+            async move {
+                tracker.track_request(&headers, user.as_ref(), &context).await;
+            }
         }
-    }
-};
-
-// REST service builders take the trait implementation.
-MyServiceBuilder::new(MyServiceImpl::new())
-    .with_usage_tracker(rest_usage_tracker)
+    })
+    .with_method_duration_tracker({
+        let tracker = otel.method_duration_tracker();
+        move |method, path, user, duration, success| {
+            let context = RequestContext::rest(method, path);
+            let tracker = tracker.clone();
+            let user = user.cloned();
+            async move {
+                tracker
+                    .track_duration(&context, user.as_ref(), duration, success)
+                    .await;
+            }
+        }
+    })
     .build();
-
-// JSON-RPC service builders receive headers, user, and the JSON-RPC request.
-let rpc_usage_tracker = {
-    let tracker = otel.usage_tracker();
-    move |headers, user, request| {
-        let context = RequestContext::jsonrpc(request.method.clone());
-        let tracker = tracker.clone();
-        let headers = headers.clone();
-        let user = user.cloned();
-        async move {
-            tracker.track_request(&headers, user.as_ref(), &context).await;
-        }
-    }
-};
-
-// JSON-RPC service builders also take the trait implementation.
-MyRpcServiceBuilder::new(MyRpcServiceImpl::new())
-    .with_usage_tracker(rpc_usage_tracker)
-    .build()?;
 ```
 
-## Metrics Exposed
+Notice that each closure sits inside the builder call.
+Keep it there, or annotate the parameter types:
+a closure bound to a `let` first, with unannotated reference parameters,
+does not get the higher-ranked signature the builder needs.
 
-### Counters
-- `requests_started_total`: Total requests initiated
-- `requests_completed_total`: Total requests completed (with success status)
+A `file_service!` builder takes the same two hooks with the same arguments.
+A `jsonrpc_service!` builder takes them too.
+Its usage tracker receives the `JsonRpcRequest`, so the context is `RequestContext::jsonrpc(request.method.clone())`,
+and its duration tracker receives the method name in place of the HTTP method and path.
+[examples/basic-jsonrpc](https://github.com/JedimEmO/rust-api-stack/blob/master/examples/basic-jsonrpc/service/src/main.rs)
+wires both.
 
-### Histograms
-- `method_duration_milliseconds`: Method execution time in milliseconds (only includes method and protocol labels to avoid cardinality explosion)
+The hooks run only for requests that pass authorization,
+and the duration hook runs once for every request the usage hook saw,
+so `requests_started_total` and `requests_completed_total` count the same requests.
+The [observability guide](https://github.com/JedimEmO/rust-api-stack/blob/master/documentation/src/observability.md)
+spells out when each hook runs.
 
-### Labels
-All metrics use minimal labels to prevent cardinality explosion:
-- `method`: The method being called (e.g., "GET /users", "createUser")
-- `protocol`: REST, JSON-RPC, or WebSocket
-- `success`: "true" or "false" (only on completion counters)
+## Metrics
 
-**Note**: User attributes are intentionally excluded from all metrics to prevent cardinality explosion. User-specific analysis should be done through logs or dedicated user analytics systems.
+| Prometheus name | Type | Labels |
+|---|---|---|
+| `requests_started_total` | counter | `method`, `protocol` |
+| `requests_completed_total` | counter | `method`, `protocol`, `success` |
+| `method_duration_milliseconds` | histogram | `method`, `protocol` |
+
+The exporter also adds its own scope labels, such as `otel_scope_name`.
+`protocol` is `REST`, `JSON-RPC` or `WebSocket`.
+
+`success` is `false` when the request ended in an error response:
+a 4xx or 5xx status from a REST or file service, or a JSON-RPC error.
+A failure rate is `requests_completed_total{success="false"}` over `requests_completed_total`.
+
+User attributes never become metric labels; a label per user would create a series per user.
+The trackers do log at `info` level, though,
+and the usage tracker's log line includes the user ID and the full permission set.
 
 ## Examples
 
-See the `examples/` directory for:
-- `simple_usage.rs`: Basic metrics collection
-- `with_rest_service.rs`: Integration with REST services
-
-## Running Examples
+`examples/simple_usage.rs` records metrics by hand,
+and `examples/with_rest_service.rs` builds the tracker closures next to a plain axum route.
+Both listen on port 3000:
 
 ```bash
-# Simple usage example
 cargo run --example simple_usage -p ras-observability-otel --locked
-
-# Then visit http://localhost:3000/metrics
+curl http://localhost:3000/metrics
 ```
 
 ## Checks

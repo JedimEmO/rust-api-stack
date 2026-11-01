@@ -144,12 +144,28 @@ pub fn validate_component_key(key: &str) -> OpenRpcResult<()> {
     Ok(())
 }
 
-/// Reject application error codes in the reserved range `-32768..=-32000`.
+/// Checks an error code against the JSON-RPC 2.0 reserved range.
+///
+/// JSON-RPC 2.0 reserves `-32768..=-32000`. Inside it, the five pre-defined
+/// codes in [`error_codes`](crate::error_codes) and the implementation-defined
+/// server errors `-32099..=-32000` are valid; every other code in the range is
+/// reserved for future use and returns an error. Codes outside the range are
+/// application errors and always pass.
 pub fn validate_error_code(code: i64) -> OpenRpcResult<()> {
-    if (-32768..=-32000).contains(&code) {
+    use crate::error_codes;
+
+    let pre_defined = matches!(
+        code,
+        error_codes::PARSE_ERROR
+            | error_codes::INVALID_REQUEST
+            | error_codes::METHOD_NOT_FOUND
+            | error_codes::INVALID_PARAMS
+            | error_codes::INTERNAL_ERROR
+    );
+    if error_codes::is_reserved(code) && !pre_defined && !error_codes::is_server_error(code) {
         return Err(OpenRpcError::validation(format!(
-            "Error code {} is in reserved range (-32768 to -32000)",
-            code
+            "Error code {code} is reserved for future use by JSON-RPC 2.0; use a pre-defined \
+             code, a server error code in -32099..=-32000, or a code outside -32768..=-32000"
         )));
     }
 
@@ -273,9 +289,13 @@ mod tests {
 
     #[test]
     fn test_validate_error_code() {
-        assert!(validate_error_code(-32001).is_err()); // Reserved range
-        assert!(validate_error_code(-32768).is_err()); // Reserved range
-        assert!(validate_error_code(-32000).is_err()); // Reserved range
+        assert!(validate_error_code(-32768).is_err()); // Reserved for future use
+        assert!(validate_error_code(-32604).is_err()); // Reserved for future use
+        assert!(validate_error_code(-32100).is_err()); // Reserved for future use
+        assert!(validate_error_code(-32700).is_ok()); // Pre-defined
+        assert!(validate_error_code(-32603).is_ok()); // Pre-defined
+        assert!(validate_error_code(-32099).is_ok()); // Server error
+        assert!(validate_error_code(-32000).is_ok()); // Server error
 
         assert!(validate_error_code(-31999).is_ok()); // Outside reserved range
         assert!(validate_error_code(1000).is_ok()); // Positive codes

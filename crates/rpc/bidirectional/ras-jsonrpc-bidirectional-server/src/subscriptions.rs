@@ -3,7 +3,7 @@
 use ras_jsonrpc_bidirectional_types::ConnectionManager;
 use std::sync::Arc;
 
-/// Limits on client-initiated subscriptions (W3).
+/// Limits on client-initiated subscriptions.
 ///
 /// Enforced by the handler loop before [`MessageHandler::handle_subscribe`](crate::handler::MessageHandler::handle_subscribe)
 /// runs, so services never see an over-limit request.
