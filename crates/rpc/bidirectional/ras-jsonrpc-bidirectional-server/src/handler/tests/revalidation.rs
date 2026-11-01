@@ -27,10 +27,12 @@ async fn revalidation_failure_closes_connection() {
 async fn revalidation_success_refreshes_cached_user() {
     let context = ctx();
     context.set_user(auth_user("stale")).await;
+    let manager = manager_with(&context).await;
     let (_tx, rx) = mpsc::channel(4);
     let mut socket = InMemorySocket::pending();
 
     WebSocketHandler::new(Arc::new(PassThrough), context.clone(), rx, 1024)
+        .with_connection_manager(manager.clone())
         .with_auth_revalidation(AuthRevalidation {
             auth_provider: Arc::new(SequenceAuthProvider::new([Ok(auth_user("fresh"))])),
             token: "valid-token".into(),
@@ -41,9 +43,12 @@ async fn revalidation_success_refreshes_cached_user() {
         .await
         .unwrap();
 
-    // First tick refreshed the cached user; the second (sequence
-    // exhausted) failed and closed the connection.
-    assert_eq!(context.get_user().await.expect("user").user_id, "fresh");
+    // First tick refreshed the cached user (the manager's copy shows it);
+    // the second (sequence exhausted) failed, closed the connection and
+    // dropped the context's identity.
+    let info = manager.get_connection(context.id).await.unwrap().unwrap();
+    assert_eq!(info.user.expect("user").user_id, "fresh");
+    assert!(context.get_user().await.is_none());
     assert!(
         socket
             .outgoing
@@ -130,10 +135,12 @@ async fn w1_subscribe_mirrors_into_manager_index() {
 async fn w1_close_policy_closes_socket_when_permissions_change() {
     let context = ctx();
     context.set_user(auth_user_with("u", &["room:read"])).await;
+    let manager = manager_with(&context).await;
     let (_tx, rx) = mpsc::channel(4);
     let mut socket = InMemorySocket::pending();
 
     WebSocketHandler::new(Arc::new(PermissionGated), context.clone(), rx, 1024)
+        .with_connection_manager(manager.clone())
         .with_auth_revalidation(AuthRevalidation {
             auth_provider: Arc::new(SequenceAuthProvider::new([Ok(auth_user_with("u", &[]))])),
             token: "t".into(),
@@ -153,7 +160,9 @@ async fn w1_close_policy_closes_socket_when_permissions_change() {
             .count(),
         1
     );
-    assert!(context.get_user().await.unwrap().permissions.is_empty());
+    let info = manager.get_connection(context.id).await.unwrap().unwrap();
+    assert!(info.user.unwrap().permissions.is_empty());
+    assert!(context.get_user().await.is_none());
 }
 
 #[tokio::test(start_paused = true)]

@@ -80,17 +80,16 @@ async fn call_returns_internal_error_when_pending_request_limit_is_reached() {
     let client = Client::new(config).await.expect("client");
     *client.state.write().await = ClientState::Connected;
 
-    let (message_tx, mut message_rx) = mpsc::channel(1);
+    let (message_tx, mut message_rx) = mpsc::channel(4);
     *client.message_tx.write().await = Some(message_tx);
-    let (pending_tx, _pending_rx) = oneshot::channel();
-    client.pending_requests.insert(
-        serde_json::json!("existing"),
-        PendingRequest {
-            id: serde_json::json!("existing"),
-            sender: pending_tx,
-            created_at: Instant::now(),
-        },
-    );
+
+    // One call in flight takes the only slot.
+    let first = client.call("svc.slow", None);
+    tokio::pin!(first);
+    tokio::select! {
+        _ = &mut first => panic!("nobody answers the first call"),
+        sent = message_rx.recv() => assert!(sent.is_some()),
+    }
 
     let err = client.call("svc.echo", None).await.unwrap_err();
     assert!(
@@ -98,6 +97,33 @@ async fn call_returns_internal_error_when_pending_request_limit_is_reached() {
     );
     assert!(message_rx.try_recv().is_err());
     assert_eq!(client.pending_requests.len(), 1);
+}
+
+#[tokio::test]
+async fn dropped_call_removes_its_pending_entry_and_frees_its_slot() {
+    let mut config = ClientConfig::new("ws://localhost:8080");
+    config.max_pending_requests = 1;
+    let client = Client::new(config).await.expect("client");
+    *client.state.write().await = ClientState::Connected;
+
+    let (message_tx, mut message_rx) = mpsc::channel(4);
+    *client.message_tx.write().await = Some(message_tx);
+
+    // The caller gives up on a call the server never answers.
+    let abandoned =
+        tokio::time::timeout(Duration::from_millis(20), client.call("svc.slow", None)).await;
+    assert!(abandoned.is_err());
+    assert!(message_rx.try_recv().is_ok(), "the request went out");
+    assert!(
+        client.pending_requests.is_empty(),
+        "a dropped call must not leave its waiter behind"
+    );
+
+    // Its slot is free again.
+    let retry =
+        tokio::time::timeout(Duration::from_millis(20), client.call("svc.slow", None)).await;
+    assert!(retry.is_err(), "the retry is sent and waits, not refused");
+    assert!(message_rx.try_recv().is_ok());
 }
 
 #[tokio::test]

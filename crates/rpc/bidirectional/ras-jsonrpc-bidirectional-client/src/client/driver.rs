@@ -38,6 +38,7 @@ impl Client {
         let state = Arc::clone(&self.state);
         let message_tx_clone = Arc::clone(&self.message_tx);
         let connected_notify = Arc::clone(&self.connected_notify);
+        let receive_batch = self.config.message_buffer_size.max(1);
 
         spawn_background(async move {
             let mut receive_interval = tokio::time::interval(Duration::from_millis(10));
@@ -64,30 +65,39 @@ impl Client {
                     _ = receive_interval.tick() => {
                         let transport_clone = Arc::clone(&transport);
                         let mut transport = transport_clone.write().await;
-                        match transport.receive().await {
-                            Ok(Some(message)) => {
-                                let context = IncomingMessageContext {
-                                    pending_requests: &pending_requests,
-                                    subscriptions: &subscriptions,
-                                    notification_handlers: &notification_handlers,
-                                    rpc_request_handlers: &rpc_request_handlers,
-                                    connection_event_handlers: &connection_event_handlers,
-                                    connection_id: &connection_id,
-                                    message_tx: &message_tx_clone,
-                                    connected_notify: &connected_notify,
-                                };
-                                Self::handle_incoming_message(
-                                    message,
-                                    context,
-                                ).await;
+                        // Handle everything that has arrived, up to one
+                        // buffer's worth, so a busy server is not throttled
+                        // to one message per tick.
+                        let mut failed = false;
+                        for _ in 0..receive_batch {
+                            match transport.receive().await {
+                                Ok(Some(message)) => {
+                                    let context = IncomingMessageContext {
+                                        pending_requests: &pending_requests,
+                                        subscriptions: &subscriptions,
+                                        notification_handlers: &notification_handlers,
+                                        rpc_request_handlers: &rpc_request_handlers,
+                                        connection_event_handlers: &connection_event_handlers,
+                                        connection_id: &connection_id,
+                                        message_tx: &message_tx_clone,
+                                        connected_notify: &connected_notify,
+                                    };
+                                    Self::handle_incoming_message(
+                                        message,
+                                        context,
+                                    ).await;
+                                }
+                                Ok(None) => break,
+                                Err(e) => {
+                                    error!("Failed to receive message: {}", e);
+                                    *state.write().await = ClientState::Failed;
+                                    failed = true;
+                                    break;
+                                }
                             }
-                            Ok(None) => {
-                            }
-                            Err(e) => {
-                                error!("Failed to receive message: {}", e);
-                                *state.write().await = ClientState::Failed;
-                                break;
-                            }
+                        }
+                        if failed {
+                            break;
                         }
                     }
                 }

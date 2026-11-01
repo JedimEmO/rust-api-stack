@@ -93,8 +93,8 @@ impl NativeWebSocketTransport {
 
     fn websocket_config() -> tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
         let mut config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default();
-        config.max_message_size = Some(16 * 1024 * 1024); // 16MB
-        config.max_frame_size = Some(16 * 1024 * 1024); // 16MB
+        config.max_message_size = Some(crate::inbound::MAX_INBOUND_MESSAGE_SIZE);
+        config.max_frame_size = Some(crate::inbound::MAX_INBOUND_MESSAGE_SIZE);
         config.accept_unmasked_frames = false;
         config
     }
@@ -150,7 +150,8 @@ impl WebSocketTransport for NativeWebSocketTransport {
     async fn send(&mut self, message: &BidirectionalMessage) -> ClientResult<()> {
         let json = serde_json::to_string(message).map_err(ClientError::Json)?;
 
-        debug!("Sending message: {}", json);
+        // Payloads can carry credentials and personal data; log the size only.
+        debug!("Sending message ({} bytes)", json.len());
 
         let ws_message = Message::Text(json.into());
 
@@ -177,7 +178,7 @@ impl WebSocketTransport for NativeWebSocketTransport {
 
                     match message {
                         Message::Text(text) => {
-                            debug!("Received text message: {}", text);
+                            debug!("Received text message ({} bytes)", text.len());
                             let bidirectional_message: BidirectionalMessage =
                                 serde_json::from_str(&text).map_err(ClientError::Json)?;
                             Ok(Some(bidirectional_message))
@@ -190,7 +191,9 @@ impl WebSocketTransport for NativeWebSocketTransport {
                         }
                         Message::Close(close_frame) => {
                             info!("Received close frame: {:?}", close_frame);
-                            *self.connection.write().await = None;
+                            // Clear through the guard we hold; taking the lock
+                            // again here would wait on ourselves forever.
+                            *connection_guard = None;
                             Err(ClientError::connection("Connection closed by server"))
                         }
                         Message::Ping(data) => {
@@ -214,7 +217,7 @@ impl WebSocketTransport for NativeWebSocketTransport {
                 Some(None) => {
                     // Stream ended
                     info!("WebSocket stream ended");
-                    *self.connection.write().await = None;
+                    *connection_guard = None;
                     Err(ClientError::connection("WebSocket stream ended"))
                 }
                 None => {
