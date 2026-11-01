@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed - 2026-11-01 (versions for examples and handler errors)
+- Breaking minor bumps: `ras-jsonrpc-macro` 0.4.0, `ras-rest-macro` 0.4.0, `ras-jsonrpc-types` 0.3.0, `ras-jsonrpc-core` 0.3.0 (re-exports `ras-jsonrpc-types`), `ras-transport-core` 0.2.0, `ras-file-macro` 0.3.0 (its generated client returns `TransportError`), `ras-jsonrpc-bidirectional-types` 0.3.0, `ras-jsonrpc-bidirectional-server` 0.4.0, `ras-jsonrpc-bidirectional-client` 0.4.0, `ras-jsonrpc-bidirectional-macro` 0.3.0.
+- Additive patch bumps: `ras-rest-core` 0.2.1, `ras-api-explorer-assets` 0.1.1.
+- New crate `ras-spec-components` 0.1.0. Publish it first; `ras-jsonrpc-types`, `ras-rest-core` and both service macros depend on it.
+- Dependency requirements across the workspace, the examples and the documentation's setup snippets point at these versions. Several snippets were already behind and now match too.
+
 ### Added - 2026-11-01 (explorer examples)
 - **The API explorer shows and uses authored examples** (`ras-api-explorer-assets`). Each operation lists its examples with their docs and the status or kind of outcome. "Use" fills the editors (JSON-RPC params; REST path, query and body), clears any field the example leaves out, and shows the expected result or error. An operation with examples opens with its first success example filled in; one without keeps the guessed values. REST examples are listed in name order, JSON-RPC examples in the order they were written.
 - A REST 204 example is recorded under `x-ras-examples` on the 204 response, which has no content to carry it (`ras-rest-macro`).

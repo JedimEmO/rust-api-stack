@@ -2832,7 +2832,7 @@ dependencies = [
 
 [[package]]
 name = "ras-api-explorer-assets"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "ras-auth-core"
@@ -2863,7 +2863,7 @@ dependencies = [
 
 [[package]]
 name = "ras-file-macro"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -2956,7 +2956,7 @@ dependencies = [
 
 [[package]]
 name = "ras-jsonrpc-bidirectional-client"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2985,7 +2985,7 @@ dependencies = [
 
 [[package]]
 name = "ras-jsonrpc-bidirectional-macro"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3015,7 +3015,7 @@ dependencies = [
 
 [[package]]
 name = "ras-jsonrpc-bidirectional-server"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -3036,7 +3036,7 @@ dependencies = [
 
 [[package]]
 name = "ras-jsonrpc-bidirectional-types"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3054,7 +3054,7 @@ dependencies = [
 
 [[package]]
 name = "ras-jsonrpc-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ras-auth-core",
  "ras-jsonrpc-types",
@@ -3067,7 +3067,7 @@ dependencies = [
 
 [[package]]
 name = "ras-jsonrpc-macro"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3099,7 +3099,7 @@ dependencies = [
 
 [[package]]
 name = "ras-jsonrpc-types"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ras-spec-components",
  "serde",
@@ -3158,7 +3158,7 @@ dependencies = [
 
 [[package]]
 name = "ras-rest-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "ras-auth-core",
  "ras-spec-components",
@@ -3170,7 +3170,7 @@ dependencies = [
 
 [[package]]
 name = "ras-rest-macro"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -3220,7 +3220,7 @@ dependencies = [
 
 [[package]]
 name = "ras-transport-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "axum",

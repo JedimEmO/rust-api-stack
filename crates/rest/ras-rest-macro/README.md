@@ -13,6 +13,7 @@ the rationale, auth model, usage flow, and runnable examples.
 - **Permission-based access control**: Support for role-based authorization
 - **Versioned endpoints**: Optional request/response migrations for legacy routes
 - **OpenAPI 3.0 generation**: Automatic OpenAPI documentation using schemars
+- **Authored examples**: Typed request/response and error examples, checked at compile time, in the OpenAPI document and the API explorer
 - **HTTP methods**: Support for GET, POST, PUT, DELETE, PATCH
 - **Path parameters**: Type-safe path parameter extraction
 - **Request/Response bodies**: JSON request and response handling

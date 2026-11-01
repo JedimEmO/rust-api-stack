@@ -10,12 +10,21 @@ contracts and client helpers.
 
 ```rust,ignore
 pub fn generate_userservice_openrpc() -> serde_json::Value;
+pub fn try_generate_userservice_openrpc()
+    -> Result<serde_json::Value, ras_jsonrpc_types::SpecGenerationError>;
 pub fn generate_userservice_openrpc_to_file() -> Result<(), std::io::Error>;
 ```
 
 The document includes method names, request and response schemas, auth
-extensions, flattened `x-permissions`, grouped `x-permission-groups`, and
-version metadata for versioned methods.
+extensions, flattened `x-permissions`, grouped `x-permission-groups`, version
+metadata for versioned methods, authored examples and each method's `errors`.
+It validates against the OpenRPC 1.3 meta-schema.
+
+Parameters are described the way the server reads them: one descriptor per
+field, called by name, when the request is an object with a fixed set of fields,
+and otherwise a single raw `params` descriptor marked `x-ras-params-raw`. The
+[`jsonrpc_service!` guide](macros/jsonrpc-service.md#openrpc-and-clients) has the
+details, including examples and `x-ras-error-examples`.
 
 ## OpenAPI
 
@@ -25,13 +34,37 @@ or a custom output path.
 ```rust,ignore
 pub fn generate_userservice_openapi() -> serde_json::Value;
 pub fn generate_userservice_openapi_to_file() -> std::io::Result<()>;
+// rest_service! only:
+pub fn try_generate_userservice_openapi()
+    -> Result<serde_json::Value, ras_rest_core::SpecGenerationError>;
 ```
 
 REST operations include routes, HTTP methods, JSON schemas, bearer auth
-requirements, flattened `x-permissions`, and grouped `x-permission-groups`.
+requirements, flattened `x-permissions`, grouped `x-permission-groups` and
+authored examples, keyed by name on parameters, request body and response; see
+the [`rest_service!` guide](macros/rest-service.md#examples). REST documents
+validate against the OpenAPI 3.0 schema.
 File-service operations also include
 multipart schemas, binary download responses, and `x-ras-file` metadata for
 upload limits, part policies, content types, and range support.
+
+## Schemas And Components
+
+`jsonrpc_service!` and `rest_service!` generate schemas with schemars 1.2 or
+later, in the dialect the format expects: JSON Schema draft 7 for OpenRPC and the
+OpenAPI 3.0 Schema Object for OpenAPI. Named types become shared entries in
+`components.schemas`. `file_service!` has its own generator and does not take
+examples.
+
+Request and parameter schemas describe what the server reads, and response
+schemas describe what it sends. When a type's two forms differ, for instance
+through `#[serde(rename(serialize = ..., deserialize = ...))]` or an `Option`
+field that is always sent, the response form gets its own component,
+`<Name>.Serialize`.
+
+The `try_generate_*` functions report an example that cannot be serialized, or
+that does not read back unchanged, as a `SpecGenerationError`. A build script or
+a test that calls them catches a broken example before the document is served.
 
 ## Rust Clients
 

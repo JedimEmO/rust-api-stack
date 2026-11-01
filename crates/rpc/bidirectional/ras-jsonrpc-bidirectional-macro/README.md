@@ -26,11 +26,11 @@ async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ras-auth-core = "0.2.0"
-ras-jsonrpc-types = "0.2.0"
-ras-jsonrpc-bidirectional-types = "0.2.0"
-ras-jsonrpc-bidirectional-macro = { version = "0.2.0", default-features = false }
-ras-jsonrpc-bidirectional-server = { version = "0.2.0", optional = true }
-ras-jsonrpc-bidirectional-client = { version = "0.2.0", optional = true }
+ras-jsonrpc-types = "0.3.0"
+ras-jsonrpc-bidirectional-types = "0.3.0"
+ras-jsonrpc-bidirectional-macro = { version = "0.3.0", default-features = false }
+ras-jsonrpc-bidirectional-server = { version = "0.4.0", optional = true }
+ras-jsonrpc-bidirectional-client = { version = "0.4.0", optional = true }
 
 [features]
 default = []

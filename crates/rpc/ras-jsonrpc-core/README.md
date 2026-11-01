@@ -22,7 +22,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-ras-jsonrpc-core = "0.2.0"
+ras-jsonrpc-core = "0.3.0"
 ```
 
 ### Implementing an Auth Provider

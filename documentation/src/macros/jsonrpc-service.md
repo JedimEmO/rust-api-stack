@@ -13,15 +13,15 @@ refer to.
 
 ```toml
 [dependencies]
-ras-jsonrpc-macro = { version = "0.3.0", default-features = false }
-ras-jsonrpc-types = "0.2.0"
+ras-jsonrpc-macro = { version = "0.4.0", default-features = false }
+ras-jsonrpc-types = "0.3.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 schemars = "1.2"
-ras-transport-core = { version = "0.1.0", optional = true }
+ras-transport-core = { version = "0.2.0", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ras-jsonrpc-core = { version = "0.2.0", optional = true }
+ras-jsonrpc-core = { version = "0.3.0", optional = true }
 axum = { version = "0.8", optional = true }
 tokio = { version = "1.0", features = ["full"], optional = true }
 
@@ -114,6 +114,58 @@ server-side via `tracing`. A service that declares any `WITH_PERMISSIONS` method
 (or a gated explorer) but is built without `.auth_provider(...)` fails `build()`
 with a clear error instead of rejecting every such call at runtime.
 
+## Show Calls With Examples
+
+A schema says what a request may contain; an example shows a call that works.
+Give a method an `examples` list in its options block,
+and each example appears in the OpenRPC document and in the API explorer.
+
+```rust,ignore
+/// Create a user account.
+UNAUTHORIZED create_user(CreateUserRequest) -> User {
+    examples: [
+        /// A user with only the required fields.
+        basic {
+            params: CreateUserRequest { name: "Ada".into(), email: "ada@example.com".into() },
+            result: User { id: 1, name: "Ada".into() },
+        },
+        /// The e-mail address is already registered.
+        duplicate_email {
+            params: CreateUserRequest { name: "Ada".into(), email: "taken@example.com".into() },
+            error: { code: 1001, message: "Email already registered", data: json!({ "field": "email" }) },
+        },
+    ],
+},
+```
+
+Notice that the values are ordinary Rust expressions of the request and response types.
+An example that no longer fits its type fails to compile,
+so the documentation cannot drift away from the code.
+
+Each example has a name, unique within the method, and an optional doc comment
+that becomes its description.
+
+* `params` is a value of the request type. Leave it out when the request type is `()`.
+* An example has either a `result` or an `error`, never both.
+* `error` takes an integer `code`, a string `message` and an optional `data` value.
+  The code must be one a handler may send (see below); the macro checks it at compile time.
+
+Values may call functions, such as `params: examples::basic_request()`,
+which keeps large values out of the macro.
+Keep example expressions deterministic and free of side effects;
+the document can be generated more than once.
+
+Examples generate code only when `openrpc` is on.
+That code needs `Serialize` on every example type and `DeserializeOwned` on the request type,
+in every build that compiles the document functions;
+for JSON-RPC that includes client-only and wasm builds.
+A request example must also read back unchanged:
+it is serialized, deserialized as the request type and serialized again,
+and the two JSON values must be equal.
+That catches serde renames, defaults and skipped fields that would make the example lie.
+
+Legacy versions in a `versions: [...]` list take no examples.
+
 ## Implement The Generated Trait
 
 Protected (`WITH_PERMISSIONS`) methods receive `&AuthenticatedUser` before their
@@ -142,6 +194,34 @@ impl UserServiceTrait for UserServiceImpl {
     }
 }
 ```
+
+### Errors The Client Sees
+
+By default a handler error reaches the client as `-32603 "Internal error"` with no detail,
+so a database error at the end of a chain of `?`s never leaks internals.
+To send an error the client can act on, return a `ras_jsonrpc_types::PublicRpcError` directly:
+
+```rust,ignore
+use ras_jsonrpc_types::PublicRpcError;
+
+if email_taken {
+    return Err(PublicRpcError::new(1001, "Email already registered")
+        .with_data(serde_json::json!({ "field": "email" }))
+        .into());
+}
+```
+
+Only the error the handler returns counts.
+A `PublicRpcError` inside another error type, a `thiserror` enum or an `anyhow::Error` is sent as `-32603`,
+so an upstream error forwarded with `?` stays hidden;
+convert it to a `PublicRpcError` to forward it on purpose.
+
+Use any code outside `-32768..=-32000`, the range JSON-RPC reserves,
+or `-32602` for your own validation failures.
+Any other reserved code is logged and replaced by `-32603`,
+because several of them carry meaning here: the HTTP layer answers `-32001` to `-32004` with 401 or 403.
+A public error is sent with HTTP 200, like other JSON-RPC errors.
+The generated Rust client returns it as `TransportError::JsonRpc { code, message, data }`.
 
 ## Build The Router
 
@@ -211,12 +291,34 @@ With `openrpc: true`, the macro generates:
 
 ```rust,ignore
 pub fn generate_userservice_openrpc() -> serde_json::Value;
+pub fn try_generate_userservice_openrpc()
+    -> Result<serde_json::Value, ras_jsonrpc_types::SpecGenerationError>;
 pub fn generate_userservice_openrpc_to_file() -> Result<(), std::io::Error>;
 ```
 
-Request and response types must implement `schemars::JsonSchema` for OpenRPC
-generation. The generated document includes schemas, method names, auth
-metadata, permission metadata, and version metadata.
+Request and response types must implement `schemars::JsonSchema` (schemars 1.2 or later).
+The generated document includes schemas, method names, auth metadata,
+permission metadata, version metadata, examples and each method's errors.
+
+`try_generate_*` fails when an example cannot be serialized or does not read back unchanged,
+with a `SpecGenerationError` that names the method, the example and the part, never the value.
+`generate_*` panics with that error, and `_to_file` returns it as an `io::Error`.
+With `explorer: true`, the served `openrpc.json` is generated once per service and kept;
+a failure answers 500 and is logged.
+
+The document describes the call the server accepts.
+A method whose request is an object with a fixed set of fields lists one parameter per field,
+with `"paramStructure": "by-name"`, so `params` is the request object itself.
+A request named descriptors cannot describe, such as an array, a map, an enum,
+or a struct with a flattened map or enum, keeps a single parameter named `params`
+and is marked `x-ras-params-raw: true`; send that value as `params` directly.
+Every method with parameters carries its whole request schema in `x-ras-params-schema`.
+A struct whose fields are all optional may be called with `params` left out.
+
+Success examples become standard example pairings.
+OpenRPC pairings cannot carry an error, so error examples go into `x-ras-error-examples`.
+Each method's `errors` list references the built-in errors it can produce,
+then lists the application codes its error examples use.
 
 The API crate's `client` feature emits typed Rust methods for the current
 operation names and, when a method declares versioned compatibility, for the
