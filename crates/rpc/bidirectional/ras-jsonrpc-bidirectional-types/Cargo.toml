@@ -8,6 +8,8 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/JedimEmO/rust-api-stack"
 homepage = "https://github.com/JedimEmO/rust-api-stack"
 readme = "README.md"
+categories = ["web-programming::websocket"]
+keywords = ["jsonrpc", "websocket", "bidirectional", "rpc"]
 
 [dependencies]
 serde = { workspace = true }

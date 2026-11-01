@@ -1,3 +1,31 @@
+//! The `jsonrpc_bidirectional_service!` macro: a JSON-RPC API over one WebSocket, with calls in
+//! both directions and notifications from the server.
+//!
+//! Put the macro in a shared API crate. From one definition it generates the server side (a
+//! `<Name>Service` trait to implement, a `<Name>Handler` that dispatches to it and checks auth,
+//! a `<Name>Builder` that produces an Axum-ready WebSocket service, and a `<Name>ClientHandle`
+//! for notifying or calling one client) and the client side (a typed `<Name>Client` with
+//! `on_<name>` handler registration, and a `<Name>ClientBuilder`).
+//!
+//! The generated code runs on `ras-jsonrpc-bidirectional-server` and
+//! `ras-jsonrpc-bidirectional-client`, and names them and their supporting crates by path, so the
+//! API crate must depend on them directly.
+//!
+//! # Cargo features
+//!
+//! - `server` (default): generate the server items.
+//! - `client` (default): generate the client items.
+//! - `permissions`: also generate a permission manifest, which needs `ras-permission-manifest`.
+//!
+//! With `feature_gated: true` in the definition, the server and client items are always generated
+//! and gated on the API crate's own `server` and `client` features instead; this is the
+//! recommended setup in a workspace.
+//!
+//! The [guide] covers the dependencies, the definition syntax, the generated items and the
+//! runtime behaviour.
+//!
+//! [guide]: https://github.com/JedimEmO/rust-api-stack/blob/master/documentation/src/macros/bidirectional-jsonrpc-service.md
+
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{Ident, LitStr, Token, Type, parse::Parse, parse_macro_input};
@@ -9,22 +37,41 @@ mod server;
 #[cfg(test)]
 mod tests;
 
-/// Macro to generate a bidirectional JSON-RPC service with client and server code
+/// Generates the server and client code for a bidirectional JSON-RPC service over WebSocket.
 ///
-/// This macro generates:
-/// - Server trait with methods for client_to_server handlers
-/// - Server builder with WebSocket integration  
-/// - Client struct with type-safe method calls and notification handlers
-/// - Type-safe message enums for both directions
+/// ```text
+/// jsonrpc_bidirectional_service!({
+///     service_name: ChatService,
+///     feature_gated: true,                      // optional, default false
+///     client_to_server: [
+///         UNAUTHORIZED list_rooms(()) -> Vec<String>,
+///         OPTIONAL_AUTH join_room(JoinRoom) -> RoomState,
+///         WITH_PERMISSIONS(["user"]) send_message(SendMessage) -> MessageId,
+///         WITH_PERMISSIONS(["moderator"] | ["admin"]) kick_user(KickUser) -> bool,
+///     ],
+///     server_to_client: [
+///         message_received(MessageReceived),
+///     ],
+///     server_to_client_calls: [
+///         confirm_leave(ConfirmLeave) -> bool,
+///     ]
+/// });
+/// ```
 ///
-/// `client_to_server` methods declare one of three auth levels — `UNAUTHORIZED`,
-/// `OPTIONAL_AUTH`, or `WITH_PERMISSIONS([...])`. An `OPTIONAL_AUTH` handler
-/// receives a `ras_auth_core::Caller` built from the connection's optional user
-/// (the server must allow anonymous connections for anonymous callers to reach
-/// it). `OPTIONAL_AUTH` is rejected on `server_to_client` calls (outbound — no
-/// inbound caller to identify).
+/// The three lists are required, in this order, and may be empty. Each `client_to_server`
+/// method needs an auth requirement. `UNAUTHORIZED` admits anyone. `OPTIONAL_AUTH` admits anyone
+/// and passes the handler a `ras_auth_core::Caller` built from the connection's user, if any.
+/// `WITH_PERMISSIONS` requires a user holding every permission of at least one `|`-separated
+/// group; `WITH_PERMISSIONS([])` admits any authenticated user.
 ///
-/// See the tests for usage examples.
+/// `server_to_client_calls` entries need no auth requirement. `UNAUTHORIZED` and
+/// `WITH_PERMISSIONS` are accepted there but not enforced, since the call is outbound;
+/// `OPTIONAL_AUTH` is a compile error.
+///
+/// Payload types must implement `Serialize` and `Deserialize`. The generated client also needs
+/// `Debug` on request and response types, and `Debug + Clone` on notification types.
+///
+/// See the crate documentation for Cargo features and the guide for the generated items.
 #[proc_macro]
 pub fn jsonrpc_bidirectional_service(input: TokenStream) -> TokenStream {
     let service_definition = parse_macro_input!(input as BidirectionalServiceDefinition);

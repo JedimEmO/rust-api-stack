@@ -1,4 +1,12 @@
-//! Embedded API explorer shared by REST and JSON-RPC service macros.
+//! The API explorer page that `ras-rest-macro` and `ras-jsonrpc-macro` serve
+//! next to a generated service. You do not add this crate yourself.
+//!
+//! [`TEMPLATE`] is the whole page as one self-contained HTML string, built at
+//! compile time from the files under `src/assets`. The macros embed it in the
+//! generated code and replace [`CONFIG_PLACEHOLDER`] with the page's
+//! configuration as JSON. The crate has no dependencies and no Cargo features.
+//!
+//! See the [README](https://github.com/JedimEmO/rust-api-stack/blob/master/crates/specs/ras-api-explorer-assets/README.md).
 
 /// Placeholder in [`TEMPLATE`] that consumers replace with the explorer
 /// configuration JSON. The JSON must have its `<` characters escaped

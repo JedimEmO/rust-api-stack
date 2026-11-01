@@ -9,7 +9,7 @@ repository = "https://github.com/JedimEmO/rust-api-stack"
 homepage = "https://github.com/JedimEmO/rust-api-stack"
 readme = "README.md"
 keywords = ["jsonrpc", "websocket", "axum", "bidirectional", "server"]
-categories = ["web-programming", "network-programming"]
+categories = ["web-programming::websocket", "network-programming"]
 
 [dependencies]
 # Workspace dependencies

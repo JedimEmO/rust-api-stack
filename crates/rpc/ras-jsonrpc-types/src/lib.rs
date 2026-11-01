@@ -1,7 +1,23 @@
-//! JSON-RPC 2.0 protocol types and utilities.
+//! JSON-RPC 2.0 wire types: requests, responses, errors and error codes.
 //!
-//! This crate provides type-safe representations of JSON-RPC 2.0 protocol
-//! structures including requests, responses, and errors.
+//! The RAS JSON-RPC macros and runtime crates build on these types, and they
+//! work in any other JSON-RPC client or server. Most users reach them through
+//! `ras-jsonrpc-core` or the code `ras-jsonrpc-macro` generates.
+//!
+//! - [`JsonRpcRequest`] tells a missing `params` or `id` apart from an
+//!   explicit `null`. A request without an `id` is a notification
+//!   ([`JsonRpcRequest::is_notification`]).
+//! - [`JsonRpcResponse`] always serializes `id`, as `null` when it is unknown.
+//! - [`JsonRpcError`] has a constructor per code in [`error_codes`], including
+//!   this project's authentication and CSRF codes `-32001` to `-32004`.
+//! - [`PublicRpcError`] is the one handler error the generated servers send to
+//!   the client as written; [`HandlerErrorOutcome`] decides what every other
+//!   handler error becomes.
+//! - [`SpecGenerationError`] is re-exported from `ras-spec-components` for the
+//!   generated OpenRPC functions.
+//!
+//! The crate has no Cargo features. See the
+//! [README](https://github.com/JedimEmO/rust-api-stack/blob/master/crates/rpc/ras-jsonrpc-types/README.md).
 
 use serde::{Deserialize, Serialize};
 
@@ -194,7 +210,10 @@ impl JsonRpcError {
         )
     }
 
-    /// Creates an invalid params error.
+    /// Creates an invalid params error with the message `Invalid params` and no data.
+    ///
+    /// `_details` is discarded so internal detail cannot reach the client; use
+    /// [`JsonRpcError::new`] to send more.
     pub fn invalid_params(_details: String) -> Self {
         Self::new(
             error_codes::INVALID_PARAMS,
@@ -203,7 +222,10 @@ impl JsonRpcError {
         )
     }
 
-    /// Creates an internal error.
+    /// Creates an internal error with the message `Internal error` and no data.
+    ///
+    /// `_details` is discarded so internal detail cannot reach the client; use
+    /// [`JsonRpcError::new`] to send more.
     pub fn internal_error(_details: String) -> Self {
         Self::new(
             error_codes::INTERNAL_ERROR,

@@ -102,12 +102,6 @@ impl Parse for ServiceDefinition {
                 let path = content.parse::<LitStr>()?;
                 static_hosting.docs_path = path.value();
                 let _ = content.parse::<Token![,]>()?;
-            } else if field_name == "ui_theme" {
-                let _ = content.parse::<Ident>()?; // "ui_theme"
-                let _ = content.parse::<Token![:]>()?;
-                let theme = content.parse::<LitStr>()?;
-                static_hosting.ui_theme = theme.value();
-                let _ = content.parse::<Token![,]>()?;
             } else if field_name == "body_limit" {
                 let _ = content.parse::<Ident>()?; // "body_limit"
                 let _ = content.parse::<Token![:]>()?;

@@ -1,12 +1,12 @@
-# Bidirectional Chat Server
+# Bidirectional chat server
 
-Authenticated Axum server for the [bidirectional chat example](../README.md). It combines:
+The Axum server for the [bidirectional chat example](../README.md). It combines:
 
-- REST auth endpoints generated from `bidirectional-chat-api::auth`
+- REST login and registration endpoints generated from `bidirectional_chat_api::auth`
 - JWT sessions from `ras-identity-session`
-- Local username/password identity from `ras-identity-local`
-- Bidirectional JSON-RPC over WebSocket at `/ws`
-- File-backed chat room, message, and profile persistence
+- in-memory username and password accounts from `ras-identity-local`
+- bidirectional JSON-RPC over a WebSocket at `/ws`
+- rooms, messages and profiles saved as files under the data directory
 
 ## Run
 
@@ -18,32 +18,35 @@ CHAT_DATA_DIR=examples/bidirectional-chat/server/chat_data \
 cargo run -p bidirectional-chat-server --locked
 ```
 
-The example config binds to `127.0.0.1:3000`.
+The server listens on `127.0.0.1:3000`:
 
 - HTTP base URL: `http://127.0.0.1:3000`
 - WebSocket URL: `ws://127.0.0.1:3000/ws`
-- Runtime data: `examples/bidirectional-chat/server/chat_data/`
+- Runtime data: `examples/bidirectional-chat/server/chat_data/`, which git ignores
 
-`chat_data/` is ignored by git. The server also loads `.env` from the current working directory before reading configuration.
+Without `CHAT_CONFIG_FILE` the server looks for `config.toml` in the current directory and otherwise uses built-in defaults.
+It also loads a `.env` file from the current directory before it reads the configuration.
+
+## Accounts
+
+Debug builds create `alice` / `alice123` and `bob` / `bob123`.
+With `config.example.toml` loaded, the server also creates `admin` / `admin123456`
+with the `admin`, `moderator` and `user` permissions,
+and `moderator` / `moderator123` with `moderator` and `user`.
+Every other account gets `user`.
+
+Accounts are kept in memory and are lost when the server stops.
 
 ## Configuration
 
-The server reads `config.toml` by default. Set `CHAT_CONFIG_FILE` to use another file:
+These environment variables override the configuration file directly:
 
-```bash
-CHAT_CONFIG_FILE=examples/bidirectional-chat/server/config.example.toml \
-cargo run -p bidirectional-chat-server --locked
-```
-
-Direct environment overrides supported by the server:
-
-- `HOST`
-- `PORT`
-- `JWT_SECRET`
+- `HOST`, an IP address such as `0.0.0.0`, and `PORT`
+- `JWT_SECRET`, at least 32 bytes and free of placeholder words; generate one with `openssl rand -hex 32`
 - `CHAT_DATA_DIR`
-- `RUST_LOG`
+- `RUST_LOG`, which must be a plain level such as `debug`; filter strings fail validation
 
-Nested config values use the `CHAT__SECTION__FIELD` form, for example:
+Other values use the `CHAT__SECTION__FIELD` form:
 
 ```bash
 CHAT__RATE_LIMIT__ENABLED=true \
@@ -51,9 +54,15 @@ CHAT__RATE_LIMIT__MESSAGES_PER_MINUTE=10 \
 cargo run -p bidirectional-chat-server --locked
 ```
 
-The checked-in [config.example.toml](config.example.toml) shows every supported section. Replace the example `jwt_secret` and admin passwords for any shared environment.
+Lists, such as the `[[admin.users]]` entries, cannot be set this way; put them in the configuration file.
+[config.example.toml](config.example.toml) shows every section.
+Replace its `jwt_secret` and passwords for anything other than local development.
 
-## Auth Endpoints
+With rate limiting enabled, the server enforces `messages_per_minute` on `send_message`.
+It validates `connections_per_ip` and `login_attempts_per_hour` but does not enforce them;
+they are left for a proxy or the deployment to apply.
+
+## Auth endpoints
 
 The REST endpoints are generated from the shared API crate and mounted at the root:
 
@@ -69,7 +78,7 @@ curl -fsS -X POST http://127.0.0.1:3000/auth/register \
   --data '{"username":"demo","password":"demo12345","email":"demo@example.com","display_name":"Demo User"}'
 ```
 
-Login:
+Sign in:
 
 ```bash
 curl -fsS -X POST http://127.0.0.1:3000/auth/login \
@@ -77,38 +86,27 @@ curl -fsS -X POST http://127.0.0.1:3000/auth/login \
   --data '{"username":"demo","password":"demo12345"}'
 ```
 
-Debug builds also create `alice` / `alice123` and `bob` / `bob123`. When `config.example.toml` is loaded, it also creates the configured `admin` / `admin123456` and `moderator` / `moderator123` users.
+The response holds the JWT in `token`, its expiry in `expires_at` and the user id in `user_id`.
 
-## WebSocket Auth
+## WebSocket authentication
 
-The `/ws` endpoint requires a valid JWT. Clients can pass the token as:
+The `/ws` endpoint requires a valid JWT. A client can send it in any of these headers:
 
 - `Authorization: Bearer <token>`
 - `x-auth-token: <token>`
-- `sec-websocket-protocol: token.<token>`
-
-Once connected, the generated chat service handles methods such as `join_room`, `send_message`, `list_rooms`, `update_profile`, `kick_user`, and `broadcast_announcement`.
+- `Sec-WebSocket-Protocol: ras-jsonrpc, token.<token>`, for browsers, which cannot set headers on a WebSocket
 
 ## Tests
 
-Run the server package tests:
-
 ```bash
 cargo test -p bidirectional-chat-server --locked
-```
-
-Focused suites:
-
-```bash
 cargo test -p bidirectional-chat-server --test server_tests --locked
 cargo test -p bidirectional-chat-server --test auth_lifecycle_tests --locked
-```
-
-HTTP tests use `axum-test` mock transport. WebSocket flow tests use the in-memory `WebSocketIo` adapter instead of binding sockets. See [tests/README.md](tests/README.md) for the current coverage map and known gaps.
-
-## Checks
-
-```bash
-cargo test -p bidirectional-chat-server --locked
 cargo clippy -p bidirectional-chat-server --all-targets --all-features --locked -- -D warnings
 ```
+
+Most tests run without a network socket:
+HTTP tests use the `axum-test` mock transport,
+and the WebSocket flow tests use the in-memory `WebSocketIo` adapter.
+One router-level test binds a local port to drive the real `/ws` endpoint.
+[tests/README.md](tests/README.md) maps the coverage.

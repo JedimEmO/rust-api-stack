@@ -1,423 +1,211 @@
 # Rust Agent Stack (RAS)
 
-A Rust framework for building type-safe, authenticated agent systems with JSON-RPC, REST APIs, and file services.
+Rust Agent Stack is a set of Rust crates for building typed, authenticated
+HTTP and WebSocket APIs on Axum.
+You declare an API once, and a macro generates the server, the clients,
+the API documents and the auth checks from that declaration.
 
-Published documentation: <https://jedimemo.github.io/rust-api-stack/>
+Guide: <https://jedimemo.github.io/rust-api-stack/>
 
-## Overview
+## The problem
 
-The Rust Agent Stack provides reusable building blocks for distributed agent systems:
-- **Pluggable Authentication** - JWT sessions, OAuth2, local username/password auth, secure cookie transport, and reusable authorization traits
-- **Type-Safe APIs** - Procedural macros for JSON-RPC, REST, and file services
-- **WebSocket Support** - Bidirectional real-time communication
-- **File Services** - Type-safe file upload/download with streaming support
-- **Generated Clients** - Rust and browser-friendly clients generated from shared service contracts
-- **Reactive WASM UIs** - Browser apps built with Dominator and generated API clients
-- **Observability** - OpenTelemetry and Prometheus metrics hooks
-- **API Documentation** - Automatic OpenRPC and OpenAPI generation
-- **Compile-Time Safety** - Generated traits require every endpoint to be implemented
+A hand-written API keeps the same facts in several places.
+The handler decides what a request looks like, the client guesses it,
+the OpenAPI file describes it, and the auth middleware decides who may call it.
+Each copy can drift from the others,
+and the drift shows up at runtime, often in someone else's client.
 
-## Quick Start
+RAS keeps those facts in one Rust declaration.
+The handler trait, the client, the API document and the permission check are all generated from it,
+so a change to the contract is a compile error wherever the code no longer fits.
 
-Prerequisites:
-- Rust 1.88 or newer for Rust 2024 edition crates
-- Node.js 22.13 or newer only for the WASM UI example and Playwright browser tests
+## What it looks like
 
-```bash
-# Clone the repository
-git clone https://github.com/JedimEmO/rust-api-stack.git
-cd rust-api-stack
-
-# Build the entire workspace with the checked-in lockfile
-cargo build --locked
-
-# Run an example service
-cargo run -p basic-jsonrpc-service --locked
-```
-
-The service listens on `http://localhost:3000` with:
-
-- JSON-RPC endpoint: `POST /rpc`
-- Explorer UI: `http://localhost:3000/rpc/explorer`
-- OpenRPC document: `http://localhost:3000/rpc/explorer/openrpc.json`
-- Prometheus metrics: `http://localhost:3000/metrics`
-
-Frontend examples are optional. The generated-client TypeScript samples are
-plain usage files under `examples/*/typescript-example`, while the only
-npm-based app is [`examples/wasm-ui-demo`](examples/wasm-ui-demo/).
-
-## Architecture
-
-RAS is organized as a Cargo workspace with the following structure:
-
-```
-crates/
-├── core/                     # Core libraries
-│   ├── ras-auth-core        # Authentication traits and types
-│   ├── ras-identity-core    # Core identity provider traits
-│   ├── ras-observability-core # Unified observability traits
-│   └── ras-version-core     # API version migration traits
-├── rpc/                     # JSON-RPC libraries
-│   ├── ras-jsonrpc-types    # JSON-RPC 2.0 protocol types
-│   ├── ras-jsonrpc-core     # JSON-RPC runtime support
-│   ├── ras-jsonrpc-macro    # JSON-RPC service macro
-│   └── bidirectional/       # WebSocket support
-│       ├── ras-jsonrpc-bidirectional-types
-│       ├── ras-jsonrpc-bidirectional-server
-│       ├── ras-jsonrpc-bidirectional-client
-│       └── ras-jsonrpc-bidirectional-macro
-├── rest/                    # REST API libraries
-│   ├── ras-rest-core        # REST types and utilities
-│   ├── ras-rest-macro       # REST service macro
-│   └── ras-file-macro       # File upload/download macro
-├── identity/                # Identity providers
-│   ├── ras-identity-local   # Username/password auth
-│   ├── ras-identity-oauth2  # OAuth2 with PKCE support
-│   └── ras-identity-session # JWT session management
-├── observability/           # Monitoring and metrics
-│   └── ras-observability-otel # OpenTelemetry implementation
-├── specs/                   # Specifications and their shared assets
-│   ├── ras-api-explorer-assets # Embedded API explorer shared by the REST and JSON-RPC macros
-│   ├── ras-openrpc-types    # OpenRPC 1.3.2 spec types
-│   └── ras-permission-manifest # Permission manifest types
-examples/                    # Example applications
-├── basic-jsonrpc/           # JSON-RPC service demo
-├── bidirectional-chat/      # Real-time chat system
-├── file-service-example/    # File upload/download demo
-├── file-service-wasm/       # File service with TypeScript
-├── oauth2-demo/             # OAuth2 authentication flow
-├── rest-wasm-example/       # REST with TypeScript client
-└── wasm-ui-demo/            # Dominator WASM UI
-```
-
-## Key Features
-
-### Type-Safe JSON-RPC Services
-
-Define services with compile-time type checking:
+A JSON-RPC service with one public method and one protected method:
 
 ```rust
+use ras_jsonrpc_core::AuthenticatedUser;
 use ras_jsonrpc_macro::jsonrpc_service;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+pub struct CreateTaskRequest {
+    pub title: String,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+pub struct Task {
+    pub title: String,
+    pub owner: String,
+}
 
 jsonrpc_service!({
     service_name: TaskService,
-    openrpc: true,  // Generate OpenRPC docs
+    openrpc: true,
+    explorer: true,
     methods: [
-        UNAUTHORIZED sign_in(SignInRequest) -> SignInResponse,
-        OPTIONAL_AUTH feed(FeedRequest) -> FeedResponse,  // public, but identifies the caller
-        WITH_PERMISSIONS(["user"]) create_task(CreateTaskRequest) -> Task,
-        WITH_PERMISSIONS(["admin"]) delete_all_tasks(()) -> (),
+        UNAUTHORIZED ping(()) -> String,
+        WITH_PERMISSIONS(["task:write"]) create_task(CreateTaskRequest) -> Task,
     ]
 });
 
-// Implement the generated `TaskServiceTrait` on your service type. The
-// runnable task implementation lives in `examples/basic-jsonrpc/service`.
-struct TaskServiceImpl;
+struct Tasks;
 
-// Use with the builder
-let router = TaskServiceBuilder::new(TaskServiceImpl)
+impl TaskServiceTrait for Tasks {
+    async fn ping(&self, _: ()) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        Ok("pong".into())
+    }
+
+    async fn create_task(
+        &self,
+        user: &AuthenticatedUser,
+        request: CreateTaskRequest,
+    ) -> Result<Task, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(Task { title: request.title, owner: user.user_id.clone() })
+    }
+}
+
+let app = TaskServiceBuilder::new(Tasks)
     .base_url("/rpc")
-    .auth_provider(MyAuthProvider)
+    .auth_provider(my_auth_provider)
     .build()?;
 ```
 
-### Type-Safe REST APIs
+Notice that `create_task` receives an `&AuthenticatedUser`.
+The generated server only calls it after your auth provider has accepted the bearer token
+and the user holds the `task:write` permission; `ping` needs no credential.
+The same declaration also generates a `TaskServiceClient`,
+an OpenRPC document, and an API explorer page at `/rpc/explorer`.
 
-Build RESTful services with automatic OpenAPI documentation that can feed
-TypeScript client generation:
+There is one macro for each kind of API:
 
-```rust
-use ras_rest_macro::rest_service;
+| Macro | Crate | For |
+| --- | --- | --- |
+| `jsonrpc_service!` | `ras-jsonrpc-macro` | JSON-RPC over HTTP, with OpenRPC output and an API explorer |
+| `rest_service!` | `ras-rest-macro` | JSON REST APIs, with OpenAPI output and an API explorer |
+| `file_service!` | `ras-file-macro` | Streaming multipart uploads and ranged downloads, with OpenAPI output |
+| `jsonrpc_bidirectional_service!` | `ras-jsonrpc-bidirectional-macro` | JSON-RPC in both directions over a WebSocket |
 
-rest_service!({
-    service_name: UserService,
-    base_path: "/api/v1",
-    openapi: true,
-    serve_docs: true,  // Serve the built-in API explorer at /api/v1/docs
-    endpoints: [
-        GET UNAUTHORIZED users() -> UsersResponse,
-        GET OPTIONAL_AUTH feed() -> UsersResponse,  // public, caller as `Caller` arg
-        POST WITH_PERMISSIONS(["admin"]) users(CreateUserRequest) -> UserResponse,
-        GET WITH_PERMISSIONS(["user"]) users/{id: String}() -> User,
-        DELETE WITH_PERMISSIONS(["admin"]) users/{id: String}() -> (),
-    ]
-});
+All four share one auth syntax: `UNAUTHORIZED`, `OPTIONAL_AUTH` and `WITH_PERMISSIONS([...])`.
+The JSON-RPC and REST macros also accept typed request and response examples,
+which appear in the generated document and in the explorer.
 
-// Implement the generated `UserServiceTrait` on your service type. The
-// REST guide includes an in-memory implementation.
-struct UserServiceImpl;
+## Getting it
 
-// Build the Axum router
-let app = UserServiceBuilder::new(UserServiceImpl)
-    .auth_provider(jwt_auth_provider)
-    .build();
+Add the macro crate and the runtime crates its generated code refers to.
+For the JSON-RPC example above, in a single crate:
+
+```toml
+[dependencies]
+ras-jsonrpc-macro = "0.4"
+ras-jsonrpc-core = "0.3"
+ras-jsonrpc-types = "0.3"
+ras-transport-core = { version = "0.2", features = ["reqwest"] }
+axum = "0.8"
+schemars = "1.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
 ```
 
-### Bidirectional WebSocket Communication
+The macro's default features generate both the server and a reqwest-based client.
+A real application usually puts the declarations in a shared API crate,
+with `server` and `client` features so a browser client does not compile Axum.
+The [tutorial](https://jedimemo.github.io/rust-api-stack/tutorial/index.html) builds that layout,
+and each macro guide lists the dependencies for its macro.
 
-Real-time bidirectional messaging with authentication:
+The crates need Rust 1.88 or newer.
 
-```rust
-use ras_jsonrpc_bidirectional_macro::jsonrpc_bidirectional_service;
+### The other crates
 
-jsonrpc_bidirectional_service!({
-    service_name: ChatService,
+| Crate | Purpose |
+| --- | --- |
+| `ras-auth-core` | The `AuthProvider` trait, `AuthenticatedUser`, and bearer, cookie and CSRF transport |
+| `ras-identity-core` | Traits for identity providers |
+| `ras-identity-local` | Username and password sign-in with Argon2 hashes |
+| `ras-identity-oauth2` | OAuth2 sign-in with PKCE |
+| `ras-identity-session` | JWT sessions, and an `AuthProvider` that verifies them |
+| `ras-observability-core` | Traits for request metrics and usage tracking |
+| `ras-observability-otel` | OpenTelemetry and Prometheus implementation of those traits |
+| `ras-transport-core` | The HTTP transport behind generated clients |
+| `ras-version-core` | Traits for migrating versioned request and response shapes |
+| `ras-jsonrpc-core`, `ras-jsonrpc-types` | Runtime support and protocol types for `jsonrpc_service!` |
+| `ras-rest-core`, `ras-file-core` | Runtime types for `rest_service!` and `file_service!` |
+| `ras-jsonrpc-bidirectional-server`, `-client`, `-types` | WebSocket runtime for `jsonrpc_bidirectional_service!`; the client runs natively and in WASM |
+| `ras-openrpc-types` | Rust types for the OpenRPC 1.3.2 specification |
+| `ras-permission-manifest` | A machine-readable list of the permissions each service requires |
+| `ras-api-explorer-assets`, `ras-spec-components` | Explorer page and document-building code that the macros embed; not used directly |
 
-    client_to_server: [
-        WITH_PERMISSIONS(["user"]) send_message(SendMessageRequest) -> SendMessageResponse,
-    ],
+## Running an example
 
-    server_to_client: [
-        message_received(MessageReceivedNotification),
-        user_joined(UserJoinedNotification),
-    ],
+Clone the repository and run the JSON-RPC example:
 
-    server_to_client_calls: [
-    ]
-});
+```bash
+git clone https://github.com/JedimEmO/rust-api-stack.git
+cd rust-api-stack
+cargo run -p basic-jsonrpc-service --locked
 ```
 
-### Type-Safe File Services
+The service listens on `http://localhost:3000`.
+The JSON-RPC endpoint is `POST /rpc`, the explorer is at `/rpc/explorer`,
+the OpenRPC document at `/rpc/explorer/openrpc.json`, and Prometheus metrics at `/metrics`.
 
-Build file upload/download services with streaming support:
+The other examples:
 
-```rust
-use ras_file_macro::file_service;
+| Example | Shows |
+| --- | --- |
+| [`basic-jsonrpc`](examples/basic-jsonrpc/) | JSON-RPC task service with a demo sign-in, permission checks and OpenTelemetry metrics |
+| [`oauth2-demo`](examples/oauth2-demo/) | OAuth2 sign-in with PKCE, JWT sessions and role-based permissions |
+| [`bidirectional-chat`](examples/bidirectional-chat/) | WebSocket chat server with a terminal client and persistence |
+| [`file-service-example`](examples/file-service-example/) | File uploads and downloads with streaming and auth |
+| [`file-service-wasm`](examples/file-service-wasm/) | File service OpenAPI output and a TypeScript client generated from it |
+| [`rest-wasm-example`](examples/rest-wasm-example/) | REST OpenAPI output and a TypeScript client generated from it |
+| [`wasm-ui-demo`](examples/wasm-ui-demo/) | Browser UI in Rust with Dominator and the generated JSON-RPC client |
 
-file_service!({
-    service_name: DocumentService,
-    base_path: "/api/documents",
-    endpoints: [
-        UPLOAD WITH_PERMISSIONS(["user"]) upload multipart {
-            max_total_bytes: 52428800,
-            parts: [
-                file file {
-                    required: true,
-                    max_bytes: 52428800,
-                    filename: optional,
-                },
-            ],
-        } -> FileMetadata,
-        DOWNLOAD UNAUTHORIZED download/{file_id: String} {
-            content_types: ["application/octet-stream"],
-            ranges: true,
-        },
-    ]
-});
-```
-
-### Generated Client Support
-
-Service macros generate Rust clients and API documents from the same definitions used by the server. The REST and file-service browser examples are plain TypeScript usage samples that assume a fetch client generated locally from OpenAPI, while the JSON-RPC WASM UI uses generated Rust/WASM client code from the shared API crate.
-
-```typescript
-import * as api from './generated';
-
-const users = await api.getUsers({
-  baseUrl: 'http://localhost:3000/api/v1',
-});
-
-const created = await api.postUsers({
-  baseUrl: 'http://localhost:3000/api/v1',
-  headers: { Authorization: 'Bearer admintoken' },
-  body: { name: 'Alice', email: 'alice@example.com' },
-});
-```
-
-### Reactive WASM UIs
-
-Build browser UIs with Dominator:
-
-```rust
-use dominator::{html, Dom};
-use futures_signals::signal_vec::MutableVec;
-
-fn create_task_list(tasks: MutableVec<Task>) -> Dom {
-    html!("div", {
-        .class("task-list")
-        .children_signal_vec(tasks.signal_vec_cloned()
-            .map(|task| render_task(task)))
-    })
-}
-```
-
-## Examples
-
-### [Basic JSON-RPC](examples/basic-jsonrpc/)
-Simple task management API demonstrating authentication and OpenTelemetry metrics.
-
-### [OAuth2 Demo](examples/oauth2-demo/)
-OAuth2 demo with PKCE flow, JWT sessions, and role-based permissions.
-
-### [Bidirectional Chat](examples/bidirectional-chat/)
-Real-time chat system with WebSocket communication, TUI client, and persistence.
-
-### [File Service Example](examples/file-service-example/)
-File upload/download service with streaming support and authentication.
-
-### [File Service WASM](examples/file-service-wasm/)
-File service with OpenAPI output and a minimal TypeScript usage sample for a generated fetch client.
-
-### [REST WASM Example](examples/rest-wasm-example/)
-REST API with OpenAPI output and a minimal TypeScript usage sample for a generated fetch client.
-
-### [WASM UI Demo](examples/wasm-ui-demo/)
-Reactive web UI with Dominator and the generated JSON-RPC client.
+The TypeScript samples are plain usage files.
+Only `wasm-ui-demo` uses npm, and it needs Node.js 22.13 or newer.
 
 ## Documentation
 
-Read the published mdBook at
-<https://jedimemo.github.io/rust-api-stack/>.
+The [guide](https://jedimemo.github.io/rust-api-stack/) is the manual.
+Its source is in [`documentation/src`](documentation/src/SUMMARY.md). Good places to start:
 
-The source for that book lives under
-[documentation/src](documentation/src/SUMMARY.md). Start with:
+- [Build a typed workspace app](documentation/src/tutorial/index.md), a tutorial from contract to clients and tests
+- [Why typed service definitions](documentation/src/why-typed-service-definitions.md)
+- [Auth in the API contract](documentation/src/auth-in-api-contract.md)
+- The macro guides for [`jsonrpc_service!`](documentation/src/macros/jsonrpc-service.md), [`rest_service!`](documentation/src/macros/rest-service.md), [`file_service!`](documentation/src/macros/file-service.md) and [`jsonrpc_bidirectional_service!`](documentation/src/macros/bidirectional-jsonrpc-service.md)
+- [Identity and sessions](documentation/src/identity-and-sessions.md) and [Observability](documentation/src/observability.md)
 
-- [Build A Typed Workspace App](documentation/src/tutorial/index.md)
-- [Why Typed Service Definitions](documentation/src/why-typed-service-definitions.md)
-- [Auth In The API Contract](documentation/src/auth-in-api-contract.md)
-- [`jsonrpc_service!`](documentation/src/macros/jsonrpc-service.md)
-- [`rest_service!`](documentation/src/macros/rest-service.md)
-- [`file_service!`](documentation/src/macros/file-service.md)
-- [`jsonrpc_bidirectional_service!`](documentation/src/macros/bidirectional-jsonrpc-service.md)
-
-Package-level README files remain available for crate-specific details:
-
-- [JSON-RPC Core](crates/rpc/ras-jsonrpc-core/README.md) - runtime auth and JSON-RPC support types
-- [Bidirectional JSON-RPC Server](crates/rpc/bidirectional/ras-jsonrpc-bidirectional-server/README.md) - server-side WebSocket runtime
-- [Bidirectional JSON-RPC Client](crates/rpc/bidirectional/ras-jsonrpc-bidirectional-client/README.md) - native and WASM WebSocket clients
-
-## Built-in Features
-
-### Authentication & Security
-- **Timing Attack Mitigation** - Missing local users verify against an Argon2 sentinel hash
-- **Username Enumeration Mitigation** - Uniform invalid-credentials errors
-- **Concurrency Bound** - Local authentication caps *concurrent* verification attempts (a Semaphore), which is not a rate limiter; deploy a per-user/per-IP rate limiter at the HTTP edge for brute-force protection
-- **Password Storage** - Per-user salted Argon2id hashes
-- **JWT Configuration** - Configurable algorithms, secrets, TTLs, and active-session enforcement
-- **PKCE OAuth2** - Proof Key for Code Exchange by default
-- **Session Management** - JWT-based sessions with revocation support
-- **Secure Cookie Transport** - Optional `HttpOnly`, `Secure`, `SameSite` cookies alongside bearer headers for browser sessions
-
-### Observability
-
-Add Prometheus-compatible metrics with minimal configuration:
-
-```rust
-use ras_observability_otel::standard_setup;
-
-// Set up OpenTelemetry with Prometheus
-let otel = standard_setup("my-service")?;
-
-let _usage_tracker = otel.usage_tracker();
-let _duration_tracker = otel.method_duration_tracker();
-let _metrics_router = otel.metrics_router();
-
-// Wire the trackers into generated service builders through their
-// `with_usage_tracker` and `with_method_duration_tracker` hooks.
-
-// Metrics available at /metrics endpoint
-```
-
-Features:
-- Unified metrics for JSON-RPC, REST, and file services
-- Request counting, duration tracking, user activity
-- Prometheus exporter and Axum `/metrics` router helpers
-- Extensible trait-based design
-
-### TypeScript And WASM Support
-
-Browser examples use generated contracts without hand-written DTOs:
-- REST and file-service TypeScript usage samples assume a fetch client generated from OpenAPI specs.
-- JSON-RPC WASM UI uses generated Rust/WASM client code from the shared API crate.
-- Bearer tokens are passed as ordinary per-request headers.
-- Browser-facing services can opt into secure `HttpOnly` session cookies on the same generated builders, with double-submit CSRF protection for cookie-authenticated unsafe requests.
+Each crate's README covers its own API.
 
 ## Development
 
-Use the workspace commands below as the baseline development checks. They mirror
-the GitHub Actions workflow so local validation catches the same classes of
-breakage before a pull request.
-
-### Rust Checks
+These commands mirror the CI workflow in [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
 
 ```bash
-# Formatting and linting
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-
-# Tests (cargo-nextest, as in CI) and doctests
 cargo nextest run --workspace --all-targets --all-features --locked
 cargo test --doc --workspace --all-features --locked
-
-# Coverage (cargo-llvm-cov); CI posts the same table on every pull request
-cargo llvm-cov nextest --workspace --all-targets --all-features --locked
-
-# Documentation
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
-```
-
-Tests run under [cargo-nextest](https://nexte.st) with retries disabled
-(`.config/nextest.toml`): a test that only passes on a retry is a bug in the
-test. A weekly `Flake detector` workflow runs the whole suite five times at
-three parallelism levels and can be triggered by hand from the Actions tab.
-Per-test hangs are capped at two minutes locally and three in CI.
-
-`cargo test` still works for one-off runs; nextest is preferred because it
-isolates each test in its own process, reports per-test timings, and is what
-CI and the coverage job execute.
-
-### Documentation Hygiene
-
-CI also checks that each Cargo package has a local README target and that local
-Markdown links resolve. The checks are implemented directly in
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) so the repository does
-not need separate verification scripts.
-
-The mdBook can be built locally with:
-
-```bash
+cargo deny check
 mdbook build
 ```
 
-### Supply Chain Policy
+Tests run under [cargo-nextest](https://nexte.st) with retries disabled (see `.config/nextest.toml`),
+because a test that only passes on a retry is a bug in the test.
+A test that hangs fails after two minutes locally and three in CI.
+A weekly `Flake detector` workflow runs the whole suite five times at three parallelism levels,
+and it can also be started by hand from the Actions tab.
 
-The tracked [`deny.toml`](deny.toml) is enforced in CI with `cargo-deny`.
-Run the same check locally when dependency versions, features, or licenses
-change:
-
-```bash
-cargo deny check
-```
-
-Install `cargo-deny` first if it is not already available:
+Coverage uses `cargo-llvm-cov`, and CI posts the same table on every pull request:
 
 ```bash
-cargo install cargo-deny
+cargo llvm-cov nextest --workspace --all-targets --all-features --locked
 ```
 
-### Frontend Examples
-
-```bash
-# Generate OpenAPI specs used by the TypeScript usage samples
-cargo check -p file-service-backend -p rest-backend --locked
-```
-
-The generated-client usage samples are plain TypeScript files:
-
-- `examples/file-service-wasm/typescript-example/src/example.ts`
-- `examples/rest-wasm-example/typescript-example/src/example.ts`
-
-The only npm-based frontend example is the Dominator WASM UI:
-
-```bash
-# Dominator WASM UI
-npm --prefix examples/wasm-ui-demo ci
-npm --prefix examples/wasm-ui-demo run build
-```
-
-### Browser Explorer Tests
-
-From the workspace root:
+The API explorer has browser tests that start REST and JSON-RPC fixture servers and drive them in Chromium:
 
 ```bash
 npm --prefix tests/playwright ci
@@ -425,43 +213,22 @@ npm --prefix tests/playwright run install:browsers
 npm --prefix tests/playwright test
 ```
 
-These tests start dedicated REST and JSON-RPC fixture servers and exercise the
-generated API explorers in Chromium.
+The TypeScript samples read OpenAPI files that their backends write at build time,
+so build those first with `cargo check -p file-service-backend -p rest-backend --locked`.
 
-### Coverage
-
-From the workspace root:
-
-```bash
-cargo llvm-cov --workspace --all-targets --all-features --locked --lcov --output-path lcov.info
-cargo llvm-cov report --summary-only
-```
-
-Install `cargo-llvm-cov` first if it is not already available:
-
-```bash
-cargo install cargo-llvm-cov
-```
-
-## Contributing
-
-Contributions are welcome. Keep changes focused, include tests for behavioral changes, and run the relevant workspace checks before opening a pull request.
-
-### Development Setup
-
-1. Install Rust 1.88 or newer
-2. Install Node.js 22.13 or newer for the WASM UI example and Playwright browser tests
-3. Clone the repository
-4. Run `cargo build --locked` to verify setup
+Contributions are welcome.
+Keep changes focused, include tests for behaviour changes,
+and run the checks above before opening a pull request.
 
 ## License
 
-This project is licensed under either MIT or Apache-2.0. See
-[`LICENSE-MIT`](LICENSE-MIT) and [`LICENSE-APACHE`](LICENSE-APACHE).
+Licensed under either MIT or Apache-2.0, at your option.
+See [`LICENSE-MIT`](LICENSE-MIT) and [`LICENSE-APACHE`](LICENSE-APACHE).
 
 ## Acknowledgments
 
 Built with these Rust crates:
+
 - [Axum](https://github.com/tokio-rs/axum) - Web framework
 - [Tokio](https://tokio.rs/) - Async runtime
 - [Dominator](https://github.com/Pauan/rust-dominator) - WASM UI framework

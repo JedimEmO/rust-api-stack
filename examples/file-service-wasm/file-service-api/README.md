@@ -1,24 +1,30 @@
-# File Service API
+# File service API
 
-Shared file-service contract for the [file service WASM/OpenAPI example](../README.md). This crate uses `ras-file-macro` to generate upload/download server traits, clients, and OpenAPI output for the backend and generated TypeScript usage sample.
+The contract crate for the [file service example](../README.md).
+It calls `file_service!` to declare `DocumentService`, which generates the server trait,
+the router builder, the Rust client and the OpenAPI document.
 
-## Generated Service
+## Endpoints
 
-The contract in [src/lib.rs](src/lib.rs) defines `DocumentService` at base path `/api/documents` with a 100 MB body limit:
+[src/lib.rs](src/lib.rs) mounts the service at `/api/documents`:
 
-- `POST /api/documents/upload`
-- `POST /api/documents/upload_profile_picture`
-- `GET /api/documents/download/{file_id}`
-- `GET /api/documents/download_secure/{file_id}`
+| Endpoint | Access | Notes |
+|---|---|---|
+| `POST /api/documents/upload` | public | one `file` part, up to 100 MiB |
+| `POST /api/documents/upload_profile_picture` | `user` permission | one `file` part, PNG, JPEG or WebP, filename required |
+| `GET /api/documents/download/{file_id}` | public | supports range requests |
+| `GET /api/documents/download_secure/{file_id}` | `user` permission | supports range requests |
 
-The backend implementation is documented in [../file-service-backend/README.md](../file-service-backend/README.md). The plain TypeScript generated-client usage sample is documented in [../typescript-example/README.md](../typescript-example/README.md).
+Both uploads reject unknown parts.
+The backend is documented in [../file-service-backend/README.md](../file-service-backend/README.md)
+and the TypeScript sample in [../typescript-example/README.md](../typescript-example/README.md).
 
 ## Features
 
-- `server` - marker feature used by the backend package when depending on this shared API crate.
-- `client` - enables the macro-generated upload/download client with the default reqwest transport.
-- `fs` - enables native generated-client helpers that stream upload parts from disk.
-- `wasm-client` - compatibility alias that also enables the extra WASM helper dependencies.
+- `server` generates the server trait, the router builder and the OpenAPI functions.
+- `client` generates the Rust client with the default reqwest transport.
+- `fs` adds client helpers that stream upload parts from files on disk.
+- `wasm-client` enables `client` together with the browser helper dependencies.
 
 ## Checks
 

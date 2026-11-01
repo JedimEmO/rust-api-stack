@@ -1,7 +1,16 @@
-//! Core observability traits and types for Rust Agent Stack
+//! Backend-neutral request metrics traits for Rust Agent Stack services.
 //!
-//! This crate provides protocol-agnostic abstractions for metrics collection,
-//! usage tracking, and observability across REST and JSON-RPC services.
+//! [`RequestContext`] describes a request the same way for REST, JSON-RPC and WebSocket
+//! services. [`UsageTracker`] runs before a request, [`MethodDurationTracker`] after it,
+//! and [`ServiceMetrics`] is the synchronous counter and histogram interface.
+//!
+//! This crate holds no metrics backend. `ras-observability-otel` implements these traits
+//! with OpenTelemetry and a Prometheus endpoint; depend on this crate directly only to
+//! write your own backend, or to call the trait methods on the otel types.
+//!
+//! The crate has no Cargo features. See the
+//! [observability guide](https://github.com/JedimEmO/rust-api-stack/blob/master/documentation/src/observability.md)
+//! for wiring the trackers into generated services.
 
 use async_trait::async_trait;
 use http::HeaderMap;

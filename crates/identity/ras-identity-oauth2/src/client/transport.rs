@@ -104,7 +104,7 @@ impl ReqwestOAuth2HttpTransport {
 }
 
 /// Log a transport-level failure at `warn` (the `reqwest::Error` carries the
-/// request URL) and hand back the fixed-message error variant (I6).
+/// request URL) and hand back the fixed-message error variant.
 fn log_upstream_error(error: reqwest::Error) -> OAuth2Error {
     warn!(error = %error, "upstream OAuth2 request failed");
     OAuth2Error::HttpError(error)

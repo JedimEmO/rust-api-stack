@@ -1,9 +1,11 @@
-# API Explorer Playwright Tests
+# API explorer Playwright tests
 
-These tests exercise the generated REST and JSON-RPC API explorers in a real
-browser. Dedicated Rust fixture servers are started by Playwright. The fixtures
-include canonical and legacy versioned API entries so the explorer covers both
-current and compatibility routes.
+Browser tests for the API explorers that `rest_service!` and `jsonrpc_service!` generate.
+Playwright starts two Rust fixture servers, [rest-fixture](fixtures/rest-fixture/README.md)
+and [jsonrpc-fixture](fixtures/jsonrpc-fixture/README.md),
+and drives their explorers in Chromium.
+The fixtures declare versioned endpoints with a current and an older version,
+so the tests cover both.
 
 ## Local setup
 

@@ -1,30 +1,34 @@
-# Bidirectional Chat API
+# Bidirectional chat API
 
-Shared contract crate for the [bidirectional chat example](../README.md). It contains the JSON-RPC request/response types, server-to-client notification payloads, REST auth payloads, and generated service code used by the chat server and TUI client.
+The contract crate for the [bidirectional chat example](../README.md).
+It holds the WebSocket JSON-RPC contract, the REST login and registration contract,
+and the request, response and notification types that the server and the terminal client share.
 
 ## Generated APIs
 
-The WebSocket JSON-RPC contract in [src/lib.rs](src/lib.rs) generates `ChatService` with authenticated methods for:
+[src/lib.rs](src/lib.rs) declares `ChatService` with `jsonrpc_bidirectional_service!`.
+Client-to-server methods cover messages, typing indicators, rooms, profiles,
+moderator kicks and admin announcements; every one requires a permission.
+Server-to-client notifications cover new messages, users joining and leaving, typing,
+announcements, kicks and room changes.
+The [example README](../README.md#the-protocol) lists them with their permissions.
 
-- sending messages and typing notifications
-- joining, leaving, and listing rooms
-- reading and updating user profiles
-- moderator kicks
-- admin announcements
-
-The REST auth contract in [src/auth.rs](src/auth.rs) generates:
+[src/auth.rs](src/auth.rs) declares `ChatAuthService` with `rest_service!`:
 
 - `GET /health`
 - `POST /auth/register`
 - `POST /auth/login`
 
-The runnable server is documented in [../server/README.md](../server/README.md), and the terminal client is documented in [../tui/README.md](../tui/README.md).
+The server is documented in [../server/README.md](../server/README.md)
+and the terminal client in [../tui/README.md](../tui/README.md).
 
 ## Features
 
-- `server` - enables generated server integration and Axum support.
-- `client` - enables the generated bidirectional client and REST auth client with the default reqwest transport.
-- default: no generated transport code.
+Both services use `feature_gated: true`, so this crate's features choose what is generated:
+
+- `server` generates the WebSocket handler and the REST router builder.
+- `client` generates the WebSocket client and the REST client, with the default reqwest transport.
+- With no features, neither side is generated and the crate holds the shared types.
 
 ## Checks
 

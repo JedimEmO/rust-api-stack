@@ -174,7 +174,7 @@ impl OAuth2Client {
 }
 
 /// Constant-time comparison of the stored session binding against the value
-/// presented on callback (I7). A missing callback value never matches.
+/// presented on callback. A missing callback value never matches.
 fn binding_matches(expected: &str, presented: Option<&str>) -> bool {
     match presented {
         Some(presented) => {

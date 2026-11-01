@@ -24,7 +24,7 @@ pub enum OAuth2AuthPayload {
     /// Complete the OAuth2 flow with callback data
     Callback {
         provider_id: String,
-        /// Absent when the provider redirected back with `error` instead (I5).
+        /// Absent when the provider redirected back with `error` instead.
         #[serde(default)]
         code: Option<String>,
         state: String,
@@ -108,7 +108,7 @@ impl OAuth2Provider {
     }
 
     /// Add a provider configuration. Fails if the configuration does not pass
-    /// [`OAuth2ProviderConfig::validate`] (I9).
+    /// [`OAuth2ProviderConfig::validate`].
     pub fn add_provider(&mut self, provider_config: OAuth2ProviderConfig) -> OAuth2Result<()> {
         provider_config.validate()?;
         self.provider_configs

@@ -1,4 +1,4 @@
-# Playwright REST Fixture
+# Playwright REST fixture
 
 Socket-bound fixture server for the REST API explorer browser tests. It is intentionally small and deterministic so Playwright can exercise the generated explorer with a real browser-visible HTTP server.
 
@@ -25,7 +25,7 @@ PLAYWRIGHT_REST_ADDR=127.0.0.1:3101 cargo run --locked -p playwright-rest-fixtur
 
 The Playwright config starts this server automatically. Use `PLAYWRIGHT_REST_PORT` when running the full browser suite to avoid local port collisions.
 
-## Test Tokens
+## Test tokens
 
 - `user-token`
 - `admin-token`

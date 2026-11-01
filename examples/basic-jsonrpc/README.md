@@ -1,27 +1,24 @@
-# Basic JSON-RPC Example
+# Basic JSON-RPC example
 
-This example is a two-crate JSON-RPC service that demonstrates shared API
-definitions, authentication, generated OpenRPC documentation, and Prometheus
-metrics.
+A task service built with `jsonrpc_service!`, split into a contract crate and a server.
+It shows permission checks per method, authored OpenRPC examples,
+the generated API explorer and Prometheus metrics.
 
-## Crates
-
-- `api/` defines the JSON-RPC methods and shared request/response types.
-- `service/` implements the handlers, authentication, metrics, and HTTP server.
+- [`api/`](api/) declares the methods and the request and response types.
+- [`service/`](service/) implements them and serves them over HTTP.
 
 ## Run
-
-From the workspace root:
 
 ```bash
 cargo run -p basic-jsonrpc-service --locked
 ```
 
-The service starts at `http://localhost:3000` with:
+The service listens on port 3000:
 
-- JSON-RPC endpoint: `POST /rpc`
-- Explorer UI: `/rpc/explorer`
-- OpenRPC document: `/rpc/explorer/openrpc.json`
-- Prometheus metrics: `/metrics`
+- JSON-RPC endpoint: `POST http://localhost:3000/rpc`
+- API explorer: `http://localhost:3000/rpc/explorer`
+- OpenRPC document: `http://localhost:3000/rpc/explorer/openrpc.json`
+- Prometheus metrics: `http://localhost:3000/metrics`
 
-See [service/README.md](service/README.md) for credentials and request examples.
+See [service/README.md](service/README.md) for the demo credentials and `curl` requests.
+[wasm-ui-demo](../wasm-ui-demo/) is a browser client for this service.

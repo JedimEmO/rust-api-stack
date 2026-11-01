@@ -1,109 +1,66 @@
-# Bidirectional Chat TUI Client
+# Bidirectional chat terminal client
 
-A terminal user interface (TUI) client for the bidirectional chat server, built with Ratatui and using the generated API client from the chat API crate.
+A Ratatui terminal client for the [bidirectional chat example](../README.md).
+It signs in over REST, then talks to the server through the `ChatServiceClient`
+that `jsonrpc_bidirectional_service!` generates in the [chat API crate](../api/README.md).
 
-## Test Credentials
+## Run
 
-Debug server builds create these regular test users:
-- **Alice**: Username: `alice`, Password: `alice123`
-- **Bob**: Username: `bob`, Password: `bob123`
+Start the [server](../server/README.md) first, then run the client in another terminal:
 
-If you copy `examples/bidirectional-chat/server/config.example.toml` to
-`examples/bidirectional-chat/server/config.toml` and start the server with
-`CHAT_CONFIG_FILE` pointing at that file, the server also creates these
-configured admin users. For workspace-root server commands, also set
-`CHAT_DATA_DIR=examples/bidirectional-chat/server/chat_data` if you want
-runtime chat state under the example directory.
-- **Admin**: Username: `admin`, Password: `admin123456`
-- **Moderator**: Username: `moderator`, Password: `moderator123`
+```bash
+cargo run -p bidirectional-chat-server --locked
+cargo run -p bidirectional-chat-tui --locked
+```
 
-## Features
+The client connects to `http://localhost:3000` and opens the WebSocket at `/ws` on the same host.
+Set `SERVER_URL`, in the environment or in a `.env` file in the current directory, to use another server:
 
-- **Terminal-based UI**: Clean, responsive interface using Ratatui
-- **Full chat functionality**: Send/receive messages in real-time
-- **Room management**: Join, leave, and switch between chat rooms
-- **Authentication**: Login and registration with JWT-based auth
-- **Type-safe API**: Uses the generated client from `jsonrpc_bidirectional_service!` macro
-- **Real-time updates**: WebSocket-based bidirectional communication
-- **Animated cat avatars**: Each user has a unique cat avatar with expressions
-- **Visual typing indicators**: Cat avatars show "..." chat bubbles when users are typing
+```env
+SERVER_URL=http://127.0.0.1:4000
+```
 
-## Prerequisites
+## Accounts
 
-- The bidirectional chat server must be running (see `examples/bidirectional-chat/server`)
-- Rust 1.88+ for Rust 2024 edition crates
+Debug builds of the server create `alice` / `alice123` and `bob` / `bob123`.
+Press Ctrl+R on the login screen to register a new account.
+When the server runs with `config.example.toml`, `admin` / `admin123456` and `moderator` / `moderator123` also exist.
 
-## Running the Client
+## Keys
 
-1. Start the chat server:
-   ```bash
-   cargo run -p bidirectional-chat-server --locked
-   ```
+Login and registration screens:
 
-2. In a new terminal, run the TUI client:
-   ```bash
-   cargo run -p bidirectional-chat-tui --locked
-   ```
+- Tab switches between the username and password fields.
+- Enter signs in, or registers and then signs in.
+- Ctrl+R opens the registration screen.
+- Esc quits from the login screen and goes back from the registration screen.
+
+Room list:
+
+- 1 to 9 join the room with that number.
+- R refreshes the list.
+- Q disconnects and quits.
+
+Chat:
+
+- Enter sends the message.
+- Esc leaves the room and returns to the room list.
+- `/quit` or `/exit` disconnects and quits.
+
+The sidebar shows the users in the room with their cat avatars.
+When someone types, their avatar shows a speech bubble and a line at the bottom names them;
+both clear after five seconds without a keystroke.
+
+## How it uses the generated client
+
+[src/app.rs](src/app.rs) builds the client with `ChatServiceClientBuilder`, passing the JWT from the login response,
+and registers a callback for each server notification, such as `on_message_received`.
+Each callback forwards the notification to the UI loop over a channel.
+Method calls, such as `join_room` and `send_message`, are ordinary async calls with typed requests and responses.
+Login and registration in [src/auth.rs](src/auth.rs) use `reqwest` with the request and response types from the API crate.
 
 ## Checks
 
 ```bash
 cargo test -p bidirectional-chat-tui --locked
 ```
-
-## Usage
-
-### Login Screen
-- **Tab**: Switch between username and password fields
-- **Enter**: Login with entered credentials
-- **Ctrl+R**: Switch to registration screen
-- **Esc**: Quit the application
-
-### Registration Screen
-- **Tab**: Switch between username and password fields
-- **Enter**: Register new account
-- **Esc**: Return to login screen
-
-### Room List Screen
-- **1-9**: Join room by number
-- **R**: Refresh room list
-- **Q**: Quit and disconnect
-
-### Chat Screen
-- **Type message**: Enter your message
-- **Enter**: Send message
-- **Esc**: Leave room and return to room list
-- **Backspace**: Delete character
-- **/quit** or **/exit**: Quit the application completely
-
-#### Visual Features in Chat
-- **User sidebar**: Shows all users in the room with animated cat avatars
-- **Typing indicators**: 
-  - Yellow text at bottom shows "X is typing..."
-  - Cat avatars display chat bubbles with animated dots when users are typing
-  - Automatically clears after 5 seconds of inactivity
-
-## Configuration
-
-The client reads configuration from `.env` file:
-
-```env
-SERVER_URL=http://localhost:3000
-```
-
-## Architecture
-
-The TUI client demonstrates proper usage of the generated bidirectional client API:
-
-- **Type-safe client methods**: All RPC calls are strongly typed
-- **Event handling**: Server notifications are handled via callbacks
-- **Async/await**: Proper async handling with Tokio
-- **State management**: Clean separation of UI state and network communication
-- **Error handling**: Graceful error display in the UI
-
-## Implementation Details
-
-- Uses the `ChatServiceClient` generated by the `jsonrpc_bidirectional_service!` macro
-- Implements proper WebSocket lifecycle management (connect/disconnect)
-- Handles all server-to-client notifications (messages, user join/leave, etc.)
-- Non-blocking UI with async event handling

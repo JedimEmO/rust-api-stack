@@ -5,11 +5,13 @@ version = "0.1.0"
 # so its tests fail on syntax an older-edition consumer could not compile.
 edition = "2021"
 rust-version = "1.88"
-description = "Schema component assembly that RAS service macros embed in generated OpenRPC and OpenAPI code"
+description = "Schema and example code that the Rust Agent Stack service macros embed in generated OpenRPC and OpenAPI documents"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/JedimEmO/rust-api-stack"
 homepage = "https://github.com/JedimEmO/rust-api-stack"
 readme = "README.md"
+categories = ["web-programming"]
+keywords = ["openapi", "openrpc", "json-schema", "schemars"]
 
 # No dependencies: the macros embed `src/components.rs` as source, and the code
 # then compiles against the consumer's own `schemars` and `serde_json`.

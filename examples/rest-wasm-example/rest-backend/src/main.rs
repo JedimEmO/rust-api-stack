@@ -193,21 +193,22 @@ impl UserServiceTrait for UserServiceImpl {
         let limit = limit.unwrap_or(10) as usize;
         let offset = offset.unwrap_or(0) as usize;
 
-        // Filter users by search query
-        let filtered: Vec<User> = users
+        // `total` counts every match; `users` holds one page of them.
+        let q = q.to_lowercase();
+        let matches: Vec<&User> = users
             .values()
-            .filter(|u| {
-                u.name.to_lowercase().contains(&q.to_lowercase())
-                    || u.email.to_lowercase().contains(&q.to_lowercase())
-            })
+            .filter(|u| u.name.to_lowercase().contains(&q) || u.email.to_lowercase().contains(&q))
+            .collect();
+        let page = matches
+            .iter()
             .skip(offset)
             .take(limit)
-            .cloned()
+            .map(|u| (*u).clone())
             .collect();
 
         Ok(RestResponse::ok(UsersResponse {
-            users: filtered,
-            total: users.len(),
+            users: page,
+            total: matches.len(),
         }))
     }
 

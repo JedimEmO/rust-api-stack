@@ -1,66 +1,52 @@
-# REST API TypeScript Usage Sample
+# REST service with a generated TypeScript client
 
-This example demonstrates the `ras-rest-macro` OpenAPI output and a minimal
-TypeScript usage sample that calls a generated fetch client directly.
+A `rest_service!` contract shared by an Axum backend and a TypeScript sample
+that calls a client generated from the OpenAPI document.
+It shows path and query parameters, per-endpoint permissions,
+authored OpenAPI examples and the built-in API explorer.
 
-## Project Structure
+- [`rest-api/`](rest-api/README.md) declares the endpoints and types.
+- [`rest-backend/`](rest-backend/README.md) implements them with in-memory data.
+- [`typescript-example/`](typescript-example/README.md) shows the calls a browser frontend makes.
 
-- `rest-api/` - Shared API definitions using the `rest_service!` macro
-- `rest-backend/` - Axum backend implementation with OpenAPI generation
-- `typescript-example/` - Minimal TypeScript usage sample for a generated client
-
-## Features
-
-- Type-safe API definitions with Rust as the source of truth
-- OpenAPI 3.0 document generation from the REST macro
-- TypeScript usage sample for a generated fetch client with typed request bodies and responses
-- Bearer-token headers for protected endpoints
-
-## Quick Start
-
-From the repository root:
-
-```bash
-cargo check -p rest-backend --locked
-```
-
-This writes the OpenAPI document consumed by TypeScript client generators.
-`typescript-example/src/example.ts` shows how the generated fetch client is used.
-
-To exercise the calls manually, run the backend:
+## Run
 
 ```bash
 cargo run -p rest-backend --locked
 ```
 
-The server listens at `http://localhost:3000`, with API endpoints under
-`/api/v1/*` and OpenAPI docs at `/api/v1/docs`.
+The server listens on `127.0.0.1:3000`:
 
-## API Endpoints
+- API base URL: `http://127.0.0.1:3000/api/v1`
+- API explorer: `http://127.0.0.1:3000/api/v1/docs`
+- OpenAPI document: `http://127.0.0.1:3000/api/v1/docs/openapi.json`
 
-### Public Endpoints
+Building the backend also writes the OpenAPI document to
+`examples/rest-wasm-example/rest-backend/target/openapi/userservice.json`.
 
-- `GET /api/v1/users` - Get all users
-- `GET /api/v1/users/{id}` - Get user by ID
+## Endpoints
 
-### Protected Endpoints
+| Endpoint | Access |
+|---|---|
+| `GET /users`, `GET /users/{id}` | public |
+| `GET /search/users?q=&limit=&offset=` | public |
+| `POST /users`, `PUT /users/{id}`, `DELETE /users/{id}` | `admin` permission |
+| `GET /users/{user_id}/tasks`, `POST /users/{user_id}/tasks` | `user` permission |
+| `PUT /users/{user_id}/tasks/{task_id}`, `DELETE /users/{user_id}/tasks/{task_id}` | `user` permission |
+| `GET /users/{user_id}/tasks/search?completed=&page=&per_page=` | `user` permission |
 
-- `POST /api/v1/users` - Create user (admin only)
-- `PUT /api/v1/users/{id}` - Update user (admin only)
-- `DELETE /api/v1/users/{id}` - Delete user (admin only)
-- `GET /api/v1/users/{user_id}/tasks` - Get user tasks
-- `POST /api/v1/users/{user_id}/tasks` - Create task
-- `PUT /api/v1/users/{user_id}/tasks/{task_id}` - Update task
-- `DELETE /api/v1/users/{user_id}/tasks/{task_id}` - Delete task
+All paths are under `/api/v1`.
+`GET /users/{id}` and `GET /search/users` carry authored examples,
+which appear in the OpenAPI document and the explorer.
 
 ## Authentication
 
-The example backend uses simple mock tokens:
+The backend accepts two fixed bearer tokens:
 
-- `validtoken` for user permissions
-- `admintoken` for admin permissions
+- `validtoken` has the `user` permission.
+- `admintoken` has the `admin` and `user` permissions.
 
-The generated client accepts ordinary request headers:
+A generated TypeScript client passes the token as an ordinary header:
 
 ```typescript
 const response = await getUsersUserIdTasks({
@@ -68,9 +54,6 @@ const response = await getUsersUserIdTasks({
   headers: {
     Authorization: 'Bearer validtoken',
   },
-  path: { user_id: '123' },
+  path: { user_id: '1' },
 });
 ```
-
-See `typescript-example/src/example.ts` for public, admin, and
-user-protected calls.

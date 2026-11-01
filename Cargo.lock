@@ -2876,6 +2876,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "http",
+ "httpdate",
  "ras-auth-core",
  "thiserror 2.0.18",
  "tracing",
@@ -3163,7 +3164,6 @@ name = "ras-openrpc-types"
 version = "0.1.1"
 dependencies = [
  "bon",
- "schemars",
  "serde",
  "serde_json",
 ]

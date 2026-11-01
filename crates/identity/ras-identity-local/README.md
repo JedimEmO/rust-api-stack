@@ -1,26 +1,24 @@
 # ras-identity-local
 
-Local username/password identity provider for the Rust Agent Stack.
+A username and password `IdentityProvider` for Rust Agent Stack, with Argon2id password hashes.
+Register it with `ras-identity-session` to turn a correct password into a JWT session.
 
-## Overview
+Users live in an in-memory map.
+They are added at runtime with `add_user` and disappear when the process exits;
+the crate has no persistence and no way to load existing hashes.
+That suits demos, tests and small services that seed their users at startup.
+A service with a user database needs its own `IdentityProvider`,
+which can follow the same verification approach.
 
-This crate provides a secure local authentication implementation using:
-- Argon2 password hashing (industry standard)
-- Timing-attack mitigation for missing users
-- Username-enumeration resistant error responses
-- Thread-safe concurrent request handling
+## Installation
 
-## Features
-
-- **Password Storage**: Uses per-user salted Argon2id hashes
-- **Duplicate Protection**: Rejects duplicate usernames instead of overwriting users
-- **Attack Protection**: Missing users are checked against a fixed Argon2 sentinel hash
-- **Concurrency Limiting**: A semaphore bounds simultaneous authentication attempts
-- **Thread-Safe**: Safe for use in async multi-threaded environments
+```toml
+[dependencies]
+ras-identity-local = "0.3"
+ras-identity-core = "0.1" # for the IdentityProvider trait
+```
 
 ## Usage
-
-### Basic Setup
 
 ```rust
 use ras_identity_core::IdentityProvider;
@@ -30,112 +28,89 @@ let provider = LocalUserProvider::new();
 provider
     .add_user(
         "alice".to_string(),
-        "secure_password".to_string(),
+        "correct-horse-battery-staple".to_string(),
         Some("alice@example.com".to_string()),
         Some("Alice".to_string()),
     )
     .await?;
 
-// Verify identity
-let auth_payload = serde_json::json!({
-    "username": "alice",
-    "password": "secure_password"
-});
-
-let identity = provider.verify(auth_payload).await?;
+let identity = provider
+    .verify(serde_json::json!({
+        "username": "alice",
+        "password": "correct-horse-battery-staple"
+    }))
+    .await?;
 assert_eq!(identity.subject, "alice");
 ```
 
-### Integration with Session Service
+The provider ID is `"local"`, and the username becomes the identity's `subject`.
+`add_user` fails with `LocalUserError::UserAlreadyExists` for a taken username,
+rather than overwriting the user, and `remove_user` deletes one.
+
+## With a session service
 
 ```rust
 use ras_identity_local::LocalUserProvider;
-use ras_identity_session::{JwtAlgorithm, SessionConfig, SessionService};
-use chrono::Duration;
+use ras_identity_session::{SessionConfig, SessionService};
 use std::sync::Arc;
 
-// Set up identity provider
 let provider = LocalUserProvider::new();
 provider
-    .add_user(
-        "alice".to_string(),
-        "secure_password".to_string(),
-        Some("alice@example.com".to_string()),
-        Some("Alice".to_string()),
-    )
+    .add_user("alice".to_string(), "correct-horse-battery-staple".to_string(), None, None)
     .await?;
 
-let session_config = SessionConfig::new(
-    "fd2f56e597efef86b80c5484eb5247f4139b33bcdcb60dab", // openssl rand -hex 32
-    "my-service",                                        // iss
-    "my-service",                                        // aud
-)?;
-let session_service = Arc::new(SessionService::new(SessionConfig {
-    jwt_ttl: Duration::hours(1),
-    algorithm: JwtAlgorithm::HS256,
-    ..session_config
-})?);
-
+// A random secret of at least 32 bytes, for instance from `openssl rand -hex 32`.
+let session_config = SessionConfig::new(std::env::var("JWT_SECRET")?, "my-service", "my-service")?;
+let session_service = Arc::new(SessionService::new(session_config)?);
 session_service.register_provider(Box::new(provider)).await;
 
-// Run the authentication flow
 let jwt = session_service
     .begin_session(
         "local",
         serde_json::json!({
             "username": "alice",
-            "password": "secure_password"
+            "password": "correct-horse-battery-staple"
         }),
     )
     .await?;
 ```
 
-## Security Features
+## How passwords are checked
 
-### Attack Protection
+Each password is hashed with Argon2id and a random salt from the OS,
+using the `argon2` crate's default parameters:
+19 MiB of memory, 2 iterations, 1 lane, and a 32-byte output.
+Hashing and verification run on Tokio's blocking pool, so they do not stall the async executor.
 
-1. **Timing Attack Mitigation**
-   - Verifies non-existent users against a fixed Argon2 sentinel hash
-   - Reduces user-existence timing differences during password verification
+Every failed login returns the same `IdentityError::InvalidCredentials`,
+whether the user is unknown or the password is wrong.
+An unknown user is still checked against a fixed Argon2 hash with the same parameters,
+so both cases cost about the same time.
+This narrows the timing difference between them; it does not make the code constant-time.
+A payload that is not `{"username", "password"}` returns `IdentityError::InvalidPayload`.
 
-2. **Username Enumeration Mitigation**
-   - Always returns `InvalidCredentials` for any failure
-   - No distinction between "user not found" and "wrong password"
+Passwords longer than `MAX_PASSWORD_BYTES` (1024 bytes) are refused before hashing.
+`add_user` returns `LocalUserError::PasswordTooLong`,
+and a login returns `InvalidCredentials` without running Argon2,
+so a client cannot make the server hash megabytes of input.
 
-3. **Concurrency Limiting**
-   - Semaphore limits to 5 concurrent authentication attempts
-   - Bounds authentication work; deploy an external rate limiter for per-user or per-IP policies
+At most five verifications run at once per provider; further logins wait for a slot.
+This bounds the CPU and memory that Argon2 can use.
+It is not a rate limit: there is no per-user or per-IP limit, and no account lockout.
+Put those in front of the login endpoint.
 
-4. **Input Validation**
-   - Handles empty credentials gracefully
-   - Rejects malformed authentication payloads
-   - Handles very long credentials without leaking user-existence details
-   - Safe handling of special characters
-   - Rejects duplicate usernames during user creation
+The crate enforces no password policy beyond the length limit, and accepts an empty password.
+Check password strength before you call `add_user`.
 
-### Password Requirements
+The password hash is never serialized: `LocalUser` skips `password_hash` when it serializes.
+The `Debug` output of `LocalUser` and `LocalAuthPayload` shows `[REDACTED]` for the hash and the password.
 
-The implementation uses Argon2 default settings:
-- Memory cost: 19 MiB
-- Time cost: 2 iterations
-- Parallelism: 1 thread
-- Output length: 32 bytes
+## Cargo features
 
-## Testing
+`timing-tests` enables a statistical timing test and a brute-force simulation.
+It exists for this crate's own test suite.
+Run the timing test on a quiet machine, because load on the host skews the measurements:
 
-The crate includes focused security tests for:
-- Username enumeration attempts
-- Concurrent request handling
-- Input validation edge cases
-- Optional timing attack and brute-force simulations behind the `timing-tests` feature
-
-Run tests with:
-```bash
-cargo test -p ras-identity-local --locked
-```
-
-Run the timing-sensitive statistical check explicitly when the host is quiet
-enough for stable measurements:
 ```bash
 cargo test -p ras-identity-local --locked --features timing-tests -- --ignored
 ```
@@ -146,11 +121,3 @@ cargo test -p ras-identity-local --locked --features timing-tests -- --ignored
 cargo test -p ras-identity-local --locked
 cargo clippy -p ras-identity-local --all-targets --all-features --locked -- -D warnings
 ```
-
-## Best Practices
-
-1. **Never log passwords** or password hashes
-2. **Use strong passwords** - consider implementing password policies
-3. **Monitor failed attempts** - implement account lockout in production
-4. **Rotate secrets** - change JWT secrets periodically
-5. **Use HTTPS** - always use TLS in production environments

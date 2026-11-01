@@ -1,4 +1,17 @@
-//! Core traits for versioned API migrations.
+//! The [`VersionMigration`] trait, which converts between an old and a
+//! current version of an API type.
+//!
+//! A versioned endpoint in `rest_service!` or `jsonrpc_service!` names a
+//! migration type for each legacy version. The generated server upgrades a
+//! legacy request to the current type with it, calls the handler, and
+//! downgrades the response. The migration type implements the trait once in
+//! each direction.
+//!
+//! Most code reaches the trait through the re-exports in `ras-rest-core` and
+//! `ras-jsonrpc-core`. The crate has no Cargo features and no dependencies.
+//! See the
+//! [README](https://github.com/JedimEmO/rust-api-stack/blob/master/crates/core/ras-version-core/README.md)
+//! for an example.
 
 /// Converts one API version type into another.
 ///

@@ -1,198 +1,102 @@
-# OpenRPC Types
+# ras-openrpc-types
 
-Rust types for the OpenRPC 1.3.2 specification with serde support, bon builders, and runtime validation helpers.
+Rust types for [OpenRPC 1.3.2](https://spec.open-rpc.org/) documents,
+with serde support, `bon` builders and validation helpers.
 
-## Features
+Use it to build, read or check an OpenRPC document in Rust.
+The RAS service macros do not use this crate;
+`jsonrpc_service!` writes its OpenRPC document as `serde_json::Value`.
+The crate stands on its own and depends only on `serde`, `serde_json` and `bon`.
 
-- **OpenRPC 1.3.2 specification types** - Objects and fields from the specification
-- **Serde serialization/deserialization** - Full JSON support with proper field naming
-- **Bon builder patterns** - Ergonomic API construction with type-safe builders
-- **Validation helpers** - Checks OpenRPC specification constraints
-- **JSON Schema Draft 7 compatibility** - For Schema objects used in OpenRPC documents
-- **Reference resolution support** - For $ref within components
-- **Specification extensions** - Support for x-* extension fields
-- **Type safety** - Helps construct OpenRPC documents with strongly typed Rust values
-
-## Quick Start
-
-Add this to your `Cargo.toml`:
+## Installation
 
 ```toml
 [dependencies]
-ras-openrpc-types = "0.1.1"
+ras-openrpc-types = "0.1"
 ```
 
-## Example Usage
+## Building a document
 
 ```rust
-use ras_openrpc_types::{OpenRpc, Info, Method, ContentDescriptor, Schema};
+use ras_openrpc_types::{
+    ContentDescriptor, Info, Method, OpenRpc, ParameterStructure, Schema, Validate,
+};
 
-// Create an OpenRPC document
-let openrpc = OpenRpc::builder()
-    .openrpc("1.3.2")
-    .info(
-        Info::builder()
-            .title("Example API")
-            .version("1.0.0")
-            .description("A simple example API")
-            .build()
-    )
-    .methods(vec![
-        Method::builder()
-            .name("getUser")
-            .params(vec![
-                ContentDescriptor::new("userId", Schema::string())
-                    .with_description("The user ID")
-                    .required()
-                    .into()
-            ])
-            .result(
-                ContentDescriptor::new("user", Schema::object()
-                    .with_property("id", Schema::string())
-                    .with_property("name", Schema::string())
-                    .with_property("email", Schema::string())
-                ).into()
-            )
-            .build()
-            .into()
-    ])
-    .build();
+let user_id = ContentDescriptor::new("userId", Schema::string())
+    .with_description("The user ID")
+    .required();
 
-// Validate the document
-openrpc.validate().expect("Valid OpenRPC document");
+let user = ContentDescriptor::new(
+    "user",
+    Schema::object()
+        .with_property("id", Schema::string().with_format("uuid"))
+        .with_property("name", Schema::string().with_min_length(1))
+        .require_property("id")
+        .require_property("name"),
+);
 
-// Serialize to JSON
-let json = serde_json::to_string_pretty(&openrpc).unwrap();
-println!("{}", json);
+let get_user = Method::new("getUser", vec![user_id.into()])
+    .with_summary("Get a user by ID")
+    .with_result(user.into())
+    .with_param_structure(ParameterStructure::ByName);
+
+let document = OpenRpc::v1_3_2(
+    Info::new("Example API", "1.0.0").with_description("A small example API"),
+    vec![get_user.into()],
+);
+
+document.validate().expect("valid OpenRPC document");
+let json = serde_json::to_string_pretty(&document).unwrap();
 ```
 
-## Core Types
+Notice the `.into()` calls.
+Wherever OpenRPC allows a Reference Object in place of a value,
+the field holds an enum such as `ContentDescriptorOrReference` or `MethodOrReference`,
+and `From` converts a value or a `Reference` into it.
+`validate` comes from the `Validate` trait, which has to be in scope.
 
-### OpenRPC Document Structure
+Every object also derives a `bon` builder, for instance `Method::builder()`.
+The builders take field types exactly, so string fields need a `String`, not a `&str`;
+the `new` and `with_*` methods above take `impl Into<String>` and are shorter to write.
 
-- **`OpenRpc`** - Root object containing the entire specification
-- **`Info`** - Metadata about the API (title, version, description, etc.)
-- **`Server`** - Server connectivity information with variable substitution
-- **`Method`** - JSON-RPC method definitions with parameters and results
-- **`Components`** - Reusable components (schemas, examples, errors, etc.)
+The [`basic_usage` example](examples/basic_usage.rs) builds a document with components and reads it back.
 
-### Content and Schema Types
+## Types
 
-- **`ContentDescriptor`** - Describes parameters and results with schemas
-- **`Schema`** - JSON Schema Draft 7 compliant schema definitions
-- **`Example`** - Example values with embedded or external references
-- **`ExamplePairing`** - Request/response example pairs
+| Area | Types |
+|---|---|
+| Document | `OpenRpc`, `Info`, `Contact`, `License`, `Server`, `ServerVariable` |
+| Methods | `Method`, `ContentDescriptor`, `ParameterStructure`, `ErrorObject` |
+| Schemas | `Schema`, `SchemaType`, a JSON Schema draft 7 model |
+| Reuse | `Components`, `Reference` |
+| Examples and links | `Example`, `ExamplePairing`, `Link`, `RuntimeExpression` |
+| Documentation | `Tag`, `ExternalDocumentation` |
+| Extensions | `Extensions`, the `x-*` fields every object can carry |
 
-### Linking and Documentation
-
-- **`Link`** - Runtime links between method results and other methods
-- **`Tag`** - Metadata tags for organizing methods
-- **`ExternalDocumentation`** - Links to external documentation
-- **`ErrorObject`** - Application-defined error specifications
-
-### References and Extensions
-
-- **`Reference`** - Internal and external references using JSON Schema $ref
-- **`Extensions`** - Specification extensions with x- prefixed fields
+The `version` module lists the OpenRPC versions the crate accepts, from `1.0.0` to `1.3.2`.
 
 ## Validation
 
-The crate provides validation helpers for:
+`Validate::validate` checks the constraints a document can break without being malformed JSON:
 
-- **Specification compliance** - OpenRPC 1.3.2 constraints represented by this crate
-- **Unique constraints** - Method names, parameter names, error codes are unique
-- **Type consistency** - Schemas and examples match their expected types
-- **URL and email format validation** - Proper format checking for contact info
-- **Parameter ordering** - Required parameters before optional ones
-- **Reference validity** - Internal references point to valid components
+- the `openrpc` version is one the crate supports, and `info` has a title and a version;
+- method names are unique, contain no spaces, and do not use the reserved `rpc.` prefix;
+- parameter names within a method are unique, and required parameters come before optional ones;
+- error codes within a method are unique;
+- component keys match `^[a-zA-Z0-9.\-_]+$`, and references name a known component type;
+- schema bounds are consistent, such as `minimum` not above `maximum`;
+- an example does not set both `value` and `externalValue`;
+- extension keys start with `x-`.
 
-```rust
-use ras_openrpc_types::{Info, OpenRpc, validation::Validate};
+Some checks are deliberately shallow.
+URLs and email addresses get a shape check, not a full parse.
+A reference is checked for its form; it is not resolved against `components`.
+Example values are not checked against their schemas.
 
-let openrpc = OpenRpc::v1_3_2(
-    Info::new("Validation Example API", "1.0.0"),
-    Vec::new(),
-);
-
-// Validate returns detailed error information
-match openrpc.validate() {
-    Ok(()) => println!("Valid OpenRPC document"),
-    Err(e) => eprintln!("Validation failed: {}", e),
-}
-```
-
-## JSON Schema Integration
-
-Schema objects model the JSON Schema Draft 7 shapes used by OpenRPC:
-
-```rust
-use ras_openrpc_types::Schema;
-
-let user_schema = Schema::object()
-    .with_property("id", Schema::string().with_format("uuid"))
-    .with_property("name", Schema::string().with_min_length(1))
-    .with_property("email", Schema::string().with_format("email"))
-    .with_property("age", Schema::integer().with_minimum(0.0))
-    .require_property("id")
-    .require_property("name")
-    .require_property("email");
-```
-
-## Builder Patterns
-
-All major types support ergonomic builder patterns using the `bon` crate:
-
-```rust
-use ras_openrpc_types::{Method, ContentDescriptor, Schema, ParameterStructure};
-
-let method = Method::builder()
-    .name("createUser")
-    .summary("Create a new user")
-    .description("Creates a new user account")
-    .params(vec![
-        ContentDescriptor::new("userData", Schema::object())
-            .with_description("User data")
-            .required()
-            .into()
-    ])
-    .result(
-        ContentDescriptor::new("userId", Schema::string())
-            .with_description("Created user ID")
-            .into()
-    )
-    .param_structure(ParameterStructure::ByName)
-    .build();
-```
-
-## Error Handling
-
-Error types provide detailed information about validation failures:
-
-```rust
-use ras_openrpc_types::{OpenRpcError, OpenRpcResult};
-
-fn validate_document(openrpc: &OpenRpc) -> OpenRpcResult<()> {
-    openrpc.validate()
-}
-
-// Error types include:
-// - ValidationError: Specification constraint violations
-// - JsonError: JSON parsing/serialization errors  
-// - ReferenceError: Invalid or unresolvable references
-// - MissingField: Required fields not provided
-// - InvalidField: Field values that don't meet constraints
-```
-
-## Features
-
-### Optional Features
-
-- **`json-schema`** - Enables additional JSON Schema functionality via `schemars`
-
-```toml
-[dependencies]
-ras-openrpc-types = { version = "0.1.1", features = ["json-schema"] }
-```
+A failure is an `OpenRpcError`.
+Most checks return `ValidationError`, with a `field_path` such as `methods[0]` when the problem sits in a nested object;
+others are `MissingField`, `DuplicateKey`, `InvalidUrl`, `InvalidEmail` or `UnsupportedVersion`.
+`OpenRpcResult<T>` is `Result<T, OpenRpcError>`.
 
 ## Checks
 
@@ -205,7 +109,3 @@ cargo clippy -p ras-openrpc-types --all-targets --all-features --locked -- -D wa
 
 This project is licensed under either MIT or Apache-2.0. See
 [LICENSE-MIT](../../../LICENSE-MIT) and [LICENSE-APACHE](../../../LICENSE-APACHE).
-
-## Contributing
-
-This crate is part of the Rust Agent Stack workspace. Please see the main repository for contributing guidelines.

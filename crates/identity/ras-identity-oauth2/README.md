@@ -1,255 +1,198 @@
 # ras-identity-oauth2
 
-OAuth2 identity provider implementation with PKCE support for Rust Agent Stack.
+An OAuth2 sign-in provider for Rust Agent Stack services.
+It runs the authorization-code flow with PKCE, checks the OpenID Connect `id_token` when one is returned,
+and hands the user's identity to `ras-identity-session`, which issues a JWT.
 
-## Features
+One `OAuth2Provider` can hold several configured providers, such as Google and a company IdP.
+It registers with the session service under the single ID `"oauth2"`.
 
-- **OAuth2 Authorization Code Flow** with PKCE (Proof Key for Code Exchange) 
-- **CSRF Protection** via state parameters
-- **Generic OAuth2 Provider Support** (Google, GitHub, Microsoft, etc.)
-- **Security-Focused Tests** for PKCE, state handling, and OAuth2 error paths
-- **Thread-Safe** state management
-- **Configurable User Info Mapping** for different provider schemas
-- **Integration** with existing `IdentityProvider` trait
+## Installation
 
-## Security Features
+```toml
+[dependencies]
+ras-identity-oauth2 = "0.3"
+ras-identity-session = "0.4"
+```
 
-- **PKCE Support**: Mitigates authorization code interception attacks
-- **State Parameter**: CSRF protection using cryptographically random UUIDs
-- **OIDC Nonce**: Sent on every authorization request and verified against the id_token
-- **id_token Claim Validation**: `iss` (when `issuer` is configured), `aud`, `exp` and `nonce` are checked on callback. The signature is not verified because the token arrives directly from the token endpoint over TLS, which OIDC Core §3.1.3.7 permits for the code flow
-- **Session Binding (login-CSRF guard)**: `start_flow_bound` accepts an unguessable per-browser-session value (e.g. a random cookie); the callback payload must carry the identical `binding` or it is rejected, so an attacker cannot trick a victim into completing the attacker's flow
-- **Input Validation**: Robust handling of malformed responses
-- **Single-Use State**: Callback state is removed after successful retrieval
-
-## Usage
-
-### Basic Setup
+## Configuring a provider
 
 ```rust
-use ras_identity_oauth2::{
-    InMemoryStateStore, OAuth2Config, OAuth2Provider, OAuth2ProviderConfig, UserInfoMapping,
-};
+use ras_identity_oauth2::{InMemoryStateStore, OAuth2Config, OAuth2Provider, OAuth2ProviderConfig};
 use std::{collections::HashMap, env, sync::Arc};
 
-// Configure OAuth2 provider (e.g., Google)
-let google_config = OAuth2ProviderConfig {
+let google = OAuth2ProviderConfig {
     provider_id: "google".to_string(),
     client_id: env::var("GOOGLE_CLIENT_ID")?,
     client_secret: env::var("GOOGLE_CLIENT_SECRET")?,
     authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
     token_endpoint: "https://oauth2.googleapis.com/token".to_string(),
-    userinfo_endpoint: Some("https://www.googleapis.com/oauth2/v1/userinfo".to_string()),
-    redirect_uri: "http://localhost:3000/auth/callback".to_string(),
+    userinfo_endpoint: Some("https://www.googleapis.com/oauth2/v3/userinfo".to_string()),
+    // Required whenever the token endpoint returns an id_token, as it does with `openid`.
+    issuer: Some("https://accounts.google.com".to_string()),
+    redirect_uri: "https://app.example.com/auth/callback".to_string(),
     scopes: vec!["openid".to_string(), "email".to_string(), "profile".to_string()],
     auth_params: HashMap::new(),
     use_pkce: true,
     user_info_mapping: None,
-    // Extra userinfo claims to copy into session metadata (and the JWT). Empty = none.
     metadata_claims: Vec::new(),
-    // Endpoints must be https:// unless this is set (local mock IdP only).
     allow_insecure_endpoints: false,
 };
 
-// Create OAuth2 configuration
 let config = OAuth2Config::new()
-    .add_provider(google_config)
-    .with_state_ttl(600) // 10 minutes
-    .with_http_timeout(30); // 30 seconds
+    .add_provider(google)
+    .with_state_ttl(600) // seconds; the default
+    .with_http_timeout(30); // seconds; the default
 
-// Create state store and provider
-let state_store = Arc::new(InMemoryStateStore::new());
-let oauth2_provider = OAuth2Provider::new(config, state_store);
+let oauth2_provider = OAuth2Provider::new(config, Arc::new(InMemoryStateStore::new()));
 ```
 
-### Integration with Session Service
+`OAuth2Provider::new` panics on an invalid configuration;
+`OAuth2Provider::try_new` returns the error instead.
+
+## Running the flow
+
+Register a clone of the provider with the session service, and keep the original to start flows.
+`IdentityProvider::verify` only completes a flow; starting one goes through `start_flow`.
 
 ```rust
-use ras_identity_core::IdentityProvider;
-use ras_identity_oauth2::OAuth2Response;
+use ras_identity_oauth2::{OAuth2AuthPayload, OAuth2Response};
 use ras_identity_session::{SessionConfig, SessionService};
 
-// Register with session service. The provider is cheap to clone; keep one
-// handle for flow initiation and register the other for verification.
-let session_config = SessionConfig::new(
-    "50f60a216877ea8c01d90deebfaf37ee95297d744bca0931", // openssl rand -hex 32
-    "my-service",                                        // iss
-    "my-service",                                        // aud
-)?;
+let session_config = SessionConfig::new(std::env::var("JWT_SECRET")?, "my-service", "my-service")?;
 let session_service = SessionService::new(session_config)?;
-
 session_service.register_provider(Box::new(oauth2_provider.clone())).await;
 
-// Start OAuth2 flow. `start_flow` always generates a login-CSRF `binding`;
-// store it in a cookie and echo it back on the callback (a callback without it
-// is rejected).
-match oauth2_provider.start_flow("google", None).await? {
-    OAuth2Response::AuthorizationUrl { url, state, binding } => {
-        // 1. Set `binding` in a Secure, HttpOnly cookie on the redirect response.
-        // 2. Redirect the user to `url`.
-        println!("Redirect to: {}", url);
-        let _ = (state, binding);
-    }
-    OAuth2Response::Error { message } => {
-        eprintln!("OAuth2 start-flow failed: {message}");
-    }
+// 1. Start the flow.
+if let OAuth2Response::AuthorizationUrl { url, binding, .. } =
+    oauth2_provider.start_flow("google", None).await?
+{
+    // Set `binding` in an HttpOnly, Secure, SameSite=Lax cookie, then redirect to `url`.
 }
 
-// Handle callback — read `binding` back from the cookie and include it.
-let callback_payload = serde_json::json!({
-    "type": "Callback",
-    "provider_id": "google",
-    "code": "authorization_code_from_callback",
-    "state": "state_from_callback",
-    "binding": "binding_from_cookie"
-});
-
-let jwt_token = session_service.begin_session("oauth2", callback_payload).await?;
-```
-
-For a non-browser flow where login CSRF does not apply, use
-`start_flow_bound(provider_id, params, None)` to opt out of binding explicitly.
-
-## OAuth2 Flow
-
-1. **Start Flow**: Client requests authorization URL
-2. **Redirect**: User is redirected to OAuth2 provider
-3. **Authorization**: User grants permissions
-4. **Callback**: Provider redirects back with authorization code
-5. **Token Exchange**: Server exchanges code for access token using PKCE
-6. **User Info**: Server fetches user information
-7. **JWT Issuance**: Server issues JWT via SessionService
-
-## Configuration Options
-
-### OAuth2ProviderConfig
-
-- `provider_id`: Unique identifier for the provider
-- `client_id`: OAuth2 client ID
-- `client_secret`: OAuth2 client secret
-- `authorization_endpoint`: Provider's authorization URL
-- `token_endpoint`: Provider's token exchange URL
-- `userinfo_endpoint`: Provider's user info URL (optional)
-- `issuer`: Expected `iss` claim of id_tokens (e.g. `https://accounts.google.com`); when set, id_tokens with a different issuer are rejected
-- `redirect_uri`: Your application's callback URL
-- `scopes`: Requested OAuth2 scopes
-- `auth_params`: Additional authorization parameters
-- `use_pkce`: Enable PKCE for enhanced security
-- `user_info_mapping`: Custom field mapping for user info
-- `metadata_claims`: Allow-list of additional userinfo claims copied into the identity metadata (and therefore the session JWT). Defaults to empty; only `picture` and `email_verified` are ever propagated without it
-- `allow_insecure_endpoints`: Permit non-`https://` endpoint URLs. Defaults to `false`; `OAuth2Provider::new`/`try_new`/`add_provider` reject insecure endpoints unless set. Only enable for a local mock IdP
-
-### OAuth2Config
-
-- `providers`: Map of provider configurations
-- `state_ttl_seconds`: State parameter expiration time
-- `http_timeout_seconds`: HTTP request timeout
-
-## Provider Examples
-
-### Google OAuth2
-
-```rust
-OAuth2ProviderConfig {
+// 2. On the callback, pass the query parameters and the binding cookie back in.
+//    `query` holds the callback's query string; `binding_from_cookie` is an Option<String>.
+let payload = OAuth2AuthPayload::Callback {
     provider_id: "google".to_string(),
-    client_id: env::var("GOOGLE_CLIENT_ID")?,
-    client_secret: env::var("GOOGLE_CLIENT_SECRET")?,
-    authorization_endpoint: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
-    token_endpoint: "https://oauth2.googleapis.com/token".to_string(),
-    userinfo_endpoint: Some("https://www.googleapis.com/oauth2/v1/userinfo".to_string()),
-    redirect_uri: "http://localhost:3000/auth/google/callback".to_string(),
-    scopes: vec!["openid".to_string(), "email".to_string(), "profile".to_string()],
-    auth_params: HashMap::new(),
-    use_pkce: true,
-    user_info_mapping: None,
-}
+    code: query.code,
+    state: query.state,
+    error: query.error,
+    error_description: query.error_description,
+    binding: binding_from_cookie,
+};
+let jwt = session_service
+    .begin_session("oauth2", serde_json::to_value(payload)?)
+    .await?;
 ```
 
-### GitHub OAuth2
+The binding cookie needs `SameSite=Lax`, not `Strict`:
+the callback is a top-level redirect from the identity provider's site,
+and the browser leaves `Strict` cookies off that request.
+
+`start_flow` always generates a binding.
+For a non-browser flow where login CSRF does not apply,
+`start_flow_bound(provider_id, params, None)` starts an unbound flow.
+`start_flow_bound` also accepts a binding value of your own.
+
+A complete server, with the binding cookie, is in
+[examples/oauth2-demo](https://github.com/JedimEmO/rust-api-stack/tree/master/examples/oauth2-demo).
+
+## What the callback checks
+
+The callback fails unless all of these hold:
+
+- **State.** The `state` parameter names a stored flow that has not expired
+  and belongs to the same provider.
+  The state is a random UUID, and the in-memory store deletes it on first lookup,
+  so a state works once, even when a later check fails.
+- **Binding.** The callback's `binding` equals the value stored at the start, compared in constant time.
+  This stops login CSRF, where an attacker gets a victim to finish the attacker's flow.
+- **PKCE.** With `use_pkce`, the token request carries the verifier for the `S256` challenge sent at the start.
+- **The id_token**, when the token endpoint returns one:
+  `iss` equals the configured `issuer`, and a missing `issuer` rejects the token;
+  `aud` contains the `client_id`, with `azp` equal to it when there are several audiences;
+  `exp` is in the future;
+  `nonce` equals the one sent at the start;
+  and `sub` is present and equals the userinfo `sub`.
+  The signature is not verified.
+  OIDC Core section 3.1.3.7 allows that in the code flow,
+  because the token comes straight from the token endpoint over TLS.
+
+A callback that carries an `error` from the provider fails with that error code;
+the `error_description` goes to the server log, not to the client.
+
+## Other protections
+
+- Authorization, token and userinfo endpoints must use `https://`,
+  unless `allow_insecure_endpoints` is set for a local mock IdP.
+  `redirect_uri` is not checked.
+- `auth_params` and per-flow parameters cannot override the parameters the crate sets,
+  such as `redirect_uri`, `state`, `nonce`, `scope`, the PKCE fields, `request` and `response_mode`.
+- Only `picture`, `email_verified` and the claims listed in `metadata_claims` reach the identity's metadata,
+  and from there the session JWT.
+- `client_secret` is skipped when the config is serialized, and redacted in its `Debug` output.
+- Token and userinfo error responses are logged by status code only; their bodies may contain tokens.
+
+## The resulting identity
+
+The `VerifiedIdentity` has `provider_id` `"oauth2:<provider_id>"`, such as `"oauth2:google"`.
+Its `subject`, email, display name and picture come from the userinfo response.
+
+The userinfo endpoint is called on every callback,
+so `userinfo_endpoint` must be set even though the field is an `Option`.
+The response must carry the user ID as a JSON string in `sub` or `id`.
+
+`user_info_mapping` reads the subject, email, name and picture from other claim names.
+A mapped field falls back to the standard claim when the mapped claim is missing.
+
+## Provider compatibility
+
+The token endpoint must answer with JSON;
+the crate does not send an `Accept: application/json` header.
+Google and other OpenID Connect providers work.
+GitHub does not work as is:
+its token endpoint answers with a form-encoded body unless asked for JSON,
+and its user API returns a numeric `id`.
+
+## State storage
+
+`InMemoryStateStore` holds up to 10,000 pending flows.
+When it is full, it drops the flow closest to expiry, so a burst of new flows can push out a real user's flow.
+Rate-limit flow starts in front of the service.
+The store lives in one process,
+so a deployment with several instances needs a shared store behind the `OAuth2StateStore` trait.
+
+A custom store must keep the guarantees the in-memory one gives:
+`retrieve` removes the state atomically, so it can be used once,
+and returns `OAuth2Error::StateNotFound` for an expired state.
+The client does not check expiry again.
 
 ```rust
-OAuth2ProviderConfig {
-    provider_id: "github".to_string(),
-    client_id: env::var("GITHUB_CLIENT_ID")?,
-    client_secret: env::var("GITHUB_CLIENT_SECRET")?,
-    authorization_endpoint: "https://github.com/login/oauth/authorize".to_string(),
-    token_endpoint: "https://github.com/login/oauth/access_token".to_string(),
-    userinfo_endpoint: Some("https://api.github.com/user".to_string()),
-    redirect_uri: "http://localhost:3000/auth/github/callback".to_string(),
-    scopes: vec!["user:email".to_string()],
-    auth_params: HashMap::new(),
-    use_pkce: false, // Set according to provider support and client type.
-    user_info_mapping: Some(UserInfoMapping {
-        subject_field: Some("id".to_string()),
-        email_field: Some("email".to_string()),
-        name_field: Some("name".to_string()),
-        picture_field: Some("avatar_url".to_string()),
-    }),
-}
-```
-
-## Custom State Storage
-
-For production use, implement a custom state store:
-
-```rust
-use ras_identity_oauth2::{OAuth2Error, OAuth2Result, OAuth2State, OAuth2StateStore};
 use async_trait::async_trait;
+use ras_identity_oauth2::{OAuth2Result, OAuth2State, OAuth2StateStore};
 
 pub struct RedisStateStore {
-    // Redis client implementation
-}
-
-impl RedisStateStore {
-    async fn pop_state(&self, _state: &str) -> OAuth2Result<OAuth2State> {
-        // Retrieve and delete state from Redis with your Redis client.
-        Err(OAuth2Error::StateNotFound)
-    }
+    // Redis client
 }
 
 #[async_trait]
 impl OAuth2StateStore for RedisStateStore {
     async fn store(&self, state: OAuth2State) -> OAuth2Result<()> {
-        // Store state in Redis with TTL
-        Ok(())
+        // SET with an expiry matching `state.expires_at`.
+        todo!()
     }
 
     async fn retrieve(&self, state: &str) -> OAuth2Result<OAuth2State> {
-        self.pop_state(state).await
+        // GETDEL, so a second callback with the same state finds nothing.
+        // Return OAuth2Error::StateNotFound when it is missing or expired.
+        todo!()
     }
 
     async fn cleanup_expired(&self) -> OAuth2Result<usize> {
-        // Redis TTL handles expiration automatically
+        // Redis expiry removes old states.
         Ok(0)
     }
 }
-```
-
-## Security Considerations
-
-- **Always use HTTPS** in production
-- **Set appropriate state TTL** (5-10 minutes recommended)
-- **Validate redirect URIs** match exactly
-- **Use PKCE** when supported by the provider
-- **Implement rate limiting** on OAuth2 endpoints
-- **Monitor for state parameter attacks**
-- **Keep client secrets secure** and rotate regularly
-
-## Testing
-
-The crate includes tests covering:
-
-- PKCE generation and validation
-- State parameter security
-- Concurrent request handling
-- Error cases and edge conditions
-- Full OAuth2 flow simulation
-- Callback state reuse and expiration scenarios
-
-Run tests with:
-
-```bash
-cargo test -p ras-identity-oauth2 --locked
 ```
 
 ## Checks
@@ -258,12 +201,3 @@ cargo test -p ras-identity-oauth2 --locked
 cargo test -p ras-identity-oauth2 --locked
 cargo clippy -p ras-identity-oauth2 --all-targets --all-features --locked -- -D warnings
 ```
-
-## Dependencies
-
-- `reqwest`: HTTP client for OAuth2 requests
-- `serde`: Serialization for OAuth2 types
-- `uuid`: Cryptographically random state generation
-- `sha2`: SHA256 hashing for PKCE
-- `base64`: URL-safe encoding
-- `chrono`: Time handling for state expiration

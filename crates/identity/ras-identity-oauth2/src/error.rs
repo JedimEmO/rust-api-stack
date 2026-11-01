@@ -9,7 +9,7 @@ pub enum OAuth2Error {
     /// An outbound request to the provider failed. The underlying
     /// `reqwest::Error` (which embeds the request URL) is available via
     /// `source()` and is logged at `warn` where it occurs; the `Display`
-    /// text is fixed so it can safely reach client-facing error strings (I6).
+    /// text is fixed so it can safely reach client-facing error strings.
     #[error("upstream request failed")]
     HttpError(#[from] reqwest::Error),
 
@@ -35,7 +35,7 @@ pub enum OAuth2Error {
     InvalidIdToken(String),
 
     /// No longer returned by `InMemoryStateStore`, which evicts the oldest
-    /// pending flow at capacity instead of refusing (I3). Kept for custom
+    /// pending flow at capacity instead of refusing. Kept for custom
     /// `OAuth2StateStore` implementations that still want to refuse.
     #[deprecated(
         since = "0.3.0",
@@ -73,7 +73,7 @@ pub enum OAuth2Error {
 
     /// The provider redirected back with an `error` parameter (e.g. the user
     /// denied consent). Only the standardized error code is carried;
-    /// `error_description` is logged server-side and never echoed (I5).
+    /// `error_description` is logged server-side and never echoed.
     #[error("Provider denied the authorization request: {error}")]
     ProviderDenied { error: String },
 

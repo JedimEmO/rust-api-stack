@@ -1,7 +1,27 @@
-//! Server-side WebSocket handling for bidirectional JSON-RPC communication
+//! The Axum WebSocket server for bidirectional JSON-RPC: clients call methods on the server, and
+//! the server sends notifications and calls back over the same socket.
 //!
-//! This crate provides the server infrastructure for handling WebSocket connections
-//! with JSON-RPC message routing, authentication, and connection management.
+//! Most services use this crate through the code that `ras-jsonrpc-bidirectional-macro`
+//! generates, which implements [`MessageHandler`] and builds the service. Used by hand, the main
+//! items are:
+//!
+//! - [`MessageRouter`], a [`MessageHandler`] that maps method names to closures;
+//! - [`WebSocketServiceBuilder`], which turns a handler and an [`AuthProvider`] into a service,
+//!   with limits on message size, connections and subscriptions, keepalive, and periodic
+//!   re-validation of the connection's token;
+//! - [`service::websocket_handler`], the Axum handler that serves a [`WebSocketService`];
+//! - [`DefaultConnectionManager`], which tracks connections and topic subscriptions and sends or
+//!   broadcasts to them;
+//! - [`ServerError`], whose [`ServerError::Rpc`] variant carries an error the client may see.
+//!
+//! The connection is authenticated during the upgrade, from an `Authorization: Bearer` header, a
+//! `token.<jwt>` WebSocket subprotocol for browsers, or an `X-Auth-Token` header. A JSON-RPC
+//! request without an `id` is a notification and never gets a response.
+//!
+//! The crate has no Cargo features. See the [README] and the [macro guide].
+//!
+//! [README]: https://github.com/JedimEmO/rust-api-stack/blob/master/crates/rpc/bidirectional/ras-jsonrpc-bidirectional-server/README.md
+//! [macro guide]: https://github.com/JedimEmO/rust-api-stack/blob/master/documentation/src/macros/bidirectional-jsonrpc-service.md
 
 pub mod connection;
 pub mod error;

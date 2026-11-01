@@ -1,16 +1,22 @@
-//! OpenRPC Types
+//! Rust types for OpenRPC 1.3.2 documents, with serde support, `bon` builders
+//! and validation helpers.
 //!
-//! Rust types for the OpenRPC 1.3.2 specification with serde support,
-//! bon builders, and runtime validation helpers.
+//! Use it to build, read or check an OpenRPC document in Rust. The RAS service
+//! macros do not use this crate; `jsonrpc_service!` writes its OpenRPC document
+//! as `serde_json::Value`.
 //!
-//! This crate provides:
-//! - OpenRPC 1.3.2 specification types
-//! - Serde serialization/deserialization support
-//! - Bon builder patterns for ergonomic API construction
-//! - Validation helpers for OpenRPC constraints
-//! - JSON Schema Draft 7 compatibility for Schema objects
-//! - Reference resolution support for $ref within components
-//! - Specification extensions support for x-* extension fields
+//! - [`OpenRpc`] is the root object; [`Method`], [`ContentDescriptor`],
+//!   [`Schema`] and [`Components`] are the ones most documents need.
+//! - Fields that may hold a Reference Object use enums such as
+//!   [`MethodOrReference`] and [`ContentDescriptorOrReference`], with `From`
+//!   conversions from the value and from [`Reference`].
+//! - [`Validate`] checks specification constraints and returns an
+//!   [`OpenRpcError`]. URLs and emails get a shape check only, and references
+//!   are checked for form, not resolved.
+//! - [`Extensions`] holds the `x-*` fields every object can carry.
+//!
+//! See the
+//! [README](https://github.com/JedimEmO/rust-api-stack/blob/master/crates/specs/ras-openrpc-types/README.md).
 //!
 //! # Example
 //!

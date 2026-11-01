@@ -1,12 +1,11 @@
-# 5. Test, Ship, And Evolve
+# Test, ship and evolve
 
-Strict API definitions are most useful when CI checks the important feature
-combinations and when tests assert that auth metadata stays visible in the
-generated specs.
+Strict API definitions pay off when CI builds the important feature combinations,
+and when tests assert that the auth metadata stays visible in the generated specs.
 
-## Contract Tests
+## Contract tests
 
-Test DTO serialization for wire stability:
+Test DTO serialization, so the wire format does not change by accident:
 
 ```rust,ignore
 #[test]
@@ -27,13 +26,14 @@ fn create_task_request_serializes_expected_shape() {
 }
 ```
 
-Test generated OpenAPI or OpenRPC output for route shape and permission
-metadata:
+Test the generated OpenAPI or OpenRPC document for the route shape and the permission metadata.
+These tests run with the API crate's `server` feature, which is where the REST document is generated:
 
 ```rust,ignore
 #[test]
 fn openapi_documents_task_permissions() {
-    let doc = workspace_api::generate_taskservice_openapi();
+    let doc = workspace_api::try_generate_taskservice_openapi()
+        .expect("task OpenAPI document");
     let create = &doc["paths"]["/projects/{project_id}/tasks"]["post"];
 
     assert_eq!(create["security"][0]["bearerAuth"], serde_json::json!([]));
@@ -41,11 +41,14 @@ fn openapi_documents_task_permissions() {
 }
 ```
 
-These tests catch accidental auth changes before a client discovers them.
+These tests catch an accidental auth change before a client discovers it.
+Calling `try_generate_taskservice_openapi` also checks every authored example.
+It returns a `SpecGenerationError` naming the endpoint and the example
+when an example cannot be serialized or does not read back through its request type.
 
-## Server Tests
+## Server tests
 
-Use an in-memory Axum test server for generated routes:
+Run the generated routes on an in-memory Axum test server:
 
 ```rust,ignore
 #[tokio::test]
@@ -66,10 +69,10 @@ async fn create_task_requires_write_permission() {
 }
 ```
 
-File-service tests should include oversized requests, missing required parts,
+File-service tests should cover oversized requests, missing required parts,
 wrong content types, and auth rejection before upload handling begins.
 
-## Feature Matrix
+## The feature matrix
 
 Add CI checks for the API crate itself:
 
@@ -80,36 +83,35 @@ cargo check -p workspace-api --no-default-features --features client --locked
 cargo check -p workspace-api --target wasm32-unknown-unknown --no-default-features --features client --locked
 ```
 
-This proves DTO-only, server-only, native client, and browser client builds stay
-separate.
+This proves that the DTO-only, server-only, native client and browser client builds
+each compile on their own.
 
-## Deployment Shape
+## Deployment shape
 
 A typical release pipeline does three things:
 
 - build and test the Rust workspace;
-- generate OpenAPI/OpenRPC documents from the API crate;
+- generate the OpenAPI or OpenRPC documents from the API crate;
 - publish generated docs and client inputs alongside the server artifact.
 
-The mdBook in this repository is built in CI and published to GitHub Pages from
-the `master` branch. Application repositories can use the same pattern for
-project-specific API documentation.
+This guide is built the same way:
+CI builds the mdBook and publishes it to GitHub Pages from the `master` branch.
+An application repository can use the same pattern for its own API documentation.
 
-## Evolving The API
+## Evolving the API
 
-Prefer additive changes when possible:
+Prefer additive changes:
 
 - add optional request fields instead of requiring new fields immediately;
 - add response fields that old clients can ignore;
 - add new operations before removing old operations;
 - preserve permission names unless the capability truly changed.
 
-When a wire shape must change, use versioning support where the macro provides
-it. Keep the service implementation canonical and let the API boundary migrate
-legacy request and response shapes. That makes compatibility an explicit part
-of the contract instead of an untested handler branch.
+When a wire shape must change, use the versioning support in `rest_service!` and `jsonrpc_service!`.
+Keep the service implementation canonical,
+and let the API boundary migrate legacy request and response shapes.
+That makes compatibility an explicit part of the contract instead of an untested handler branch.
 
-Before removing a legacy operation, check generated specs, client usage, and
-server logs. The contract should tell you what still exists; telemetry should
-tell you what is still used.
+Before removing a legacy operation, check the generated specs, client usage and server logs.
+The contract tells you what still exists; telemetry tells you what is still used.
 

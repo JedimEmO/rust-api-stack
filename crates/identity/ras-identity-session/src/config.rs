@@ -10,7 +10,7 @@ use std::collections::HashSet;
 /// effect immediately per-`jti`; otherwise grants are fixed for `jwt_ttl`
 /// (default 24h).
 ///
-/// `iss` and `aud` are **required by default** (S2): [`SessionConfig::new`] and
+/// `iss` and `aud` are **required by default**: [`SessionConfig::new`] and
 /// [`crate::SessionService::new`] fail unless both are set (see
 /// [`SessionConfig::with_issuer`] / [`SessionConfig::with_audience`]) or the
 /// deployment explicitly opts out with [`SessionConfig::allow_unscoped_tokens`].
@@ -38,11 +38,11 @@ pub struct SessionConfig {
     pub aud: Option<String>,
     /// When true (default), validation fails if `iss` or `aud` is `None`.
     /// Set to false via [`SessionConfig::allow_unscoped_tokens`] only for
-    /// single-service deployments that never share a secret (S2).
+    /// single-service deployments that never share a secret.
     pub require_iss_aud: bool,
     /// Maximum concurrently tracked sessions per `sub` when
     /// `enforce_active_sessions` is on. Once reached, the oldest session (by
-    /// `iat`) is evicted when a new one begins (S5). Default 32.
+    /// `iat`) is evicted when a new one begins. Default 32.
     pub max_sessions_per_user: usize,
 }
 
@@ -106,14 +106,14 @@ impl SessionConfig {
         Ok(config)
     }
 
-    /// Explicit opt-out from the `iss`/`aud` requirement (S2). Only for
+    /// Explicit opt-out from the `iss`/`aud` requirement. Only for
     /// single-service deployments where the secret is never shared.
     pub fn allow_unscoped_tokens(mut self) -> Self {
         self.require_iss_aud = false;
         self
     }
 
-    /// Cap concurrently tracked sessions per user (S5). Must be at least 1.
+    /// Cap concurrently tracked sessions per user. Must be at least 1.
     pub fn with_max_sessions_per_user(mut self, max: usize) -> Self {
         self.max_sessions_per_user = max;
         self
@@ -159,16 +159,16 @@ impl SessionConfig {
     }
 }
 
-/// Minimum number of distinct byte values a secret must contain (S3).
+/// Minimum number of distinct byte values a secret must contain.
 ///
 /// Ten keeps `openssl rand -hex 24` (16 possible symbols) passing in
 /// practice while still rejecting repeated-pattern strings.
 const MIN_DISTINCT_SECRET_BYTES: usize = 10;
-/// Longest permitted run of one repeated byte in a secret (S3).
+/// Longest permitted run of one repeated byte in a secret.
 const MAX_REPEATED_SECRET_BYTES: usize = 7;
 
 /// Substrings (matched case-insensitively) that mark a secret as a
-/// placeholder rather than random key material (S3).
+/// placeholder rather than random key material.
 const INSECURE_SECRET_SUBSTRINGS: &[&str] = &[
     "change-me",
     "changeme",

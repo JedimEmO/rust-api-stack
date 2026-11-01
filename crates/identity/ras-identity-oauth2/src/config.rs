@@ -10,7 +10,7 @@ use std::fmt;
 pub struct OAuth2ProviderConfig {
     pub provider_id: String,
     pub client_id: String,
-    /// Never serialized (I1b): configs are frequently dumped for diagnostics.
+    /// Never serialized: configs are frequently dumped for diagnostics.
     #[serde(skip_serializing)]
     pub client_secret: String,
     pub authorization_endpoint: String,
@@ -31,12 +31,12 @@ pub struct OAuth2ProviderConfig {
     pub user_info_mapping: Option<UserInfoMapping>,
     /// Allow-list of additional userinfo claims copied into the verified
     /// identity's metadata (and therefore into the session JWT). Empty by
-    /// default: only `picture` and `email_verified` are ever propagated (I8).
+    /// default: only `picture` and `email_verified` are ever propagated.
     #[serde(default)]
     pub metadata_claims: Vec<String>,
     /// Permit non-`https://` authorization/token/userinfo endpoints. Only for
     /// local development against a mock IdP; tokens and client secrets travel
-    /// over these URLs (I9).
+    /// over these URLs.
     #[serde(default)]
     pub allow_insecure_endpoints: bool,
 }
@@ -45,7 +45,7 @@ impl OAuth2ProviderConfig {
     /// Validate the configuration before it is used to talk to a provider.
     ///
     /// Rejects endpoint URLs that are not `https://` unless
-    /// `allow_insecure_endpoints` is set (I9).
+    /// `allow_insecure_endpoints` is set.
     pub fn validate(&self) -> OAuth2Result<()> {
         if self.allow_insecure_endpoints {
             return Ok(());

@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Removed - 2026-11-01 (release readiness)
+- `ras-openrpc-types`: the `json-schema` feature and its optional `schemars` dependency. No item used them, so enabling the feature changed nothing.
+- `ras-rest-macro`: the `ui_theme` service option. It was parsed and then ignored; it is now an unknown-field error like any other unknown option.
+
+### Fixed - 2026-11-01 (release readiness)
+- `ras-file-core`: `DownloadResponse::last_modified_system_time` sets the `Last-Modified` header as an HTTP date. It used to ignore its argument. `ras-file-core` depends on `httpdate`.
+- Examples: the `basic-jsonrpc` service rejects a duplicate task title with the public error `1001` its authored example shows; the `rest-wasm-example` user search reports the number of matches as `total`, not the number of users; its `users/{id}` example uses an id from the demo data; and `npm start` in `wasm-ui-demo` loads `vite.config.js`, so the `/rpc` proxy works.
+
+### Documentation - 2026-11-01 (release readiness)
+- Every crate README and crate-level doc checked against the source and rewritten as a short front page; the full references are in the mdBook guides. The root README is a front page too, with an example that compiles as written.
+- Corrected snippets and claims that did not match the code, among them:
+  - the OAuth2 setup, which left out the `issuer` every ID token is checked against;
+  - the GitHub OAuth2 example, which could not work and is gone;
+  - the in-memory session registry and what it means for multi-instance deployments;
+  - the observability wiring and metric names;
+  - the bidirectional server mount and builder;
+  - the file service's generated names and options;
+  - dependency versions throughout.
+- Public doc comments no longer carry internal review labels such as `(I7)` or `(S2)`.
+- Crates.io metadata: every published crate has keywords and categories, several descriptions say what the crate is without the `RAS` abbreviation, and `ras-transport-core` documents its feature-gated transports on docs.rs.
+
 ### Maintenance - 2026-11-01 (CI toolchain and runner)
 - `async-trait` 0.1.89 → 0.1.92 in `Cargo.lock`. Rust 1.99's `clippy::double_must_use` fires on code older `async-trait` versions generate, which failed `cargo clippy -D warnings` across the workspace; 0.1.92 resolves it. It brings in `syn` 3 alongside `syn` 2.
 - `@playwright/test` 1.58.2 → 1.64.1 (`tests/playwright`). `ubuntu-latest` runners are now Ubuntu 26.04, which Playwright supports from 1.61, so the explorer and WASM UI browser jobs could not install Chromium.

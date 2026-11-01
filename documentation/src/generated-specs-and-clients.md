@@ -1,12 +1,14 @@
-# Generated Specs And Clients
+# Generated specs and clients
 
-The service macros use the Rust API definition to generate machine-readable
-contracts and client helpers.
+The service macros turn the Rust API definition into machine-readable documents
+and typed clients.
+This chapter covers what each macro emits and how the examples wire it into a build.
 
 ## OpenRPC
 
-`jsonrpc_service!` can generate OpenRPC when the service enables
+`jsonrpc_service!` generates OpenRPC when the service sets
 `openrpc: true` or `openrpc: { output: "path/to/file.json" }`.
+The functions exist in every build of the API crate, client-only and wasm builds included.
 
 ```rust,ignore
 pub fn generate_userservice_openrpc() -> serde_json::Value;
@@ -15,8 +17,8 @@ pub fn try_generate_userservice_openrpc()
 pub fn generate_userservice_openrpc_to_file() -> Result<(), std::io::Error>;
 ```
 
-The document includes method names, request and response schemas, auth
-extensions, flattened `x-permissions`, grouped `x-permission-groups`, version
+The document includes method names, request and response schemas,
+`x-authentication`, flattened `x-permissions`, grouped `x-permission-groups`, version
 metadata for versioned methods, authored examples and each method's `errors`.
 It validates against the OpenRPC 1.3 meta-schema.
 
@@ -28,8 +30,10 @@ details, including examples and `x-ras-error-examples`.
 
 ## OpenAPI
 
-`rest_service!` and `file_service!` can generate OpenAPI with `openapi: true`
-or a custom output path.
+`rest_service!` and `file_service!` generate OpenAPI with `openapi: true`
+or `openapi: { output: "path/to/file.json" }`.
+The functions are part of the generated server code,
+so they exist only when the API crate is built with its server side.
 
 ```rust,ignore
 pub fn generate_userservice_openapi() -> serde_json::Value;
@@ -48,7 +52,7 @@ File-service operations also include
 multipart schemas, binary download responses, and `x-ras-file` metadata for
 upload limits, part policies, content types, and range support.
 
-## Schemas And Components
+## Schemas and components
 
 `jsonrpc_service!` and `rest_service!` generate schemas with schemars 1.2 or
 later, in the dialect the format expects: JSON Schema draft 7 for OpenRPC and the
@@ -66,11 +70,15 @@ The `try_generate_*` functions report an example that cannot be serialized, or
 that does not read back unchanged, as a `SpecGenerationError`. A build script or
 a test that calls them catches a broken example before the document is served.
 
-## Rust Clients
+## Rust clients
 
 Enabling a service macro crate's `client` feature emits typed Rust clients that
 can be constructed with `build_with_transport(...)`. Enabling the macro crate's
 `reqwest` feature also emits the default reqwest-backed `build()`.
+A service with `feature_gated: true` leaves that choice to the API crate's own
+`client` and `reqwest` features instead; the
+[`jsonrpc_service!` guide](macros/jsonrpc-service.md#dependencies-and-features)
+explains when that matters.
 
 The examples keep API definitions in separate API crates and expose API-crate
 `client` features that forward to the macro crate's `reqwest` feature, so
@@ -86,7 +94,7 @@ and enable only the API crate's client-side feature set. See:
 - [examples/rest-wasm-example](https://github.com/JedimEmO/rust-api-stack/tree/master/examples/rest-wasm-example)
 - [examples/file-service-wasm](https://github.com/JedimEmO/rust-api-stack/tree/master/examples/file-service-wasm)
 
-## Build-Time Spec Generation
+## Build-time spec generation
 
 Backend crates can emit OpenRPC or OpenAPI during compilation from `build.rs`.
 That keeps generated client input tied to the same Rust API contract used by
@@ -99,10 +107,19 @@ fn main() {
 }
 ```
 
-The REST and file-service examples write specs under `target/openapi`. A
-frontend build can then point its OpenAPI generator at that file.
+For a REST or file service, the build dependency on the API crate needs its `server` feature,
+because that is where the OpenAPI functions live:
 
-## TypeScript Call Shape
+```toml
+[build-dependencies]
+rest-api = { path = "../rest-api", features = ["server"] }
+```
+
+With `openapi: true`, the REST and file-service examples write specs under `target/openapi`,
+relative to the directory the build runs in.
+A frontend build can then point its OpenAPI generator at that file.
+
+## TypeScript call shape
 
 The generated TypeScript fetch clients used in the examples accept one config
 object per call:
@@ -120,12 +137,17 @@ await postUsers({
 Only include the fields the operation needs. Public `GET` calls often need only
 `baseUrl`; protected uploads usually include `headers` and `body`.
 
-## Versioned Methods And Endpoints
+## Versioned methods and endpoints
 
-JSON-RPC and REST macros support opt-in compatibility definitions. A canonical
-operation can declare legacy wire names, legacy request/response types, and a
-migration type. The generated server accepts both shapes while the service
-implementation only handles the canonical Rust type.
+JSON-RPC and REST macros support opt-in compatibility definitions.
+A current operation can declare legacy versions,
+each with its own wire name (JSON-RPC) or path (REST), request and response types,
+and a migration type.
+The generated server accepts both shapes, while the service implementation
+only handles the current Rust types.
+The generated clients get one method per legacy version.
+See [versioned JSON-RPC methods](macros/jsonrpc-service.md#versioned-methods)
+and [versioned REST endpoints](macros/rest-service.md#versioning).
 
 Use versioning when a deployed client still depends on an old wire contract and
 the server can safely migrate requests and responses at the API boundary.

@@ -1,34 +1,22 @@
-# OAuth2 Demo
+# OAuth2 demo
 
-This example demonstrates a Google OAuth2 authorization-code flow with PKCE,
-JWT session creation, and permission-protected JSON-RPC methods.
+Sign in with Google through the authorization-code flow with PKCE,
+turn the Google identity into a JWT session,
+and call JSON-RPC methods that require different permissions.
 
-## Crates
-
-- `api/` defines the JSON-RPC contract shared by the server.
-- `server/` hosts the OAuth2 callback, static pages, session service, and API.
-
-## Configure
-
-Create the server-local environment file:
-
-```bash
-cp examples/oauth2-demo/server/.env.example examples/oauth2-demo/server/.env
-```
-
-Edit `examples/oauth2-demo/server/.env` with your Google OAuth2 client ID,
-client secret, redirect URI, and JWT secret.
+- [`api/`](api/README.md) declares the JSON-RPC contract.
+- [`server/`](server/README.md) serves the sign-in pages, the OAuth2 callback, the session service and the API.
 
 ## Run
 
-From the workspace root:
+You need a Google OAuth2 client; [server/README.md](server/README.md#google-cloud-setup) walks through creating one.
+Then create the environment file and fill in your client id, client secret and a JWT secret:
 
 ```bash
+cp examples/oauth2-demo/server/.env.example examples/oauth2-demo/server/.env
 cargo run -p oauth2-demo-server --locked
 ```
 
-The server loads `examples/oauth2-demo/server/.env` when run by package name and
-starts at `http://localhost:3000`.
-
-See [server/README.md](server/README.md) for Google Cloud setup and API
-usage examples.
+The server reads `examples/oauth2-demo/server/.env` wherever you start it from,
+and listens on `http://localhost:3000`.
+Open that address and choose **Sign in with Google**.

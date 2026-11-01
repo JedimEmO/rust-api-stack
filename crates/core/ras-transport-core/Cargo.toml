@@ -3,11 +3,17 @@ name = "ras-transport-core"
 version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
-description = "HTTP transport abstraction for generated Rust Agent Stack clients (production reqwest + in-process axum-test transports)"
+description = "HTTP transport for generated Rust Agent Stack clients: reqwest in production, axum-test in tests"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/JedimEmO/rust-api-stack"
 homepage = "https://github.com/JedimEmO/rust-api-stack"
 readme = "README.md"
+categories = ["web-programming::http-client", "wasm"]
+keywords = ["http", "client", "transport", "reqwest", "wasm"]
+
+[package.metadata.docs.rs]
+# The reqwest and axum-test transports are behind features; document them too.
+all-features = true
 
 [dependencies]
 async-trait = { workspace = true }

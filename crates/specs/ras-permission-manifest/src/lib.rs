@@ -1,19 +1,35 @@
-//! Permission manifest types for Rust Agent Stack service definitions.
+//! Data types that describe which permissions each operation of a RAS service
+//! requires.
 //!
-//! This crate is intentionally transport-free. Service macro crates generate
-//! values of these types, and build scripts can serialize them as an audit or
-//! tooling artifact.
+//! With their `permissions` feature, the service macros (`ras-rest-macro`,
+//! `ras-jsonrpc-macro`, `ras-file-macro` and `ras-jsonrpc-bidirectional-macro`)
+//! generate values of these types from the service definition:
+//!
+//! - `generate_<service>_permission_manifest()` returns a
+//!   [`ServicePermissions`].
+//! - `<service>_permissions::<PERMISSION>` is a [`PermissionRef`] per
+//!   permission string.
+//! - `<service>_permissions::operations::<OPERATION>` is a
+//!   [`StaticPermissionRequirement`] per protected operation.
+//!
+//! A build script can combine services into a [`PermissionManifest`] and write
+//! it with [`write_manifest`] as an audit or tooling artifact. Token issuing
+//! code can collect the generated constants in a [`PermissionSet`] instead of
+//! spelling permission strings by hand.
+//!
+//! The crate has no transport code and no Cargo features. See the
+//! [permission manifests chapter](https://github.com/JedimEmO/rust-api-stack/blob/master/documentation/src/permission-manifests.md).
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 
-/// Current permission manifest schema version.
+/// The manifest format version that [`PermissionManifest::from_services`]
+/// writes.
 ///
-/// v2 added the `AuthRequirementInfo::Optional` variant (the `OPTIONAL_AUTH`
-/// route level). A consumer pinned to an older crate version will fail to
-/// deserialize a manifest containing `"type":"optional"`; the bumped
-/// `schema_version` lets such tooling detect the mismatch up front.
+/// Tooling should compare it before reading the rest of a manifest: a reader
+/// built for an older version can fail on a variant it does not know, such as
+/// [`AuthRequirementInfo::Optional`].
 pub const SCHEMA_VERSION: u32 = 2;
 
 /// A combined permission manifest for one or more services.
@@ -85,6 +101,7 @@ pub struct ServicePermissions {
 }
 
 impl ServicePermissions {
+    /// Sorts operations by `operation_id`, then `operation_name`.
     pub fn sort_operations(&mut self) {
         self.operations.sort_by(|left, right| {
             left.operation_id
@@ -157,7 +174,9 @@ impl AuthRequirementInfo {
     /// Build the effective auth requirement from permission groups.
     ///
     /// Groups are ORed together, and each group's permissions are ANDed. Any
-    /// empty group makes the operation authenticated-only.
+    /// empty group makes the operation authenticated-only. The service macros
+    /// reject an empty group next to non-empty ones, so generated code only
+    /// produces an empty group as the whole requirement.
     pub fn from_permission_groups<I, G, P>(groups: I) -> Self
     where
         I: IntoIterator<Item = G>,
@@ -227,6 +246,7 @@ impl StaticPermissionRequirement {
         Self { any_of }
     }
 
+    /// A requirement any authenticated caller meets.
     pub const fn authenticated_only() -> Self {
         Self { any_of: &[] }
     }
@@ -235,6 +255,8 @@ impl StaticPermissionRequirement {
         self.any_of.is_empty()
     }
 
+    /// Whether `permissions` hold every permission of at least one group.
+    /// Always `true` for an authenticated-only requirement.
     pub fn is_satisfied_by(self, permissions: &HashSet<String>) -> bool {
         self.any_of.is_empty()
             || self.any_of.iter().any(|group| {
@@ -244,6 +266,8 @@ impl StaticPermissionRequirement {
             })
     }
 
+    /// The permissions of the first group; empty for an authenticated-only
+    /// requirement.
     pub fn first_group_permissions(self) -> impl Iterator<Item = PermissionRef> {
         self.any_of
             .first()
@@ -275,6 +299,8 @@ impl PermissionSet {
         self.permissions.insert(permission.as_str());
     }
 
+    /// Adds every permission of the requirement's first group, which is
+    /// enough to satisfy it.
     pub fn extend_first_group(&mut self, requirement: StaticPermissionRequirement) {
         self.permissions.extend(
             requirement
@@ -283,6 +309,8 @@ impl PermissionSet {
         );
     }
 
+    /// The permission strings, in the form `AuthenticatedUser` and session
+    /// claims carry them.
     pub fn into_hash_set(self) -> HashSet<String> {
         self.permissions
             .into_iter()

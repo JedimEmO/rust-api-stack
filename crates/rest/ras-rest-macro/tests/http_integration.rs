@@ -118,7 +118,6 @@ rest_service!({
     openapi: true,
     serve_docs: true,
     docs_path: "/docs",
-    ui_theme: "default",
     endpoints: [
         // User management endpoints
         /// List users.
