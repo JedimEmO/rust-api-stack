@@ -20,6 +20,8 @@ pub(super) struct IncomingMessageContext<'a> {
     pub(super) connection_id: &'a RwLock<Option<ConnectionId>>,
     pub(super) message_tx: &'a RwLock<Option<mpsc::Sender<BidirectionalMessage>>>,
     pub(super) connected_notify: &'a tokio::sync::Notify,
+    /// Bounds how many server-to-client calls are answered at once
+    pub(super) server_call_permits: &'a Arc<tokio::sync::Semaphore>,
 }
 
 impl Client {
@@ -28,7 +30,7 @@ impl Client {
         mut message_rx: mpsc::Receiver<BidirectionalMessage>,
         mut shutdown_rx: oneshot::Receiver<()>,
     ) -> ClientResult<()> {
-        let transport = Arc::clone(&self.transport);
+        let transport = self.transport.clone();
         let pending_requests = Arc::clone(&self.pending_requests);
         let subscriptions = Arc::clone(&self.subscriptions);
         let notification_handlers = Arc::clone(&self.notification_handlers);
@@ -39,6 +41,7 @@ impl Client {
         let message_tx_clone = Arc::clone(&self.message_tx);
         let connected_notify = Arc::clone(&self.connected_notify);
         let receive_batch = self.config.message_buffer_size.max(1);
+        let server_call_permits = Arc::new(tokio::sync::Semaphore::new(receive_batch));
 
         spawn_background(async move {
             let mut receive_interval = tokio::time::interval(Duration::from_millis(10));
@@ -63,7 +66,7 @@ impl Client {
                     }
 
                     _ = receive_interval.tick() => {
-                        let transport_clone = Arc::clone(&transport);
+                        let transport_clone = transport.clone();
                         let mut transport = transport_clone.write().await;
                         // Handle everything that has arrived, up to one
                         // buffer's worth, so a busy server is not throttled
@@ -81,6 +84,7 @@ impl Client {
                                         connection_id: &connection_id,
                                         message_tx: &message_tx_clone,
                                         connected_notify: &connected_notify,
+                                        server_call_permits: &server_call_permits,
                                     };
                                     Self::handle_incoming_message(
                                         message,
@@ -156,42 +160,53 @@ impl Client {
                 .await;
             }
             BidirectionalMessage::Request(request) => {
-                if let Some(_id) = &request.id {
-                    if let Some(handler) = context.rpc_request_handlers.get(&request.method) {
-                        debug!("Handling RPC request: {}", request.method);
-                        let response = handler(request).await;
-
-                        let response_message = BidirectionalMessage::Response(response);
-                        let tx = context.message_tx.read().await.clone();
-                        if let Some(tx) = tx
-                            && let Err(e) = tx.send(response_message).await
-                        {
-                            error!("Failed to send RPC response: {}", e);
-                        }
-                    } else {
-                        warn!("No handler registered for RPC method: {}", request.method);
-                        let error_response = JsonRpcResponse::error(
-                            ras_jsonrpc_types::JsonRpcError::new(
-                                -32601,
-                                "Method not found".to_string(),
-                                None,
-                            ),
-                            request.id.clone(),
-                        );
-                        let response_message = BidirectionalMessage::Response(error_response);
-                        let tx = context.message_tx.read().await.clone();
-                        if let Some(tx) = tx
-                            && let Err(e) = tx.send(response_message).await
-                        {
-                            error!("Failed to send error response: {}", e);
-                        }
-                    }
-                } else {
+                let Some(id) = request.id.clone() else {
                     debug!(
                         "Received RPC request without ID (notification): {}",
                         request.method
                     );
-                }
+                    return;
+                };
+                let Some(tx) = context.message_tx.read().await.clone() else {
+                    return;
+                };
+                // Answer on a task of its own. The reader drains the outgoing
+                // queue, so it must never wait for queue space or for a
+                // handler, which may itself be waiting on the server.
+                let Ok(permit) = Arc::clone(context.server_call_permits).try_acquire_owned() else {
+                    error!(
+                        "Dropping server call {}: too many server calls in flight",
+                        request.method
+                    );
+                    return;
+                };
+                let handler = context
+                    .rpc_request_handlers
+                    .get(&request.method)
+                    .map(|handler| Arc::clone(handler.value()));
+                spawn_background(async move {
+                    let _permit = permit;
+                    let response = match handler {
+                        Some(handler) => {
+                            debug!("Handling RPC request: {}", request.method);
+                            handler(request).await
+                        }
+                        None => {
+                            warn!("No handler registered for RPC method: {}", request.method);
+                            JsonRpcResponse::error(
+                                ras_jsonrpc_types::JsonRpcError::new(
+                                    -32601,
+                                    "Method not found".to_string(),
+                                    None,
+                                ),
+                                Some(id),
+                            )
+                        }
+                    };
+                    if let Err(e) = tx.send(BidirectionalMessage::Response(response)).await {
+                        error!("Failed to send RPC response: {}", e);
+                    }
+                });
             }
             BidirectionalMessage::Pong => {
                 debug!("Received pong");

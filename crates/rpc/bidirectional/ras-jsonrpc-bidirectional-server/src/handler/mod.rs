@@ -257,6 +257,10 @@ impl<H: MessageHandler> WebSocketHandler<H> {
                         break Stop::Ended;
                     }
                     Event::Inbound(Some(Err(e))) => break Stop::Failed(e),
+                    Event::Inbound(Some(Ok(WebSocketIoMessage::Close(reason)))) => {
+                        debug!("Received close frame: {:?}", reason);
+                        break Stop::PeerClosed(reason);
+                    }
                     Event::Inbound(Some(Ok(message))) => {
                         life.touch();
                         let reply = self
@@ -292,7 +296,7 @@ impl<H: MessageHandler> WebSocketHandler<H> {
         };
 
         let close_reason = match &stop {
-            Stop::Ended => None,
+            Stop::Ended | Stop::PeerClosed(_) => None,
             Stop::Disconnected => Some("disconnected by server"),
             Stop::Revoked => Some("credentials no longer valid"),
             Stop::Idle => Some("idle timeout"),
@@ -314,7 +318,7 @@ impl<H: MessageHandler> WebSocketHandler<H> {
                 "Closing connection {}: idle for {:?}",
                 self.context.id, self.keepalive.idle_timeout
             ),
-            Stop::Ended | Stop::Failed(_) => {}
+            Stop::Ended | Stop::PeerClosed(_) | Stop::Failed(_) => {}
         }
 
         if socket_ok {
@@ -340,7 +344,17 @@ impl<H: MessageHandler> WebSocketHandler<H> {
         // Return this connection's subscription slots to the service pool
         self.context.release_all_subscriptions().await;
 
-        if let Err(e) = self.handler.on_disconnect(self.context.clone(), None).await {
+        // Called exactly once per connection, with the peer's reason when it
+        // sent a close frame.
+        let reason = match &stop {
+            Stop::PeerClosed(reason) => reason.clone(),
+            _ => None,
+        };
+        if let Err(e) = self
+            .handler
+            .on_disconnect(self.context.clone(), reason)
+            .await
+        {
             error!("Error in on_disconnect handler: {}", e);
         }
 
@@ -486,11 +500,9 @@ impl<H: MessageHandler> WebSocketHandler<H> {
                 self.handler.on_pong(self.context.clone()).await?;
                 Ok(None)
             }
-            WebSocketIoMessage::Close(reason) => {
-                debug!("Received close frame: {:?}", reason);
-                self.handler
-                    .on_disconnect(self.context.clone(), reason.clone())
-                    .await?;
+            // The run loop ends the connection on a close frame before
+            // dispatching here.
+            WebSocketIoMessage::Close(_) => {
                 Err(ServerError::WebSocketError("Connection closed".to_string()))
             }
         }
@@ -633,8 +645,10 @@ fn text_message(message: &BidirectionalMessage) -> ServerResult<WebSocketIoMessa
 
 /// Why the handler loop stopped.
 enum Stop {
-    /// The peer closed the socket, or the outbound channel closed.
+    /// The socket ended without a close frame, or the outbound channel closed.
     Ended,
+    /// The peer sent a close frame, with this reason.
+    PeerClosed(Option<String>),
     /// The connection's sender was closed: a forced disconnect, or a peer too
     /// slow to keep its outbound queue from filling.
     Disconnected,

@@ -245,3 +245,81 @@ async fn forced_disconnect_ends_a_connection_stalled_on_write() {
         "a stalled write must not keep a disconnected connection alive"
     );
 }
+
+/// Subscribes every connection to one topic as it connects.
+struct SubscribeOnConnect;
+#[async_trait]
+impl MessageHandler for SubscribeOnConnect {
+    async fn handle_request(
+        &self,
+        _: JsonRpcRequest,
+        _: Arc<ConnectionContext>,
+    ) -> ServerResult<Option<JsonRpcResponse>> {
+        Ok(None)
+    }
+
+    async fn on_connect(&self, context: Arc<ConnectionContext>) -> ServerResult<()> {
+        context.subscribe("room".into()).await.unwrap();
+        Ok(())
+    }
+}
+
+/// A socket that stays open and silent.
+struct Silent;
+#[async_trait]
+impl WebSocketIo for Silent {
+    async fn send(&mut self, _: WebSocketIoMessage) -> ServerResult<()> {
+        Ok(())
+    }
+    async fn recv(&mut self) -> Option<ServerResult<WebSocketIoMessage>> {
+        std::future::pending().await
+    }
+}
+
+async fn eventually(what: &str, mut condition: impl FnMut() -> bool) {
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !condition() {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{what}"));
+}
+
+#[tokio::test]
+async fn dropping_a_connection_future_removes_the_connection() {
+    let service = WebSocketServiceBuilder::builder()
+        .handler(Arc::new(SubscribeOnConnect))
+        .auth_provider(Arc::new(Allow))
+        .require_auth(false)
+        .max_connections(Some(1))
+        .build()
+        .build();
+    let manager = service.connection_manager();
+    let accounting = service.subscription_accounting();
+
+    let running = {
+        let service = service.clone();
+        tokio::spawn(async move {
+            let mut socket = Silent;
+            let _ = service.handle_connection_with_io(&mut socket, None).await;
+        })
+    };
+    eventually("the connection registers", || {
+        manager.connection_count() == 1 && accounting.total() == 1
+    })
+    .await;
+
+    // Cancel the connection mid-flight, as a runtime shutting it down would.
+    running.abort();
+    let _ = running.await;
+
+    assert_eq!(manager.connection_count(), 0, "no dead connection is kept");
+    assert!(manager.get_topic_connections("room").is_empty());
+    assert_eq!(accounting.total(), 0, "its subscription slots are returned");
+    assert_eq!(
+        service.connection_permits().unwrap().available_permits(),
+        1,
+        "its connection slot is returned"
+    );
+}

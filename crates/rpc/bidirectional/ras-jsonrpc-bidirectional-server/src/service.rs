@@ -276,6 +276,12 @@ where
         .add_connection_with_sender(info, Box::new(sender.clone()))
         .await
         .map_err(ServerError::ConnectionError)?;
+    // Cleans up if this future is dropped before the connection ends.
+    let registration = Registration {
+        manager: manager.clone(),
+        context: context.clone(),
+        armed: true,
+    };
 
     let mut handler = WebSocketHandler::new(
         service.handler(),
@@ -299,6 +305,7 @@ where
 
     let result = handler.run_with_io(socket).await;
 
+    registration.disarm();
     if let Err(e) = service
         .connection_manager()
         .remove_connection(connection_id)
@@ -308,6 +315,57 @@ where
     }
 
     result
+}
+
+/// A connection's place in the connection manager.
+///
+/// A connection future can be dropped part-way, by a runtime shutting down or
+/// a caller that aborts it. Dropping this then closes the connection, returns
+/// its subscription slots and removes it from the manager, so the manager
+/// never keeps a dead connection.
+struct Registration {
+    manager: Arc<dyn ConnectionManager>,
+    context: Arc<ConnectionContext>,
+    armed: bool,
+}
+
+impl Registration {
+    /// The connection ended normally and cleans up after itself.
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for Registration {
+    fn drop(&mut self) {
+        use futures::FutureExt;
+
+        if !self.armed {
+            return;
+        }
+        self.context.sender.close();
+        let manager = self.manager.clone();
+        let context = self.context.clone();
+        let mut cleanup = Box::pin(async move {
+            context.release_all_subscriptions().await;
+            if let Err(e) = manager.remove_connection(context.id).await {
+                error!("Failed to remove connection {}: {}", context.id, e);
+            }
+        });
+        // The default manager finishes in one poll. A manager that has to
+        // wait finishes on the runtime, if one is still running.
+        if cleanup.as_mut().now_or_never().is_none() {
+            match tokio::runtime::Handle::try_current() {
+                Ok(runtime) => {
+                    runtime.spawn(cleanup);
+                }
+                Err(_) => error!(
+                    "Connection {} dropped outside a runtime; manager cleanup did not finish",
+                    self.context.id
+                ),
+            }
+        }
+    }
 }
 
 /// Builder for creating WebSocket services

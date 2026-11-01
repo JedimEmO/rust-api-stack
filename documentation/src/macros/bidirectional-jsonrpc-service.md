@@ -196,6 +196,8 @@ or `broadcast_to_topic`.
 The trait also has `on_client_connected`, `on_client_disconnected`, `on_client_authenticated`
 and `authorize_subscribe`, which have default bodies;
 see [Topic subscriptions](#topic-subscriptions) for the last one.
+`on_client_disconnected` runs exactly once when a connection ends,
+unless its future is dropped part-way; see [Disconnecting a client](#disconnecting-a-client).
 
 ### Mount the server
 
@@ -327,6 +329,11 @@ A custom `ConnectionManager` passed to `build_with_manager` must do the same:
 keep the `ChannelMessageSender` that `add_connection_with_sender` hands it,
 and call its `close()` in `remove_connection`.
 
+A connection whose future is dropped part-way,
+for example when the runtime shuts down,
+is still closed and removed from the manager, and its subscription slots are returned.
+`on_client_disconnected` does not run in that case.
+
 ### Topic subscriptions
 
 A client can subscribe to topics,
@@ -401,6 +408,8 @@ let sent = client
 Register handlers before `connect`, so no notification arrives before its handler.
 A handler for a server-to-client call is a closure
 that returns a future of `Result<Response, String>`.
+Each call runs on a task of its own,
+so a handler may await a call back to the server.
 
 A call that fails with a JSON-RPC error returns `ClientError::Rpc(JsonRpcError)`,
 with the code, message and data the server sent.

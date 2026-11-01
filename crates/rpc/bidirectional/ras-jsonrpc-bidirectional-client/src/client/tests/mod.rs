@@ -13,10 +13,15 @@ struct IncomingHarness {
     connection_id: RwLock<Option<ConnectionId>>,
     message_tx: RwLock<Option<mpsc::Sender<BidirectionalMessage>>>,
     connected_notify: tokio::sync::Notify,
+    server_call_permits: Arc<tokio::sync::Semaphore>,
 }
 
 impl IncomingHarness {
     fn new() -> Self {
+        Self::with_server_call_limit(16)
+    }
+
+    fn with_server_call_limit(limit: usize) -> Self {
         Self {
             pending_requests: DashMap::new(),
             subscriptions: DashMap::new(),
@@ -26,6 +31,7 @@ impl IncomingHarness {
             connection_id: RwLock::new(None),
             message_tx: RwLock::new(None),
             connected_notify: tokio::sync::Notify::new(),
+            server_call_permits: Arc::new(tokio::sync::Semaphore::new(limit)),
         }
     }
 
@@ -39,6 +45,7 @@ impl IncomingHarness {
             connection_id: &self.connection_id,
             message_tx: &self.message_tx,
             connected_notify: &self.connected_notify,
+            server_call_permits: &self.server_call_permits,
         }
     }
 }
