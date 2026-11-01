@@ -1,17 +1,21 @@
 //! OAuth2 state management for CSRF protection.
 
 use crate::error::{OAuth2Error, OAuth2Result};
+use crate::types::redact_option;
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
 /// OAuth2 state information stored during authorization flow
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `Debug` redacts `code_verifier` and `binding`.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct OAuth2State {
     pub state: String,
     pub provider_id: String,
@@ -27,6 +31,22 @@ pub struct OAuth2State {
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub metadata: Option<serde_json::Value>,
+}
+
+impl fmt::Debug for OAuth2State {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OAuth2State")
+            .field("state", &self.state)
+            .field("provider_id", &self.provider_id)
+            .field("redirect_uri", &self.redirect_uri)
+            .field("code_verifier", &redact_option(&self.code_verifier))
+            .field("nonce", &self.nonce)
+            .field("binding", &redact_option(&self.binding))
+            .field("created_at", &self.created_at)
+            .field("expires_at", &self.expires_at)
+            .field("metadata", &self.metadata)
+            .finish()
+    }
 }
 
 impl OAuth2State {

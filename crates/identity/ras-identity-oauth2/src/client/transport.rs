@@ -96,8 +96,12 @@ impl OAuth2HttpTransport for ReqwestOAuth2HttpTransport {
 
 impl ReqwestOAuth2HttpTransport {
     pub(super) fn new(timeout_seconds: u64) -> OAuth2Result<Self> {
+        // Never follow redirects: reqwest would replay the token request's
+        // form body, client_secret included, to whatever the 3xx points at.
+        // A redirect gets a non-success status and fails closed.
         let client = Client::builder()
             .timeout(Duration::from_secs(timeout_seconds))
+            .redirect(reqwest::redirect::Policy::none())
             .build()?;
         Ok(Self { client })
     }

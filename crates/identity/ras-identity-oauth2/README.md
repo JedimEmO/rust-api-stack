@@ -94,6 +94,13 @@ For a non-browser flow where login CSRF does not apply,
 `start_flow_bound(provider_id, params, None)` starts an unbound flow.
 `start_flow_bound` also accepts a binding value of your own.
 
+`OAuth2Client` is the lower layer under `OAuth2Provider`,
+for callers who want the `TokenResponse` itself instead of a `VerifiedIdentity`.
+It follows the same rules:
+`generate_authorization_url` returns a binding for the callback,
+`generate_authorization_url_bound` takes your own or `None`,
+and every method checks the provider config with `validate` before using it.
+
 A complete server, with the binding cookie, is in
 [examples/oauth2-demo](https://github.com/JedimEmO/rust-api-stack/tree/master/examples/oauth2-demo).
 
@@ -130,7 +137,12 @@ the `error_description` goes to the server log, not to the client.
   such as `redirect_uri`, `state`, `nonce`, `scope`, the PKCE fields, `request` and `response_mode`.
 - Only `picture`, `email_verified` and the claims listed in `metadata_claims` reach the identity's metadata,
   and from there the session JWT.
+- Token and userinfo requests do not follow redirects, and a `3xx` answer fails the request.
+  Following one would replay the token request, `client_secret` and code included, to the new location.
 - `client_secret` is skipped when the config is serialized, and redacted in its `Debug` output.
+  `Debug` also redacts the tokens in `TokenResponse`,
+  the authorization code, the PKCE verifier and the login-CSRF binding,
+  wherever they appear in the crate's types.
 - Token and userinfo error responses are logged by status code only; their bodies may contain tokens.
 
 ## The resulting identity
