@@ -201,3 +201,133 @@ fn decode_ref_name(encoded: &str) -> String {
         .replace("~1", "/")
         .replace("~0", "~")
 }
+
+/// How a JSON-RPC request's `params` can be described.
+pub enum ParamShape {
+    /// An object with a fixed set of fields: one descriptor per field, called by name.
+    Named(Vec<NamedParam>),
+    /// Anything else: one descriptor for the whole `params` value.
+    Raw,
+}
+
+/// One field of a [`ParamShape::Named`] request.
+pub struct NamedParam {
+    /// The field's name on the wire.
+    pub name: String,
+    /// Whether the request schema lists the field as required.
+    pub required: bool,
+    /// The field's schema.
+    pub schema: Value,
+}
+
+/// Keys that only annotate a schema and never constrain values.
+const ANNOTATION_KEYS: &[&str] = &[
+    "title",
+    "description",
+    "default",
+    "example",
+    "examples",
+    "deprecated",
+    "readOnly",
+    "writeOnly",
+    "nullable",
+    "$comment",
+];
+
+/// Keys an object schema may carry and still be described by named descriptors.
+/// `additionalProperties` is checked separately: only `false` is allowed.
+const NAMED_OBJECT_KEYS: &[&str] = &["type", "properties", "required", "additionalProperties"];
+
+/// The reference inside `{ "allOf": [{ "$ref": ... }], <annotations> }`, the form
+/// schemars uses for a reference that carries a description.
+pub fn wrapped_ref(schema: &Value) -> Option<&str> {
+    let object = schema.as_object()?;
+    let [inner] = object.get("allOf")?.as_array()?.as_slice() else {
+        return None;
+    };
+    let reference = inner
+        .as_object()
+        .filter(|o| o.len() == 1)?
+        .get("$ref")?
+        .as_str()?;
+    let annotations_only = object
+        .keys()
+        .all(|key| key == "allOf" || ANNOTATION_KEYS.contains(&key.as_str()));
+    annotations_only.then_some(reference)
+}
+
+/// Follows component references and reference wrappers to the schema they stand for.
+///
+/// Returns `None` for a reference that leaves the document, does not resolve, or loops.
+fn resolve<'a>(mut schema: &'a Value, components: &'a Map<String, Value>) -> Option<&'a Value> {
+    let mut visited = BTreeSet::new();
+    loop {
+        let reference = match schema.get("$ref").and_then(Value::as_str) {
+            Some(reference) if schema.as_object().is_some_and(|o| o.len() == 1) => reference,
+            Some(_) => return None,
+            None => match wrapped_ref(schema) {
+                Some(reference) => reference,
+                None => return Some(schema),
+            },
+        };
+        let name = decode_ref_name(reference.strip_prefix(COMPONENTS_PREFIX)?);
+        if !visited.insert(name.clone()) {
+            return None;
+        }
+        schema = components.get(&name)?;
+    }
+}
+
+/// Decides whether a request can be called by name, and with which fields.
+///
+/// A request is named when its schema resolves to an object with a fixed set of
+/// properties and nothing else the descriptors could not carry. Anything not
+/// recognised is raw, never simplified.
+pub fn classify_params(schema: &Value, components: &Map<String, Value>) -> ParamShape {
+    let Some(object) = resolve(schema, components).and_then(Value::as_object) else {
+        return ParamShape::Raw;
+    };
+    if object.get("type").and_then(Value::as_str) != Some("object") {
+        return ParamShape::Raw;
+    }
+    let known = |key: &String| {
+        NAMED_OBJECT_KEYS.contains(&key.as_str()) || ANNOTATION_KEYS.contains(&key.as_str())
+    };
+    if !object.keys().all(known) {
+        return ParamShape::Raw;
+    }
+    if object
+        .get("additionalProperties")
+        .is_some_and(|value| value != &Value::Bool(false))
+    {
+        return ParamShape::Raw;
+    }
+    // A struct without fields may have no `properties` at all.
+    let empty = Map::new();
+    let properties = match object.get("properties") {
+        None => &empty,
+        Some(Value::Object(properties)) => properties,
+        Some(_) => return ParamShape::Raw,
+    };
+    let required: BTreeSet<&str> = match object.get("required") {
+        None => BTreeSet::new(),
+        Some(Value::Array(names)) => match names.iter().map(Value::as_str).collect() {
+            Some(names) => names,
+            None => return ParamShape::Raw,
+        },
+        Some(_) => return ParamShape::Raw,
+    };
+    if !required.iter().all(|name| properties.contains_key(*name)) {
+        return ParamShape::Raw;
+    }
+    ParamShape::Named(
+        properties
+            .iter()
+            .map(|(name, schema)| NamedParam {
+                name: name.clone(),
+                required: required.contains(name.as_str()),
+                schema: schema.clone(),
+            })
+            .collect(),
+    )
+}

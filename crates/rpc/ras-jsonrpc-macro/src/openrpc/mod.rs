@@ -52,7 +52,7 @@ pub fn generate_openrpc_code(
 
     let embedded = embedded_components(&components_mod);
     let method_infos = methods::generate_method_infos(service_def, &method_info_struct_name);
-    let methods = methods::generate_methods();
+    let methods = methods::generate_methods(&components_mod);
 
     quote! {
         #embedded

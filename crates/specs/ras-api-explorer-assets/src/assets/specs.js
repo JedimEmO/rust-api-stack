@@ -42,7 +42,10 @@
         function normalizeOpenRpc(spec) {
             return (spec.methods || []).map((method) => {
                 const auth = method["x-authentication"];
+                // The whole request: by-name methods list one descriptor per field,
+                // so `params[0]` is only the request for raw methods and older documents.
                 const param = Array.isArray(method.params) ? method.params[0] : null;
+                const paramsSchema = method["x-ras-params-schema"] || param?.schema || null;
                 return {
                     id: method.name,
                     protocol: "jsonrpc",
@@ -53,7 +56,7 @@
                     description: method.description || method.summary || "",
                     authRequired: Boolean(auth && auth.required !== false),
                     permissions: normalizePermissions(method["x-permissions"]),
-                    paramsSchema: param?.schema || null,
+                    paramsSchema,
                     responseSchema: method.result?.schema || null
                 };
             });

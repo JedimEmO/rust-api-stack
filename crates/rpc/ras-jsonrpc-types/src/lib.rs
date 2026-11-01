@@ -15,12 +15,27 @@ pub struct JsonRpcRequest {
     pub method: String,
 
     /// Parameters for the method call.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    ///
+    /// `None` when the field is missing. An explicit `"params": null` is
+    /// `Some(Value::Null)`, so the two can be told apart.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub params: Option<serde_json::Value>,
 
     /// Request identifier for matching responses.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<serde_json::Value>,
+}
+
+/// Wraps any present value, `null` included, in `Some`; `default` covers a missing field.
+fn deserialize_present<'de, D>(deserializer: D) -> Result<Option<serde_json::Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde_json::Value::deserialize(deserializer).map(Some)
 }
 
 /// JSON-RPC 2.0 response structure.
@@ -222,6 +237,27 @@ impl JsonRpcError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_and_null_params_are_distinct() {
+        let missing: JsonRpcRequest =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","method":"m","id":1}"#).unwrap();
+        assert_eq!(missing.params, None);
+
+        let null: JsonRpcRequest =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","method":"m","params":null,"id":1}"#).unwrap();
+        assert_eq!(null.params, Some(serde_json::Value::Null));
+        assert_eq!(
+            serde_json::to_value(&null).unwrap()["params"],
+            serde_json::Value::Null
+        );
+        assert!(
+            serde_json::to_value(&missing)
+                .unwrap()
+                .get("params")
+                .is_none()
+        );
+    }
 
     #[test]
     fn jsonrpc_request_constructor_sets_version() {

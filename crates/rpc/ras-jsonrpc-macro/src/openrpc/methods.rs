@@ -106,21 +106,44 @@ pub(super) fn generate_method_infos(
     method_infos
 }
 
-pub(super) fn generate_methods() -> TokenStream {
+pub(super) fn generate_methods(components_mod: &Ident) -> TokenStream {
     quote! {
             let openrpc_methods: Vec<serde_json::Value> = methods.into_iter().map(|method| {
                 let mut params = vec![];
+                let mut param_structure = None;
+                let mut extensions: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
 
                 if let Some(schema) = method.params_schema {
-                    params.push(json!({
-                        "name": "params",
-                        "summary": format!("Request parameters of type {}", method.request_type_name),
-                        "required": true,
-                        "schema": schema
-                    }));
+                    match #components_mod::classify_params(&schema, &schemas) {
+                        #components_mod::ParamShape::Named(fields) => {
+                            param_structure = Some("by-name");
+                            for field in fields {
+                                let mut descriptor = json!({
+                                    "name": field.name,
+                                    "required": field.required,
+                                    "schema": field.schema
+                                });
+                                if let Some(description) = descriptor["schema"].get("description").cloned() {
+                                    descriptor["description"] = description;
+                                }
+                                params.push(descriptor);
+                            }
+                        }
+                        #components_mod::ParamShape::Raw => {
+                            params.push(json!({
+                                "name": "params",
+                                "summary": format!("Request parameters of type {}", method.request_type_name),
+                                "description": "The whole `params` value. Its shape cannot be described as named \
+                                    parameters, so a call built from this descriptor alone would wrap it in a \
+                                    `params` field; send the value itself.",
+                                "required": true,
+                                "schema": schema.clone()
+                            }));
+                            extensions.insert("x-ras-params-raw".to_string(), json!(true));
+                        }
+                    }
+                    extensions.insert("x-ras-params-schema".to_string(), schema);
                 }
-
-                let mut extensions: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
 
                 if method.auth_required {
                     extensions.insert("x-authentication".to_string(), json!({
@@ -169,6 +192,9 @@ pub(super) fn generate_methods() -> TokenStream {
                 });
 
                 if let Some(obj) = method_obj.as_object_mut() {
+                    if let Some(param_structure) = param_structure {
+                        obj.insert("paramStructure".to_string(), json!(param_structure));
+                    }
                     if let Some(description) = &method.description {
                         obj.insert("description".to_string(), json!(description));
                     }

@@ -90,7 +90,12 @@ fn jsonrpc_parse_params_code(
                     request.id.clone()
                 ),
             },
-            None => match serde_json::from_value(serde_json::Value::Null) {
+            // `params` left out. `()` and `Option` requests decode from `null`;
+            // a struct whose fields are all optional decodes from `{}`, which is
+            // the call its by-name OpenRPC descriptors permit.
+            None => match serde_json::from_value(serde_json::Value::Null)
+                .or_else(|_| serde_json::from_value(serde_json::Value::Object(Default::default())))
+            {
                 Ok(p) => p,
                 Err(e) => return ras_jsonrpc_types::JsonRpcResponse::error(
                     ras_jsonrpc_types::JsonRpcError::invalid_params(e.to_string()),
