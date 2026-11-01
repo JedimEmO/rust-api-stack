@@ -2,7 +2,7 @@
 name = "ras-file-core"
 version = "0.2.1"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95"
 description = "Core runtime types for Rust API Stack file upload and download services"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/JedimEmO/rust-api-stack"

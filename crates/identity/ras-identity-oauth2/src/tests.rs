@@ -398,7 +398,7 @@ mod integration_tests {
         // Collect all states
         let mut states = vec![];
         for handle in handles {
-            let (_, state) = handle.await.unwrap().unwrap();
+            let state = handle.await.unwrap().unwrap().state;
             states.push(state);
         }
 

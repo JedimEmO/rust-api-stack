@@ -2,7 +2,7 @@
 name = "ras-identity-oauth2"
 version = "0.3.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95"
 description = "OAuth2 authentication provider with Google support, PKCE, and state management"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/JedimEmO/rust-api-stack"

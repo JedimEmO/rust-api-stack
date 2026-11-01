@@ -1,0 +1,433 @@
+{
+  "date": "2026-09-30",
+  "revision": "15404c39c0a6b25501284746da603c44a6c83fb3",
+  "scope": {
+    "library_crates": 23,
+    "areas": [
+      "Authentication and permission helpers",
+      "Local/OAuth2 identity and JWT sessions",
+      "REST, JSON-RPC, file, and bidirectional macro-generated servers and clients",
+      "HTTP/WebSocket transports and lifecycle",
+      "OpenRPC/permission metadata and API explorer assets",
+      "Observability and workspace dependency/CI policy"
+    ],
+    "deployment_review": false
+  },
+  "summary": {
+    "critical": 0,
+    "high": 3,
+    "medium": 8,
+    "low": 1,
+    "security_assertions_added": 13,
+    "production_code_changed": false
+  },
+  "findings": [
+    {
+      "id": "F01",
+      "severity": "High",
+      "title": "Identity-provider namespaces are lost when sessions become authenticated users",
+      "status": "reproduced",
+      "locations": [
+        [
+          "crates/identity/ras-identity-session/src/auth.rs",
+          31
+        ],
+        [
+          "crates/identity/ras-identity-session/src/session.rs",
+          130
+        ]
+      ],
+      "preconditions": "Multiple identity providers issue the same raw subject; application ownership or user lookup uses AuthenticatedUser.user_id. A local username can be chosen to collide with an external provider subject.",
+      "attack_path": "JwtAuthProvider exposes claims.sub as user_id and discards claims.provider_id. Independent identities resolve to the same ownership key. Session eviction also groups by sub alone, allowing cross-provider session eviction.",
+      "impact": "Cross-account data access or account confusion where handlers key authorization by user_id; cross-provider forced logout.",
+      "evidence": [
+        "different_providers_must_not_resolve_to_the_same_user_id",
+        "logging_in_at_another_provider_must_not_evict_the_victim_session"
+      ],
+      "fix": "Resolve (provider_id, subject) to a stable application user ID, or preserve a structured, unambiguous provider-scoped identity through AuthenticatedUser. Scope session caps to that same identity. Migrate existing ownership keys explicitly."
+    },
+    {
+      "id": "F02",
+      "severity": "High",
+      "title": "Forced WebSocket disconnection does not terminate or deauthorize the live connection",
+      "status": "reproduced",
+      "locations": [
+        [
+          "crates/rpc/bidirectional/ras-jsonrpc-bidirectional-types/src/manager.rs",
+          187
+        ],
+        [
+          "crates/rpc/bidirectional/ras-jsonrpc-bidirectional-server/src/manager.rs",
+          187
+        ],
+        [
+          "crates/rpc/bidirectional/ras-jsonrpc-bidirectional-macro/src/server.rs",
+          319
+        ]
+      ],
+      "preconditions": "A service relies on disconnect_user or the generated ClientHandle.disconnect to terminate a user's access without separately revoking the credential.",
+      "attack_path": "remove_connection removes manager records only. The handler retains its own ConnectionContext and channel sender, so the receiver remains open and cached authentication survives. Periodic successful authentication does not check manager membership.",
+      "impact": "A supposedly disconnected user can continue authenticated RPC operations; the physical connection and its admission permit remain occupied.",
+      "evidence": [
+        "forced_disconnect_must_stop_authenticated_requests"
+      ],
+      "fix": "Associate every live connection with a cancellation/close handle. Force-disconnect must invalidate cached auth and signal the actual handler/socket, with cancellation-safe cleanup. Test real socket termination and denial of subsequent requests."
+    },
+    {
+      "id": "F03",
+      "severity": "High",
+      "title": "OAuth token endpoint redirects replay client credentials to another origin",
+      "status": "reproduced",
+      "locations": [
+        [
+          "crates/identity/ras-identity-oauth2/src/client/transport.rs",
+          28
+        ],
+        [
+          "crates/identity/ras-identity-oauth2/src/client/transport.rs",
+          99
+        ]
+      ],
+      "preconditions": "The configured token endpoint or its infrastructure issues a 307/308 redirect to an unintended origin or to HTTP. This is not a redirect destination directly supplied by every caller.",
+      "attack_path": "The default reqwest redirect policy replays the POST form, including client_secret, authorization code, and any PKCE verifier. HTTPS validation covers configured endpoints only, not the redirect chain.",
+      "impact": "Credential disclosure and possible authorization-code theft. The signature-free OIDC claim checks assume a trusted TLS token endpoint, a boundary that redirects can change.",
+      "evidence": [
+        "token_exchange_must_not_forward_credentials_to_a_redirect_target"
+      ],
+      "evidence_limit": "The runtime reproduction uses loopback HTTP and dummy credentials to isolate redirect replay; the same redirect policy is used in production. reqwest 0.12.28 source confirms https_only defaults to false.",
+      "fix": "Disable redirects for token/userinfo requests and reject 3xx responses. If redirects are essential, explicitly allow only the intended HTTPS origin and prohibit credential replay to any other destination."
+    },
+    {
+      "id": "F04",
+      "severity": "Medium",
+      "title": "Public OAuth2Client methods bypass configured HTTPS requirements",
+      "status": "reproduced",
+      "locations": [
+        [
+          "crates/identity/ras-identity-oauth2/src/client/authorization.rs",
+          79
+        ],
+        [
+          "crates/identity/ras-identity-oauth2/src/client/mod.rs",
+          84
+        ],
+        [
+          "crates/identity/ras-identity-oauth2/src/client/mod.rs",
+          160
+        ]
+      ],
+      "preconditions": "An application uses OAuth2Client directly, with an HTTP endpoint and allow_insecure_endpoints=false. OAuth2Provider constructors do validate configurations.",
+      "attack_path": "Public client operations never call OAuth2ProviderConfig.validate. A configuration that explicitly fails validation is nevertheless used.",
+      "impact": "Passwords/consent traffic may be directed to HTTP authorization pages; codes, client secrets, and access tokens can be sent over unencrypted HTTP.",
+      "evidence": [
+        "public_client_must_reject_insecure_provider_configuration"
+      ],
+      "fix": "Validate the provider config at every public client entry point, or accept only a validated provider configuration type."
+    },
+    {
+      "id": "F05",
+      "severity": "Medium",
+      "title": "The low-level OAuth convenience flow is unbound by default",
+      "status": "reproduced_configuration_property",
+      "locations": [
+        [
+          "crates/identity/ras-identity-oauth2/src/client/authorization.rs",
+          64
+        ],
+        [
+          "crates/identity/ras-identity-oauth2/src/client/mod.rs",
+          97
+        ]
+      ],
+      "preconditions": "A browser application uses OAuth2Client.generate_authorization_url and the shared server-side state store without separately binding the state to the initiating browser. OAuth2Provider.start_flow does generate a binding.",
+      "attack_path": "The convenience API passes binding=None. Callback validation checks browser binding only when the stored state contains one. A valid attacker-started flow can consequently be completed from a different browser.",
+      "impact": "Login CSRF or account/session confusion in integrations using this low-level default. State randomness and one-time consumption do not establish browser ownership.",
+      "evidence": [
+        "default_authorization_flow_must_be_bound_to_the_initiating_browser"
+      ],
+      "evidence_limit": "The test proves the unbound default; a full cross-browser account attack was not exercised.",
+      "fix": "Require an explicit browser binding, or make the unbound API an explicitly dangerous/non-browser escape hatch. Return a generated binding and require it to come from the initiating browser's protected cookie."
+    },
+    {
+      "id": "F06",
+      "severity": "Medium",
+      "title": "WebSocket backpressure can indefinitely suppress broadcasts and lifecycle checks",
+      "status": "reproduced",
+      "locations": [
+        [
+          "crates/rpc/bidirectional/ras-jsonrpc-bidirectional-server/src/connection.rs",
+          51
+        ],
+        [
+          "crates/rpc/bidirectional/ras-jsonrpc-bidirectional-server/src/manager.rs",
+          145
+        ],
+        [
+          "crates/rpc/bidirectional/ras-jsonrpc-bidirectional-server/src/handler/mod.rs",
+          286
+        ],
+        [
+          "crates/rpc/bidirectional/ras-jsonrpc-bidirectional-server/src/handler/mod.rs",
+          319
+        ]
+      ],
+      "preconditions": "A slow/nonreading peer fills its outbound queue or stalls a socket write; alternatively a callback never completes.",
+      "attack_path": "Channel sends await capacity indefinitely and fan_out waits for every send. Socket writes and callbacks are awaited inside select branch bodies, preventing auth-revalidation, idle-timeout, and teardown branches from running while stalled.",
+      "impact": "Publishers can become stuck on one recipient. Slow connections retain resources, and the advertised bounded credential-revocation interval does not hold during blocked operations.",
+      "evidence": [
+        "a_slow_subscriber_must_not_stall_broadcasts",
+        "blocked_socket_write_must_not_suspend_revocation_checks"
+      ],
+      "fix": "Bound queue sends and socket writes; evict or reject slow recipients. Separate read/write/auth supervision or ensure callbacks are cancellable and time bounded. Define what happens to in-flight privileged operations on revocation."
+    },
+    {
+      "id": "F07",
+      "severity": "Medium",
+      "title": "A native WebSocket peer can deadlock the transport by closing normally",
+      "status": "reproduced",
+      "locations": [
+        [
+          "crates/rpc/bidirectional/ras-jsonrpc-bidirectional-client/src/native.rs",
+          169
+        ],
+        [
+          "crates/rpc/bidirectional/ras-jsonrpc-bidirectional-client/src/native.rs",
+          193
+        ],
+        [
+          "crates/rpc/bidirectional/ras-jsonrpc-bidirectional-client/src/native.rs",
+          217
+        ]
+      ],
+      "preconditions": "The native client receives a Close frame, or the stream reaches EOF.",
+      "attack_path": "receive holds connection.write() and then attempts to acquire the same write lock again in its Close/EOF branch.",
+      "impact": "The receive driver never completes; other client operations, including disconnect/recovery, can become stuck waiting for the transport.",
+      "evidence": [
+        "peer_close_must_not_deadlock_the_native_transport"
+      ],
+      "fix": "Clear the Option through the existing connection_guard. Do not reacquire the lock. Cover both Close and clean EOF, plus client shutdown/reconnection."
+    },
+    {
+      "id": "F08",
+      "severity": "Medium",
+      "title": "Dot-only path parameters change the authenticated request endpoint",
+      "status": "reproduced",
+      "locations": [
+        [
+          "crates/core/ras-transport-core/src/path.rs",
+          16
+        ],
+        [
+          "crates/rest/ras-rest-macro/src/client.rs",
+          342
+        ]
+      ],
+      "preconditions": "A generated REST/file client receives attacker-influenced '.' or '..' as a string path parameter; the normalized destination has meaningful routes accessible with the caller's credentials.",
+      "attack_path": "The segment encoder leaves dots unescaped. URL parsing normalizes /items/./delete to /items/delete, and /items/../delete to /delete.",
+      "impact": "Authenticated requests can be sent to a different endpoint than the caller intended, potentially causing a confused-deputy operation. This is client request misrouting, not proven arbitrary server filesystem traversal.",
+      "evidence": [
+        "a_dot_only_parameter_must_not_change_the_endpoint_path"
+      ],
+      "fix": "Reject dot-only path parameters before constructing/sending the request. Merely encoding them as %2E is insufficient because URL implementations also normalize encoded dot segments. Apply the same validation in the explorer."
+    },
+    {
+      "id": "F09",
+      "severity": "Medium",
+      "title": "Credential-bearing Debug output exposes tokens",
+      "status": "reproduced",
+      "locations": [
+        [
+          "crates/rpc/bidirectional/ras-jsonrpc-bidirectional-client/src/config.rs",
+          8
+        ],
+        [
+          "crates/core/ras-transport-core/src/request.rs",
+          104
+        ],
+        [
+          "crates/core/ras-auth-core/src/transport/credential.rs",
+          15
+        ],
+        [
+          "crates/identity/ras-identity-oauth2/src/types.rs",
+          36
+        ]
+      ],
+      "preconditions": "An integrator logs credential-bearing configuration, requests, credentials, or token responses using Debug; sensitive RPC payloads are also logged at debug by the native transport.",
+      "attack_path": "Derived Debug includes raw token fields. TransportRequest.bearer does not mark its HeaderValue as sensitive, so HeaderMap Debug exposes it.",
+      "impact": "Bearer or refresh tokens can be recovered from diagnostic logs and replayed.",
+      "evidence": [
+        "client_configuration_debug_must_redact_tokens",
+        "request_debug_must_redact_bearer_credentials"
+      ],
+      "fix": "Implement redacting Debug for secret-bearing types and call HeaderValue.set_sensitive(true) for credential headers. Avoid logging complete RPC payloads. Keep HTTP tracker redaction as an additional boundary."
+    },
+    {
+      "id": "F10",
+      "severity": "Medium",
+      "title": "Cargo.lock contains a currently vulnerable Rustls version",
+      "status": "dependency_advisory_confirmed",
+      "locations": [
+        [
+          "Cargo.lock",
+          3357
+        ]
+      ],
+      "preconditions": "The affected Rustls TLS implementation is used, including through reqwest in OAuth2 and production HTTP transport.",
+      "attack_path": "rustls 0.23.38 is affected by RUSTSEC-2026-0285 / GHSA-2mjx-qc3c-rqvc, accepting TLS 1.3 handshake messages across encryption-level boundaries.",
+      "impact": "TLS protocol confidentiality weakness. The upstream advisory explicitly states the handshake transcript remains authenticated; this is not evidence of arbitrary handshake forgery.",
+      "evidence": [
+        "cargo audit with freshly fetched 2026-09-30 advisory database",
+        "cargo tree -i rustls"
+      ],
+      "fix": "Update the lockfile to rustls >=0.23.45 and rerun dependency policy checks and transport tests. Published library consumers must update their own lockfiles too.",
+      "sources": [
+        "https://rustsec.org/advisories/RUSTSEC-2026-0285.html",
+        "https://github.com/rustls/rustls/security/advisories/GHSA-2mjx-qc3c-rqvc"
+      ]
+    },
+    {
+      "id": "F11",
+      "severity": "Low",
+      "title": "An upload size-limit error is not terminal",
+      "status": "reproduced_helper_property",
+      "locations": [
+        [
+          "crates/rest/ras-file-core/src/lib.rs",
+          212
+        ],
+        [
+          "crates/rest/ras-file-macro/src/server/upload.rs",
+          335
+        ]
+      ],
+      "preconditions": "A service handler catches/ignores a next_chunk size error and then resumes reading or drains the file; normally propagating the error with '?' is safe.",
+      "attack_path": "An oversized chunk is consumed without increasing bytes_read or retaining the failure. A later drain reaches EOF successfully and marks the file finished, which can satisfy the generated handler's consumption check.",
+      "impact": "The generated framework can accept an upload with an oversize part after handler recovery, producing an inaccurate size summary or a truncated accepted file.",
+      "evidence": [
+        "exceeding_the_file_limit_must_leave_a_terminal_error"
+      ],
+      "evidence_limit": "The runtime test exercises IncomingFile; acceptance by the generated handler is traced statically, rather than through a complete upload fixture.",
+      "fix": "Latch stream and size-limit errors, and make finish/consumption checks reject any failed part regardless of a handler's subsequent reads. Test a handler that attempts error recovery."
+    },
+    {
+      "id": "F12",
+      "severity": "Medium",
+      "title": "The WASM client has an unbounded inbound message queue",
+      "status": "manual_code_finding",
+      "locations": [
+        [
+          "crates/rpc/bidirectional/ras-jsonrpc-bidirectional-client/src/wasm.rs",
+          22
+        ],
+        [
+          "crates/rpc/bidirectional/ras-jsonrpc-bidirectional-client/src/wasm.rs",
+          81
+        ],
+        [
+          "crates/rpc/bidirectional/ras-jsonrpc-bidirectional-client/src/wasm.rs",
+          85
+        ]
+      ],
+      "preconditions": "A compromised/malicious server sends valid messages faster than the browser client can drain them, or sends very large messages.",
+      "attack_path": "Every parsed message is pushed onto an unconstrained VecDeque. ClientConfig.message_buffer_size does not bound this inbound browser queue. Event callbacks are also forgotten rather than owned and released on disconnect.",
+      "impact": "Browser memory exhaustion and session disruption; repeated connections can retain callback allocations.",
+      "evidence": [
+        "Manual browser transport source review",
+        "wasm32-unknown-unknown compile check"
+      ],
+      "evidence_limit": "No hostile-server browser memory-exhaustion test was run.",
+      "fix": "Enforce queued message count and byte limits, maximum inbound message size, and an overflow disconnect policy. Own event closures and detach/drop them during transport teardown."
+    }
+  ],
+  "dependency_warnings": [
+    {
+      "package": "lru",
+      "version": "0.12.5",
+      "scope": "Only the bidirectional-chat-tui example through ratatui",
+      "advisories": [
+        "RUSTSEC-2026-0002",
+        "RUSTSEC-2026-0253"
+      ],
+      "note": "Two unsoundness advisories; exploit reachability in ratatui was not established. Upgrade the example's dependency path to lru >=0.18.2.",
+      "sources": [
+        "https://rustsec.org/advisories/RUSTSEC-2026-0002.html",
+        "https://rustsec.org/advisories/RUSTSEC-2026-0253.html"
+      ]
+    },
+    {
+      "package": "paste",
+      "version": "1.0.15",
+      "scope": "Only the bidirectional-chat-tui example through ratatui",
+      "advisories": [
+        "RUSTSEC-2024-0436"
+      ],
+      "note": "Unmaintained dependency warning, not a confirmed exploitable flaw."
+    }
+  ],
+  "hardening": [
+    {
+      "title": "Retain local password-hashing concurrency permits across cancellation",
+      "location": "crates/identity/ras-identity-local/src/lib.rs:171",
+      "note": "verify_user holds the semaphore permit in the cancellable async future, while spawn_blocking can continue after cancellation. add_user is not semaphore-limited. Transfer the permit into the blocking closure and bound registration concurrency if exposed publicly; remote exploit was not reproduced."
+    },
+    {
+      "title": "Make pending RPC registration cancellation-safe",
+      "location": "crates/rpc/bidirectional/ras-jsonrpc-bidirectional-client/src/client/mod.rs:179",
+      "note": "Caller cancellation after pending_requests.insert bypasses normal timeout/removal branches. cleanup_expired_requests exists but is not automatically scheduled. Prefer a drop guard and atomic admission; the current len-then-insert pending limit is also racy."
+    },
+    {
+      "title": "Bound response collection and login request volume",
+      "location": "crates/core/ras-transport-core/src/response.rs:48",
+      "note": "bytes/json/error_for_status collect unbounded upstream bodies, and the default HTTP transport has no timeout. Add configurable byte caps and sensible deadlines; apply login/start-flow rate limits at service/edge boundaries. These are deployment/API hardening items, not a demonstrated universal exploit."
+    }
+  ],
+  "verification": {
+    "workspace": {
+      "command": "CARGO_TARGET_DIR=/tmp/ras-security-target cargo test --workspace --all-features --locked --offline",
+      "passed": 929,
+      "failed": 0,
+      "ignored": 15,
+      "note": "13 newly added security assertions intentionally ignored; 2 pre-existing ignored tests."
+    },
+    "security_reproductions": {
+      "command": "CARGO_TARGET_DIR=/tmp/ras-security-target cargo test -p ras-identity-session -p ras-identity-oauth2 -p ras-transport-core -p ras-jsonrpc-bidirectional-client -p ras-jsonrpc-bidirectional-server -p ras-file-macro --all-features --test security_review --no-fail-fast --locked --offline -- --ignored",
+      "passed": 0,
+      "failed": 13,
+      "note": "Failures assert the required secure behavior and reproduce the reviewed defects; tests ran with loopback sockets enabled."
+    },
+    "browser": {
+      "command": "CARGO_TARGET_DIR=/tmp/ras-security-target CARGO_NET_OFFLINE=true PLAYWRIGHT_REST_PORT=34101 PLAYWRIGHT_JSONRPC_PORT=34102 npm test -- --reporter=list",
+      "passed": 11,
+      "failed": 0
+    },
+    "clippy": {
+      "scope": "All six added integration-test targets, all features, -D warnings",
+      "result": "passed"
+    },
+    "format": {
+      "command": "cargo fmt --all -- --check",
+      "result": "passed"
+    },
+    "wasm": {
+      "command": "cargo check -p ras-jsonrpc-bidirectional-client --target wasm32-unknown-unknown --no-default-features --features wasm --locked --offline",
+      "result": "passed"
+    },
+    "dependency_audit": {
+      "database_commit": "9b3a3b73a7f42606494c943e95f8196e9994df46",
+      "last_updated": "2026-09-30T09:15:39+02:00",
+      "advisory_count": 1277,
+      "vulnerabilities": 1
+    },
+    "secrets": {
+      "result": "No obvious live credentials found in tracked files by targeted key/token patterns; tracked env files are .env.example files.",
+      "limitations": "gitleaks and semgrep were unavailable. No exhaustive git-history secret scan."
+    }
+  },
+  "limitations": [
+    "Manual source review and focused test evidence do not prove absence of vulnerabilities.",
+    "No deployed-service configuration, external IdP, production proxy/CORS policy, or tenant/ownership database was tested.",
+    "No Miri, sanitizer, fuzz campaign, or independent penetration test was run.",
+    "OIDC code-flow ID-token signature omission was not classified as a vulnerability by itself: OIDC permits reliance on a directly authenticated TLS token endpoint, subject to the trust-boundary findings above."
+  ]
+}

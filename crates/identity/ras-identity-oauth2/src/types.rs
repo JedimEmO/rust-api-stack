@@ -2,6 +2,15 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
+
+/// Placeholder printed by `Debug` in place of a credential.
+pub(crate) const REDACTED: &str = "[REDACTED]";
+
+/// Redact an optional secret, keeping whether it was present.
+pub(crate) fn redact_option(value: &Option<String>) -> Option<&'static str> {
+    value.as_ref().map(|_| REDACTED)
+}
 
 /// Request to initiate OAuth2 authorization flow
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,7 +24,9 @@ pub struct AuthorizationRequest {
 }
 
 /// Response from OAuth2 authorization callback
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `Debug` redacts `code` and `binding`.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AuthorizationResponse {
     /// Authorization code; absent when the provider redirected back with an
     /// `error` (e.g. `access_denied`) instead.
@@ -31,8 +42,48 @@ pub struct AuthorizationResponse {
     pub binding: Option<String>,
 }
 
+impl fmt::Debug for AuthorizationResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AuthorizationResponse")
+            .field("code", &redact_option(&self.code))
+            .field("state", &self.state)
+            .field("error", &self.error)
+            .field("error_description", &self.error_description)
+            .field("binding", &redact_option(&self.binding))
+            .finish()
+    }
+}
+
+/// An authorization URL to send the browser to, from
+/// [`OAuth2Client::generate_authorization_url`](crate::OAuth2Client::generate_authorization_url).
+///
+/// `Debug` redacts `binding`.
+#[derive(Clone)]
+pub struct AuthorizationRedirect {
+    /// The provider's authorization URL with all query parameters set.
+    pub url: String,
+    /// The `state` parameter the callback will carry.
+    pub state: String,
+    /// The login-CSRF binding the callback must present. Store it in a cookie
+    /// on the initiating browser. `None` only for a flow started with
+    /// `generate_authorization_url_bound(.., None)`.
+    pub binding: Option<String>,
+}
+
+impl fmt::Debug for AuthorizationRedirect {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AuthorizationRedirect")
+            .field("url", &self.url)
+            .field("state", &self.state)
+            .field("binding", &redact_option(&self.binding))
+            .finish()
+    }
+}
+
 /// OAuth2 token response
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `Debug` redacts `access_token`, `refresh_token` and `id_token`.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TokenResponse {
     pub access_token: String,
     pub token_type: String,
@@ -40,6 +91,19 @@ pub struct TokenResponse {
     pub refresh_token: Option<String>,
     pub scope: Option<String>,
     pub id_token: Option<String>,
+}
+
+impl fmt::Debug for TokenResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TokenResponse")
+            .field("access_token", &REDACTED)
+            .field("token_type", &self.token_type)
+            .field("expires_in", &self.expires_in)
+            .field("refresh_token", &redact_option(&self.refresh_token))
+            .field("scope", &self.scope)
+            .field("id_token", &redact_option(&self.id_token))
+            .finish()
+    }
 }
 
 /// OAuth2 user info response (OpenID Connect compatible)

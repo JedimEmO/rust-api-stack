@@ -2,7 +2,7 @@
 name = "ras-jsonrpc-types"
 version = "0.3.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95"
 description = "JSON-RPC 2.0 protocol types and utilities"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/JedimEmO/rust-api-stack"

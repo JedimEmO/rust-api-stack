@@ -83,6 +83,22 @@ test.describe('REST API explorer', () => {
     await expect(page.locator('[data-path-param="id"]')).toHaveCount(0);
   });
 
+  test('refuses dot-only and empty path parameters without sending', async ({ page }) => {
+    // `..` in a path segment would be normalized into a different endpoint.
+    const sent: string[] = [];
+    page.on('request', (request) => {
+      if (request.url().includes('/api/v1/') && !request.url().includes('/docs')) sent.push(request.url());
+    });
+    await selectOperation(page, 'GET', '/widgets/{id}');
+    for (const value of ['..', '.', '']) {
+      await page.locator('[data-path-param="id"]').fill(value);
+      await send(page);
+      await expect(page.locator('#response-status')).toContainText('Failed');
+      await expect(page.locator('#response-output')).toContainText('Path parameter "id"');
+    }
+    expect(sent).toEqual([]);
+  });
+
   test('sends public and authenticated requests, then records history', async ({ page }) => {
     await selectOperation(page, 'GET', '/health');
     await send(page);

@@ -1,5 +1,6 @@
 use super::*;
 use crate::state::{InMemoryStateStore, OAuth2StateStore};
+use crate::types::AuthorizationRedirect;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use std::sync::Mutex;
 use url::Url;

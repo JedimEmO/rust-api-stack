@@ -75,6 +75,10 @@ let jwt = session_service
     .await?;
 ```
 
+The session's user ID is `local:alice`, the provider ID and the username together.
+Key your application's data on that ID rather than on the bare username,
+so a user at another provider with the same name stays a different user.
+
 ## How passwords are checked
 
 Each password is hashed with Argon2id and a random salt from the OS,
@@ -94,8 +98,11 @@ Passwords longer than `MAX_PASSWORD_BYTES` (1024 bytes) are refused before hashi
 and a login returns `InvalidCredentials` without running Argon2,
 so a client cannot make the server hash megabytes of input.
 
-At most five verifications run at once per provider; further logins wait for a slot.
+At most five Argon2 hashes run at once per provider,
+counting logins and `add_user` together; further calls wait for a slot.
 This bounds the CPU and memory that Argon2 can use.
+A hash already on the blocking pool runs to completion even when its caller gives up,
+so it keeps its slot until it finishes.
 It is not a rate limit: there is no per-user or per-IP limit, and no account lockout.
 Put those in front of the login endpoint.
 

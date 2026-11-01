@@ -4,8 +4,11 @@ use bon::Builder;
 use std::collections::HashMap;
 use std::time::Duration;
 
-/// Authentication configuration for the client
-#[derive(Debug, Clone, Default)]
+/// Authentication configuration for the client.
+///
+/// `Debug` prints header and parameter names but never their values or the
+/// token, so a logged configuration leaks no credential.
+#[derive(Clone, Default)]
 pub enum AuthConfig {
     /// No authentication
     #[default]
@@ -20,6 +23,50 @@ pub enum AuthConfig {
     /// Custom connection parameters (percent-encoded into the query string).
     /// Not for credentials; see `JwtHeader`.
     CustomParams { params: HashMap<String, String> },
+}
+
+impl std::fmt::Debug for AuthConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => f.write_str("None"),
+            Self::JwtHeader { .. } => f
+                .debug_struct("JwtHeader")
+                .field("token", &REDACTED)
+                .finish(),
+            Self::CustomHeaders { headers } => f
+                .debug_struct("CustomHeaders")
+                .field("headers", &RedactedValues(headers))
+                .finish(),
+            Self::CustomParams { params } => f
+                .debug_struct("CustomParams")
+                .field("params", &RedactedValues(params))
+                .finish(),
+        }
+    }
+}
+
+const REDACTED: Redacted = Redacted;
+
+/// Prints `<redacted>` in place of a secret.
+struct Redacted;
+
+impl std::fmt::Debug for Redacted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
+
+/// Prints a map's keys, sorted, with every value redacted.
+struct RedactedValues<'a>(&'a HashMap<String, String>);
+
+impl std::fmt::Debug for RedactedValues<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut keys: Vec<_> = self.0.keys().collect();
+        keys.sort();
+        f.debug_map()
+            .entries(keys.into_iter().map(|key| (key, &REDACTED)))
+            .finish()
+    }
 }
 
 /// Subprotocol the bundled server selects on upgrade.
@@ -112,8 +159,11 @@ impl ReconnectConfig {
     }
 }
 
-/// Client configuration
-#[derive(Debug, Clone, Builder)]
+/// Client configuration.
+///
+/// `Debug` redacts the token and the values of custom headers, which often
+/// carry credentials too.
+#[derive(Clone, Builder)]
 pub struct ClientConfig {
     /// WebSocket URL to connect to
     pub url: String,
@@ -145,13 +195,31 @@ pub struct ClientConfig {
     #[builder(default = Duration::from_secs(10))]
     pub connection_timeout: Duration,
 
-    /// Buffer size for incoming messages
+    /// Capacity of the outgoing message queue, and the most received
+    /// messages the browser transport queues before it disconnects
     #[builder(default = 1024)]
     pub message_buffer_size: usize,
 
     /// Whether to automatically subscribe to connection events
     #[builder(default = true)]
     pub auto_subscribe_events: bool,
+}
+
+impl std::fmt::Debug for ClientConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientConfig")
+            .field("url", &self.url)
+            .field("auth", &self.auth)
+            .field("reconnect", &self.reconnect)
+            .field("request_timeout", &self.request_timeout)
+            .field("heartbeat_interval", &self.heartbeat_interval)
+            .field("max_pending_requests", &self.max_pending_requests)
+            .field("custom_headers", &RedactedValues(&self.custom_headers))
+            .field("connection_timeout", &self.connection_timeout)
+            .field("message_buffer_size", &self.message_buffer_size)
+            .field("auto_subscribe_events", &self.auto_subscribe_events)
+            .finish()
+    }
 }
 
 impl ClientConfig {
@@ -470,6 +538,33 @@ mod tests {
             ..ReconnectConfig::default()
         };
         assert_eq!(cfg.calculate_delay(0), cfg.initial_delay);
+    }
+
+    #[test]
+    fn client_configuration_debug_must_redact_tokens() {
+        let mut config = ClientConfig::new("wss://api.example/ws");
+        config.auth = AuthConfig::JwtHeader {
+            token: "review-sensitive-token".into(),
+        };
+        config
+            .custom_headers
+            .insert("X-Api-Key".into(), "header-secret".into());
+        let printed = format!("{config:?}");
+        assert!(!printed.contains("review-sensitive-token"));
+        assert!(!printed.contains("header-secret"));
+        assert!(
+            printed.contains("X-Api-Key"),
+            "names stay visible: {printed}"
+        );
+
+        let headers = AuthConfig::CustomHeaders {
+            headers: HashMap::from([("Authorization".into(), "Bearer custom-secret".into())]),
+        };
+        let params = AuthConfig::CustomParams {
+            params: HashMap::from([("key".into(), "param-secret".into())]),
+        };
+        assert!(!format!("{headers:?}").contains("custom-secret"));
+        assert!(!format!("{params:?}").contains("param-secret"));
     }
 
     #[test]

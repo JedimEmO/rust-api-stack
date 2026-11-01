@@ -21,7 +21,13 @@ pub trait ConnectionManager: Send + Sync {
         self.add_connection(info).await
     }
 
-    /// Remove a connection
+    /// Remove a connection and close it.
+    ///
+    /// This is how a server forces a disconnect, so it must end the live
+    /// connection, not only the record of it. A manager that keeps the
+    /// server's `ChannelMessageSender` from `add_connection_with_sender`
+    /// calls its `close()`; the connection's handler then stops reading
+    /// requests, sends what is already queued and closes the socket.
     async fn remove_connection(&self, id: ConnectionId) -> Result<()>;
 
     /// Get connection information
@@ -64,7 +70,10 @@ pub trait ConnectionManager: Send + Sync {
     /// Get all subscriptions for a connection
     async fn get_subscriptions(&self, id: ConnectionId) -> Result<Vec<String>>;
 
-    /// Send a message to a specific connection
+    /// Send a message to a specific connection.
+    ///
+    /// Should not wait for a slow peer; the default manager closes a
+    /// connection whose outbound queue is full and returns an error.
     async fn send_to_connection(
         &self,
         id: ConnectionId,
@@ -183,7 +192,8 @@ pub trait ConnectionManagerExt: ConnectionManager {
             .collect())
     }
 
-    /// Disconnect all connections for a user
+    /// Disconnect all connections for a user, closing each one through
+    /// [`remove_connection`](ConnectionManager::remove_connection).
     async fn disconnect_user(&self, user_id: &str) -> Result<usize> {
         let connections = self.get_user_connections(user_id).await?;
         let count = connections.len();

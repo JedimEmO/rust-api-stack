@@ -4,7 +4,7 @@ version = "0.0.0"
 # 2018 on purpose: the generated document code, including the embedded
 # ras-spec-components source, must compile in the oldest edition a consumer uses.
 edition = "2018"
-rust-version = "1.88"
+rust-version = "1.95"
 description = "Compile fixture: both service macros with examples in an edition-2018 consumer"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/JedimEmO/rust-api-stack"

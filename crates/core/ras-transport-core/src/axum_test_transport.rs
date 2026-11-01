@@ -25,19 +25,29 @@ use crate::{HttpTransport, byte_stream_from};
 #[derive(Clone)]
 pub struct AxumTestTransport {
     server: Arc<TestServer>,
+    body_limit: usize,
 }
 
 impl AxumTestTransport {
     /// Construct from an owned `TestServer`.
     pub fn new(server: TestServer) -> Self {
-        AxumTestTransport {
-            server: Arc::new(server),
-        }
+        Self::from_arc(Arc::new(server))
     }
 
     /// Construct from a shared `TestServer`.
     pub fn from_arc(server: Arc<TestServer>) -> Self {
-        AxumTestTransport { server }
+        AxumTestTransport {
+            server,
+            body_limit: TransportResponse::DEFAULT_BODY_LIMIT,
+        }
+    }
+
+    /// Set the body limit of every response this transport returns; see
+    /// [`TransportResponse::with_body_limit`]. The default is
+    /// [`TransportResponse::DEFAULT_BODY_LIMIT`].
+    pub fn with_body_limit(mut self, limit: usize) -> Self {
+        self.body_limit = limit;
+        self
     }
 }
 
@@ -97,6 +107,6 @@ impl HttpTransport for AxumTestTransport {
             Ok::<bytes::Bytes, TransportError>(bytes)
         }));
 
-        Ok(TransportResponse::new(status, headers, body_stream))
+        Ok(TransportResponse::new(status, headers, body_stream).with_body_limit(self.body_limit))
     }
 }

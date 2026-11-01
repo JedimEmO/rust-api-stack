@@ -55,7 +55,7 @@ pub type OwnedFileByteStream = FileByteStream<'static>;
 /// The generated server answers with [`FileError::status`] and a JSON body
 /// `{"error": <client_message>}`. Variants whose message the client sees say
 /// so; never put internal detail in those.
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum FileError {
     /// The request is malformed. `400`; the message is sent to the client.
     #[error("Bad request: {0}")]
@@ -241,6 +241,10 @@ impl<'a> FileRequestContext<'a> {
 /// [`next_chunk`](Self::next_chunk) until it returns `None` or with
 /// [`drain`](Self::drain), before its part method returns. Otherwise the
 /// generated server aborts the upload with [`FileError::HandlerContract`].
+///
+/// An error from [`next_chunk`](Self::next_chunk) ends the part: every later
+/// read returns the same error, and the generated server aborts the upload
+/// with it even if the part method swallows it and returns `Ok`.
 pub struct IncomingFile<'a> {
     field_name: String,
     file_name: Option<String>,
@@ -249,6 +253,7 @@ pub struct IncomingFile<'a> {
     limit: u64,
     bytes_read: u64,
     finished: bool,
+    error: Option<FileError>,
     stream: FileByteStream<'a>,
 }
 
@@ -274,6 +279,7 @@ impl<'a> IncomingFile<'a> {
             limit,
             bytes_read: 0,
             finished: false,
+            error: None,
             stream,
         }
     }
@@ -316,9 +322,15 @@ impl<'a> IncomingFile<'a> {
     }
 
     /// Returns `true` once [`next_chunk`](Self::next_chunk) has reached the
-    /// end of the part.
+    /// end of the part. A part that failed is never finished.
     pub fn is_finished(&self) -> bool {
         self.finished
+    }
+
+    /// Returns the error that ended the part, if
+    /// [`next_chunk`](Self::next_chunk) failed.
+    pub fn error(&self) -> Option<&FileError> {
+        self.error.as_ref()
     }
 
     /// Returns the next chunk of the part, or `None` at the end.
@@ -334,28 +346,38 @@ impl<'a> IncomingFile<'a> {
     /// underlying stream pass through, which in the generated server are
     /// `BadRequest` for a malformed multipart body and `PayloadTooLarge` for a
     /// body over the server's size limit. Return the error from the part
-    /// method; the upload cannot continue.
+    /// method; the upload cannot continue. The error is final: later calls
+    /// return it again.
     pub async fn next_chunk(&mut self) -> FileResult<Option<Bytes>> {
+        if let Some(error) = &self.error {
+            return Err(error.clone());
+        }
         if self.finished {
             return Ok(None);
         }
 
-        let Some(chunk) = self.stream.next().await.transpose()? else {
-            self.finished = true;
-            return Ok(None);
+        let chunk = match self.stream.next().await {
+            Some(Ok(chunk)) => chunk,
+            Some(Err(error)) => return Err(self.fail(error)),
+            None => {
+                self.finished = true;
+                return Ok(None);
+            }
         };
 
-        let next_total = self
-            .bytes_read
-            .checked_add(chunk.len() as u64)
-            .ok_or(FileError::PayloadTooLarge)?;
-
-        if next_total > self.limit {
-            return Err(FileError::PayloadTooLarge);
+        match self.bytes_read.checked_add(chunk.len() as u64) {
+            Some(next_total) if next_total <= self.limit => {
+                self.bytes_read = next_total;
+                Ok(Some(chunk))
+            }
+            _ => Err(self.fail(FileError::PayloadTooLarge)),
         }
+    }
 
-        self.bytes_read = next_total;
-        Ok(Some(chunk))
+    /// Records `error` as the part's final error and returns it.
+    fn fail(&mut self, error: FileError) -> FileError {
+        self.error = Some(error.clone());
+        error
     }
 
     /// Reads the rest of the part and discards it.

@@ -13,7 +13,7 @@ use serde_json::Value;
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::Instant,
 };
@@ -26,6 +26,15 @@ use crate::native::NativeWebSocketTransport;
 #[cfg(target_arch = "wasm32")]
 use crate::wasm::WasmWebSocketTransport;
 
+/// The transport, shared between the client and its driver task.
+///
+/// The browser transport is neither `Send` nor `Sync` and the driver runs on
+/// the page's single-threaded executor, so on `wasm32` an `Rc` shares it.
+#[cfg(not(target_arch = "wasm32"))]
+type SharedTransport = Arc<RwLock<Box<dyn WebSocketTransport>>>;
+#[cfg(target_arch = "wasm32")]
+type SharedTransport = std::rc::Rc<RwLock<Box<dyn WebSocketTransport>>>;
+
 mod builder;
 mod driver;
 pub use builder::ClientBuilder;
@@ -33,7 +42,7 @@ pub use builder::ClientBuilder;
 /// Bidirectional JSON-RPC WebSocket client
 pub struct Client {
     config: ClientConfig,
-    transport: Arc<RwLock<Box<dyn WebSocketTransport>>>,
+    transport: SharedTransport,
     state: Arc<RwLock<ClientState>>,
     connection_id: Arc<RwLock<Option<ConnectionId>>>,
     pending_requests: Arc<DashMap<Value, PendingRequest>>,
@@ -42,6 +51,8 @@ pub struct Client {
     rpc_request_handlers: Arc<DashMap<String, RpcRequestHandler>>,
     connection_event_handlers: Arc<DashMap<String, ConnectionEventHandler>>,
     request_id_counter: Arc<AtomicU64>,
+    /// Calls in flight, bounded by `max_pending_requests`
+    calls_in_flight: AtomicUsize,
     shutdown_tx: Arc<RwLock<Option<oneshot::Sender<()>>>>,
     message_tx: Arc<RwLock<Option<mpsc::Sender<BidirectionalMessage>>>>,
     /// Signaled when the server's ConnectionEstablished message arrives
@@ -63,7 +74,7 @@ impl Client {
 
         Ok(Self {
             config,
-            transport: Arc::new(RwLock::new(transport)),
+            transport: SharedTransport::new(RwLock::new(transport)),
             state: Arc::new(RwLock::new(ClientState::Disconnected)),
             connection_id: Arc::new(RwLock::new(None)),
             pending_requests: Arc::new(DashMap::new()),
@@ -72,6 +83,7 @@ impl Client {
             rpc_request_handlers: Arc::new(DashMap::new()),
             connection_event_handlers: Arc::new(DashMap::new()),
             request_id_counter: Arc::new(AtomicU64::new(1)),
+            calls_in_flight: AtomicUsize::new(0),
             shutdown_tx: Arc::new(RwLock::new(None)),
             message_tx: Arc::new(RwLock::new(None)),
             connected_notify: Arc::new(tokio::sync::Notify::new()),
@@ -124,7 +136,17 @@ impl Client {
             ));
         }
 
-        *self.state.write().await = ClientState::Connected;
+        {
+            // The driver marks the client Failed if the server closed the
+            // connection right after the handshake; do not overwrite that.
+            let mut state = self.state.write().await;
+            if *state != ClientState::Connecting {
+                return Err(ClientError::connection(
+                    "Connection closed during the handshake",
+                ));
+            }
+            *state = ClientState::Connected;
+        }
 
         // Start heartbeat once connected (its loop exits when state leaves
         // Connected, so starting earlier would race it to an immediate stop)
@@ -197,40 +219,26 @@ impl Client {
 
         let request = JsonRpcRequest::new(method.to_string(), params, Some(request_id.clone()));
 
+        // Take a slot first; the guard gives it back and removes the pending
+        // entry however the call ends, including when the caller drops this
+        // future part-way.
+        let _slot = PendingSlot::acquire(self, request_id.clone())?;
+
         let (response_tx, response_rx) = oneshot::channel();
         let pending = PendingRequest {
             id: request_id.clone(),
             sender: response_tx,
             created_at: Instant::now(),
         };
+        self.pending_requests.insert(request_id, pending);
 
-        if self.pending_requests.len() >= self.config.max_pending_requests {
-            return Err(ClientError::internal("Too many pending requests"));
-        }
-
-        self.pending_requests.insert(request_id.clone(), pending);
-
-        // Send the request; on failure, drop our pending entry so the map
-        // cannot fill up with waiters that will never be answered.
         let message = BidirectionalMessage::Request(request);
-        if let Err(e) = self.send_message(message).await {
-            self.pending_requests.remove(&request_id);
-            return Err(e);
-        }
+        self.send_message(message).await?;
 
-        // Wait for response with timeout; every failure path removes our
-        // entry for the same reason (the success path is removed by the
-        // message handler when the response arrives).
         match tokio::time::timeout(self.config.request_timeout, response_rx).await {
             Ok(Ok(response)) => Ok(response),
-            Ok(Err(_)) => {
-                self.pending_requests.remove(&request_id);
-                Err(ClientError::internal("Response channel closed"))
-            }
-            Err(_) => {
-                self.pending_requests.remove(&request_id);
-                Err(ClientError::timeout(self.config.request_timeout.as_secs()))
-            }
+            Ok(Err(_)) => Err(ClientError::internal("Response channel closed")),
+            Err(_) => Err(ClientError::timeout(self.config.request_timeout.as_secs())),
         }
     }
 
@@ -305,7 +313,11 @@ impl Client {
         debug!("Registered connection event handler: {}", name);
     }
 
-    /// Register a handler for RPC requests from the server
+    /// Register a handler for RPC requests from the server.
+    ///
+    /// Each request runs on its own task, so a slow handler does not hold up
+    /// incoming messages. At most `message_buffer_size` run at once; requests
+    /// beyond that are dropped with a logged error.
     pub fn on_rpc_request(&self, method: &str, handler: RpcRequestHandler) {
         self.rpc_request_handlers
             .insert(method.to_string(), handler);
@@ -381,6 +393,36 @@ impl Client {
                 ));
             }
         }
+    }
+}
+
+/// One call's claim on a `max_pending_requests` slot and its pending entry.
+///
+/// Dropping it frees the slot and removes the entry, so a call that is
+/// answered, times out, fails to send or is dropped by its caller leaves
+/// nothing behind.
+struct PendingSlot<'a> {
+    client: &'a Client,
+    request_id: Value,
+}
+
+impl<'a> PendingSlot<'a> {
+    fn acquire(client: &'a Client, request_id: Value) -> ClientResult<Self> {
+        let max = client.config.max_pending_requests;
+        client
+            .calls_in_flight
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                (n < max).then_some(n + 1)
+            })
+            .map_err(|_| ClientError::internal("Too many pending requests"))?;
+        Ok(Self { client, request_id })
+    }
+}
+
+impl Drop for PendingSlot<'_> {
+    fn drop(&mut self) {
+        self.client.pending_requests.remove(&self.request_id);
+        self.client.calls_in_flight.fetch_sub(1, Ordering::AcqRel);
     }
 }
 

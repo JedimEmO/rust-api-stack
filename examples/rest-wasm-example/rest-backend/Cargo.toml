@@ -2,7 +2,7 @@
 name = "rest-backend"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95"
 description = "Backend for the Rust API Stack REST OpenAPI usage example"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/JedimEmO/rust-api-stack"

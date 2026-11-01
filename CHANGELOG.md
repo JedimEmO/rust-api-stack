@@ -57,7 +57,7 @@ Publish order follows the dependencies: `cargo publish --workspace` handles it.
 - `feature_gated: true` puts the generated server and client behind the API crate's own `server`, `client` and `reqwest` features,
   so a browser client does not compile axum.
 - The generated code compiles in consumer crates on any edition from 2018.
-- The crates need Rust 1.88 or newer.
+- The crates need Rust 1.95 or newer.
 
 ### Auth
 
@@ -75,6 +75,7 @@ Publish order follows the dependencies: `cargo publish --workspace` handles it.
 - `ras-identity-oauth2`: OAuth2 authorization-code sign-in with PKCE and state, and ID token claim validation.
 - `ras-identity-session`: HMAC-signed JWT sessions with `iss` and `aud` checks, an in-memory session registry for revocation,
   and a `JwtAuthProvider` that the generated services accept.
+  User IDs name the identity provider as well as the subject, such as `local:alice`.
 
 ### Observability
 

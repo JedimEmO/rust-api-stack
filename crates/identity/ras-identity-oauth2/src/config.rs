@@ -44,9 +44,19 @@ pub struct OAuth2ProviderConfig {
 impl OAuth2ProviderConfig {
     /// Validate the configuration before it is used to talk to a provider.
     ///
-    /// Rejects endpoint URLs that are not `https://` unless
-    /// `allow_insecure_endpoints` is set.
+    /// Rejects an empty `provider_id` or one containing `:`, and endpoint URLs
+    /// that are not `https://` unless `allow_insecure_endpoints` is set.
+    ///
+    /// The identities this provider issues are named `oauth2:<provider_id>`,
+    /// and session user IDs append the subject after another `:`, so a `:` in
+    /// the ID could make two providers' users share one user ID.
     pub fn validate(&self) -> OAuth2Result<()> {
+        if self.provider_id.is_empty() || self.provider_id.contains(':') {
+            return Err(OAuth2Error::ConfigError(format!(
+                "provider_id {:?} must be non-empty and must not contain ':'",
+                self.provider_id
+            )));
+        }
         if self.allow_insecure_endpoints {
             return Ok(());
         }
@@ -175,6 +185,21 @@ mod tests {
             user_info_mapping: None,
             metadata_claims: Vec::new(),
             allow_insecure_endpoints: false,
+        }
+    }
+
+    #[test]
+    fn validate_rejects_a_provider_id_that_could_alias_another() {
+        // Identities are "oauth2:<provider_id>:<subject>"; a ':' in the ID would let
+        // `google` + subject `a:b` and `google:a` + subject `b` name the same user.
+        for bad in ["", "google:a"] {
+            let mut p = provider();
+            p.provider_id = bad.into();
+            p.allow_insecure_endpoints = true;
+            assert!(
+                matches!(p.validate(), Err(OAuth2Error::ConfigError(msg)) if msg.contains("provider_id")),
+                "{bad:?} must be rejected"
+            );
         }
     }
 

@@ -258,50 +258,86 @@ async fn default_impl_is_equivalent_to_new() {
     let _ = Arc::new(DefaultConnectionManager::default());
 }
 
+/// A connection with a capacity-1 queue that is already full.
+/// The receiver is returned so the queue is full, not closed.
+async fn join_full(
+    mgr: &DefaultConnectionManager,
+) -> (
+    ConnectionId,
+    ChannelMessageSender,
+    mpsc::Receiver<OutboundMessage>,
+) {
+    let id = ConnectionId::new();
+    let (tx, rx) = mpsc::channel(1);
+    let sender = ChannelMessageSender::new(id, tx);
+    sender.send(BidirectionalMessage::Ping).await.unwrap();
+    mgr.add_connection_with_sender_direct(ConnectionInfo::new(id), sender.clone())
+        .await
+        .unwrap();
+    (id, sender, rx)
+}
+
 #[tokio::test]
-async fn broadcast_to_full_channel_does_not_block_map_access() {
-    // A slow consumer with a full bounded channel must not wedge the manager:
-    // if shard guards were held across the send await,
-    // the concurrent remove_connection below would deadlock and trip the
-    // timeout.
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        let mgr = Arc::new(DefaultConnectionManager::new());
+async fn a_slow_subscriber_must_not_stall_broadcasts() {
+    let manager = DefaultConnectionManager::new();
+    let (slow, slow_sender, _slow_rx) = join_full(&manager).await;
+    manager.add_subscription(slow, "room".into()).await.unwrap();
+    let (healthy, mut healthy_rx) = join(&manager).await;
+    manager
+        .add_subscription(healthy, "room".into())
+        .await
+        .unwrap();
 
-        // Connection with a capacity-1 channel, pre-filled so sends park.
-        let id = ConnectionId::new();
-        let (tx, mut rx) = mpsc::channel(1);
-        tx.send(OutboundMessage::from(BidirectionalMessage::Ping))
-            .await
-            .unwrap();
-        let sender = ChannelMessageSender::new(id, tx);
-        mgr.add_connection_with_sender_direct(ConnectionInfo::new(id), sender)
-            .await
-            .unwrap();
-        mgr.add_subscription(id, "topic".into()).await.unwrap();
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_millis(100),
+        manager.broadcast_to_topic("room", BidirectionalMessage::Ping),
+    )
+    .await;
+    assert!(
+        healthy_rx.try_recv().is_ok(),
+        "healthy recipients did receive the broadcast"
+    );
+    let sent = outcome
+        .expect("slow recipient must not hold up the publisher")
+        .unwrap();
+    assert_eq!(sent, 1);
+    assert!(
+        slow_sender.is_closed(),
+        "a recipient that cannot keep up is disconnected"
+    );
+    assert!(!manager.get_topic_connections("room").contains(&slow));
+}
 
-        let broadcast = {
-            let mgr = Arc::clone(&mgr);
-            tokio::spawn(async move {
-                mgr.broadcast_to_topic("topic", BidirectionalMessage::Pong)
-                    .await
-            })
-        };
+#[tokio::test]
+async fn send_to_a_full_queue_fails_fast_and_closes_the_connection() {
+    let manager = DefaultConnectionManager::new();
+    let (slow, slow_sender, _slow_rx) = join_full(&manager).await;
 
-        // Give the broadcast a chance to park on the full channel.
-        tokio::task::yield_now().await;
-
-        // Must complete while the broadcast is still parked.
-        mgr.remove_connection(id).await.unwrap();
-        assert_eq!(mgr.connection_count(), 0);
-
-        // Drain one message so the parked send resolves and the broadcast
-        // can finish.
-        let _ = rx.recv().await;
-        let sent = broadcast.await.unwrap().unwrap();
-        assert_eq!(sent, 1);
-    })
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_millis(100),
+        manager.send_to_connection(slow, BidirectionalMessage::Pong),
+    )
     .await
-    .expect("manager deadlocked under a slow consumer");
+    .expect("send_to_connection must not wait on a slow peer");
+    assert!(outcome.is_err());
+    assert!(slow_sender.is_closed());
+    // A closed sender refuses everything, including waiting sends.
+    assert!(slow_sender.send(BidirectionalMessage::Pong).await.is_err());
+}
+
+#[tokio::test]
+async fn remove_connection_closes_the_live_connection() {
+    let manager = DefaultConnectionManager::new();
+    let (id, _rx) = join(&manager).await;
+    let sender = manager.get_sender(id).unwrap();
+    assert!(!sender.is_closed());
+
+    manager.remove_connection(id).await.unwrap();
+
+    assert!(sender.is_closed());
+    tokio::time::timeout(std::time::Duration::from_millis(100), sender.closed())
+        .await
+        .expect("the handler's close signal fires");
 }
 
 #[tokio::test]

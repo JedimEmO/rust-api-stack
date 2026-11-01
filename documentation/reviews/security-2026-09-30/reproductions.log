@@ -1,0 +1,230 @@
+   Compiling tracing-core v0.1.36
+   Compiling log v0.4.29
+   Compiling bitflags v2.11.1
+   Compiling tokio v1.52.3
+   Compiling futures-util v0.3.32
+   Compiling getrandom v0.2.17
+   Compiling futures-executor v0.3.32
+   Compiling regex-automata v0.4.14
+   Compiling chrono v0.4.44
+   Compiling uuid v1.23.1
+   Compiling wasm-bindgen v0.2.118
+   Compiling futures v0.3.32
+   Compiling ring v0.17.14
+   Compiling rustix v1.1.4
+   Compiling tracing v0.1.44
+   Compiling axum-core v0.5.6
+   Compiling js-sys v0.3.95
+   Compiling rustls-webpki v0.103.13
+   Compiling tempfile v3.27.0
+   Compiling regex v1.12.3
+   Compiling rustls v0.23.38
+   Compiling expect-json v1.10.1
+   Compiling multer v3.1.0
+   Compiling rust-multipart-rfc7578_2 v0.8.0
+   Compiling tokio-util v0.7.18
+   Compiling tokio-tungstenite v0.29.0
+   Compiling tower v0.5.3
+   Compiling tokio-rustls v0.26.4
+   Compiling ras-identity-session v0.4.0 (./crates/identity/ras-identity-session)
+   Compiling ras-identity-local v0.3.0 (./crates/identity/ras-identity-local)
+   Compiling criterion v0.5.1
+   Compiling ras-jsonrpc-bidirectional-types v0.2.0 (./crates/rpc/bidirectional/ras-jsonrpc-bidirectional-types)
+   Compiling tower-http v0.6.8
+   Compiling h2 v0.4.16
+   Compiling wasm-bindgen-futures v0.4.68
+   Compiling web-sys v0.3.95
+   Compiling ras-jsonrpc-bidirectional-client v0.3.0 (./crates/rpc/bidirectional/ras-jsonrpc-bidirectional-client)
+   Compiling hyper v1.9.0
+   Compiling hyper-util v0.1.20
+   Compiling axum v0.8.9
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.12.28
+   Compiling axum-test v18.7.0
+   Compiling ras-jsonrpc-bidirectional-server v0.3.0 (./crates/rpc/bidirectional/ras-jsonrpc-bidirectional-server)
+   Compiling ras-identity-oauth2 v0.3.0 (./crates/identity/ras-identity-oauth2)
+   Compiling ras-transport-core v0.1.0 (./crates/core/ras-transport-core)
+   Compiling ras-file-macro v0.2.1 (./crates/rest/ras-file-macro)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.91s
+     Running tests/security_review.rs (/tmp/ras-security-target/debug/deps/security_review-876dece9cd1c2130)
+
+running 1 test
+test exceeding_the_file_limit_must_leave_a_terminal_error ... FAILED
+
+failures:
+
+---- exceeding_the_file_limit_must_leave_a_terminal_error stdout ----
+
+thread 'exceeding_the_file_limit_must_leave_a_terminal_error' (1000145) panicked at crates/rest/ras-file-macro/tests/security_review.rs:16:5:
+assertion failed: matches!(file.drain().await, Err(FileError::PayloadTooLarge))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    exceeding_the_file_limit_must_leave_a_terminal_error
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p ras-file-macro --test security_review`
+     Running tests/security_review.rs (/tmp/ras-security-target/debug/deps/security_review-c8c4207687d94641)
+
+running 3 tests
+test default_authorization_flow_must_be_bound_to_the_initiating_browser ... FAILED
+test public_client_must_reject_insecure_provider_configuration ... FAILED
+test token_exchange_must_not_forward_credentials_to_a_redirect_target ... FAILED
+
+failures:
+
+---- default_authorization_flow_must_be_bound_to_the_initiating_browser stdout ----
+
+thread 'default_authorization_flow_must_be_bound_to_the_initiating_browser' (1000147) panicked at crates/identity/ras-identity-oauth2/tests/security_review.rs:60:5:
+the convenience flow has no browser binding; its state can be completed from another browser
+
+---- public_client_must_reject_insecure_provider_configuration stdout ----
+
+thread 'public_client_must_reject_insecure_provider_configuration' (1000148) panicked at crates/identity/ras-identity-oauth2/tests/security_review.rs:41:5:
+assertion failed: client.generate_authorization_url(&provider, HashMap::new()).await.is_err()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- token_exchange_must_not_forward_credentials_to_a_redirect_target stdout ----
+
+thread 'token_exchange_must_not_forward_credentials_to_a_redirect_target' (1000149) panicked at crates/identity/ras-identity-oauth2/tests/security_review.rs:118:5:
+the redirect target received the OAuth client_secret in the replayed POST body
+
+
+failures:
+    default_authorization_flow_must_be_bound_to_the_initiating_browser
+    public_client_must_reject_insecure_provider_configuration
+    token_exchange_must_not_forward_credentials_to_a_redirect_target
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p ras-identity-oauth2 --test security_review`
+     Running tests/security_review.rs (/tmp/ras-security-target/debug/deps/security_review-813d443734354670)
+
+running 2 tests
+test logging_in_at_another_provider_must_not_evict_the_victim_session ... FAILED
+test different_providers_must_not_resolve_to_the_same_user_id ... FAILED
+
+failures:
+
+---- logging_in_at_another_provider_must_not_evict_the_victim_session stdout ----
+
+thread 'logging_in_at_another_provider_must_not_evict_the_victim_session' (1000152) panicked at crates/identity/ras-identity-session/tests/security_review.rs:84:5:
+assertion failed: service.verify_session(&victim).await.is_ok()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- different_providers_must_not_resolve_to_the_same_user_id stdout ----
+
+thread 'different_providers_must_not_resolve_to_the_same_user_id' (1000151) panicked at crates/identity/ras-identity-session/tests/security_review.rs:65:5:
+assertion `left != right` failed: independent identities must retain distinct ownership keys
+  left: "12345"
+ right: "12345"
+
+
+failures:
+    different_providers_must_not_resolve_to_the_same_user_id
+    logging_in_at_another_provider_must_not_evict_the_victim_session
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p ras-identity-session --test security_review`
+     Running tests/security_review.rs (/tmp/ras-security-target/debug/deps/security_review-0c93bddd8d126548)
+
+running 2 tests
+test client_configuration_debug_must_redact_tokens ... FAILED
+test peer_close_must_not_deadlock_the_native_transport ... FAILED
+
+failures:
+
+---- client_configuration_debug_must_redact_tokens stdout ----
+
+thread 'client_configuration_debug_must_redact_tokens' (1000154) panicked at crates/rpc/bidirectional/ras-jsonrpc-bidirectional-client/tests/security_review.rs:20:5:
+assertion failed: !format!("{config:?}").contains("review-sensitive-token")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- peer_close_must_not_deadlock_the_native_transport stdout ----
+
+thread 'peer_close_must_not_deadlock_the_native_transport' (1000155) panicked at crates/rpc/bidirectional/ras-jsonrpc-bidirectional-client/tests/security_review.rs:49:5:
+a remote close must release the transport instead of waiting on itself
+
+
+failures:
+    client_configuration_debug_must_redact_tokens
+    peer_close_must_not_deadlock_the_native_transport
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+
+error: test failed, to rerun pass `-p ras-jsonrpc-bidirectional-client --test security_review`
+     Running tests/security_review.rs (/tmp/ras-security-target/debug/deps/security_review-096e84b8d0a9143c)
+
+running 3 tests
+test forced_disconnect_must_stop_authenticated_requests ... FAILED
+test blocked_socket_write_must_not_suspend_revocation_checks ... FAILED
+test a_slow_subscriber_must_not_stall_broadcasts ... FAILED
+
+failures:
+
+---- forced_disconnect_must_stop_authenticated_requests stdout ----
+
+thread 'forced_disconnect_must_stop_authenticated_requests' (1000159) panicked at crates/rpc/bidirectional/ras-jsonrpc-bidirectional-server/tests/security_review.rs:91:13:
+assertion `left != right` failed: forced-disconnected user still executes an authenticated operation
+  left: Some(Bool(true))
+ right: Some(Bool(true))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- blocked_socket_write_must_not_suspend_revocation_checks stdout ----
+
+thread 'blocked_socket_write_must_not_suspend_revocation_checks' (1000158) panicked at crates/rpc/bidirectional/ras-jsonrpc-bidirectional-server/tests/security_review.rs:207:5:
+socket backpressure suppressed every revocation check and the idle timeout
+
+---- a_slow_subscriber_must_not_stall_broadcasts stdout ----
+
+thread 'a_slow_subscriber_must_not_stall_broadcasts' (1000157) panicked at crates/rpc/bidirectional/ras-jsonrpc-bidirectional-server/tests/security_review.rs:141:5:
+slow recipient must be dropped, refused, or timed out so publishers can continue
+
+
+failures:
+    a_slow_subscriber_must_not_stall_broadcasts
+    blocked_socket_write_must_not_suspend_revocation_checks
+    forced_disconnect_must_stop_authenticated_requests
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+error: test failed, to rerun pass `-p ras-jsonrpc-bidirectional-server --test security_review`
+     Running tests/security_review.rs (/tmp/ras-security-target/debug/deps/security_review-98b144f5cf18a2b2)
+
+running 2 tests
+test request_debug_must_redact_bearer_credentials ... FAILED
+test a_dot_only_parameter_must_not_change_the_endpoint_path ... FAILED
+
+failures:
+
+---- request_debug_must_redact_bearer_credentials stdout ----
+
+thread 'request_debug_must_redact_bearer_credentials' (1000162) panicked at crates/core/ras-transport-core/tests/security_review.rs:26:5:
+assertion failed: !format!("{request:?}").contains("review-sensitive-token")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- a_dot_only_parameter_must_not_change_the_endpoint_path stdout ----
+
+thread 'a_dot_only_parameter_must_not_change_the_endpoint_path' (1000161) panicked at crates/core/ras-transport-core/tests/security_review.rs:11:9:
+assertion `left == right` failed: a caller-controlled id must not redirect an authenticated operation
+  left: "/items/delete"
+ right: "/items/./delete"
+
+
+failures:
+    a_dot_only_parameter_must_not_change_the_endpoint_path
+    request_debug_must_redact_bearer_credentials
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p ras-transport-core --test security_review`
+error: 6 targets failed:
+    `-p ras-file-macro --test security_review`
+    `-p ras-identity-oauth2 --test security_review`
+    `-p ras-identity-session --test security_review`
+    `-p ras-jsonrpc-bidirectional-client --test security_review`
+    `-p ras-jsonrpc-bidirectional-server --test security_review`
+    `-p ras-transport-core --test security_review`

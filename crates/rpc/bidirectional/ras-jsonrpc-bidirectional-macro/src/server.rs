@@ -239,7 +239,8 @@ pub fn generate_server_code(
                 self.connection_manager.get_connection(self.client_id).await
             }
 
-            /// Disconnect the client.
+            /// Disconnect the client: the connection stops taking requests, sends what is
+            /// already queued for it and closes.
             pub async fn disconnect(&self) -> #types::Result<()> {
                 self.connection_manager.remove_connection(self.client_id).await
             }
@@ -460,6 +461,7 @@ pub fn generate_server_code(
             require_auth: bool,
             max_connections: ::std::option::Option<usize>,
             max_message_size: ::std::option::Option<usize>,
+            message_channel_capacity: ::std::option::Option<usize>,
             subscription_limits: ::std::option::Option<#server::SubscriptionLimits>,
             keepalive: ::std::option::Option<#server::KeepaliveConfig>,
             on_permission_change: ::std::option::Option<#server::PermissionChangePolicy>,
@@ -479,6 +481,7 @@ pub fn generate_server_code(
                     require_auth: true,
                     max_connections: Some(#server::service::DEFAULT_MAX_CONNECTIONS),
                     max_message_size: None,
+                    message_channel_capacity: None,
                     subscription_limits: None,
                     keepalive: None,
                     on_permission_change: None,
@@ -503,6 +506,13 @@ pub fn generate_server_code(
             /// Maximum inbound message size in bytes, enforced at the transport.
             pub fn max_message_size(mut self, max_message_size: usize) -> Self {
                 self.max_message_size = Some(max_message_size);
+                self
+            }
+
+            /// Messages queued for one connection's socket before the connection counts as too
+            /// slow and is closed. Defaults to 1024.
+            pub fn message_channel_capacity(mut self, capacity: usize) -> Self {
+                self.message_channel_capacity = Some(capacity);
                 self
             }
 
@@ -565,6 +575,7 @@ pub fn generate_server_code(
                     .require_auth(self.require_auth)
                     .max_connections(self.max_connections)
                     .maybe_max_message_size(self.max_message_size)
+                    .maybe_message_channel_capacity(self.message_channel_capacity)
                     .subscription_limits(self.subscription_limits.unwrap_or_default())
                     .maybe_keepalive(self.keepalive)
                     .maybe_on_permission_change(self.on_permission_change)

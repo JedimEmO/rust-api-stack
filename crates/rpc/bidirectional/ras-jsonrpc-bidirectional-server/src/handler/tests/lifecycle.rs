@@ -138,3 +138,35 @@ async fn handler_loop_records_close_reason_without_socket() {
             .contains(&Some("client bye".to_string()))
     );
 }
+
+#[tokio::test]
+async fn on_disconnect_runs_once_with_the_peer_close_reason() {
+    let handler = Arc::new(RecordingLifecycle::new());
+    let mut socket =
+        InMemorySocket::closing([WebSocketIoMessage::Close(Some("client bye".to_string()))]);
+    let (_tx, rx) = mpsc::channel(4);
+
+    WebSocketHandler::new(handler.clone(), ctx(), rx, 1024)
+        .run_with_io(&mut socket)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        handler.disconnect_reasons(),
+        vec![Some("client bye".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn on_disconnect_runs_once_when_the_socket_ends() {
+    let handler = Arc::new(RecordingLifecycle::new());
+    let mut socket = InMemorySocket::closing([]);
+    let (_tx, rx) = mpsc::channel(4);
+
+    WebSocketHandler::new(handler.clone(), ctx(), rx, 1024)
+        .run_with_io(&mut socket)
+        .await
+        .unwrap();
+
+    assert_eq!(handler.disconnect_reasons(), vec![None]);
+}

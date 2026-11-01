@@ -51,8 +51,16 @@ pub struct VerifiedIdentity {
 }
 ```
 
-`subject` is the stable user identifier within that provider.
-`ras-identity-session` copies it into the JWT `sub` claim.
+`subject` is the stable user identifier within that provider,
+and only within it: two providers can both have a user `12345`.
+`ras-identity-session` therefore writes `"<provider_id>:<subject>"` into the JWT `sub` claim,
+and that becomes the user ID a service sees.
+
+A session service registers a provider under the ID that `provider_id()` returns,
+which must not be empty or contain `:`.
+The identity's `provider_id` must be that same ID,
+or a sub-namespace of it such as `oauth2:google` under `oauth2`;
+`ras-identity-session` refuses a login that names any other provider.
 
 ## Built-in permission providers
 

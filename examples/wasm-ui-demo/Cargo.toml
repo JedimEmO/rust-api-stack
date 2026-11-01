@@ -2,7 +2,7 @@
 name = "wasm-ui-demo"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95"
 description = "Dominator WASM UI demo using the generated Rust API Stack JSON-RPC client"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/JedimEmO/rust-api-stack"

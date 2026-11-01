@@ -7,7 +7,7 @@ async fn handle_callback_rejects_state_for_wrong_provider_without_transport_call
     let client = client_with_transport(state_store, transport.clone());
     let provider_config = provider_config();
 
-    let (_, state) = client
+    let AuthorizationRedirect { state, binding, .. } = client
         .generate_authorization_url(&provider_config, HashMap::new())
         .await
         .unwrap();
@@ -23,7 +23,7 @@ async fn handle_callback_rejects_state_for_wrong_provider_without_transport_call
                 state,
                 error: None,
                 error_description: None,
-                binding: None,
+                binding,
             },
         )
         .await
@@ -40,7 +40,7 @@ async fn i5_handle_callback_maps_provider_error_to_fixed_variant_without_descrip
     let client = client_with_transport(state_store, transport.clone());
     let provider_config = provider_config();
 
-    let (_, state) = client
+    let AuthorizationRedirect { state, binding, .. } = client
         .generate_authorization_url(&provider_config, HashMap::new())
         .await
         .unwrap();
@@ -54,7 +54,7 @@ async fn i5_handle_callback_maps_provider_error_to_fixed_variant_without_descrip
                 state,
                 error: Some("access_denied".to_string()),
                 error_description: Some("user denied consent <script>".to_string()),
-                binding: None,
+                binding,
             },
         )
         .await
@@ -76,7 +76,7 @@ async fn i5_handle_callback_without_code_or_error_is_invalid_callback() {
     let client = client_with_transport(state_store, transport.clone());
     let provider_config = provider_config();
 
-    let (_, state) = client
+    let AuthorizationRedirect { state, binding, .. } = client
         .generate_authorization_url(&provider_config, HashMap::new())
         .await
         .unwrap();
@@ -89,7 +89,7 @@ async fn i5_handle_callback_without_code_or_error_is_invalid_callback() {
                 state,
                 error: None,
                 error_description: None,
-                binding: None,
+                binding,
             },
         )
         .await
@@ -127,7 +127,7 @@ async fn handle_callback_omits_code_verifier_when_pkce_is_disabled() {
     let mut provider_config = provider_config();
     provider_config.use_pkce = false;
 
-    let (_, state) = client
+    let AuthorizationRedirect { state, binding, .. } = client
         .generate_authorization_url(&provider_config, HashMap::new())
         .await
         .unwrap();
@@ -140,7 +140,7 @@ async fn handle_callback_omits_code_verifier_when_pkce_is_disabled() {
                 state,
                 error: None,
                 error_description: None,
-                binding: None,
+                binding,
             },
         )
         .await
@@ -167,7 +167,7 @@ async fn handle_callback_enforces_session_binding() {
 
     // A callback missing the binding is rejected before any token
     // exchange (and the one-use state is burned).
-    let (_, state) = client
+    let AuthorizationRedirect { state, .. } = client
         .generate_authorization_url_bound(&config, HashMap::new(), Some("cookie-123".to_string()))
         .await
         .unwrap();
@@ -188,7 +188,7 @@ async fn handle_callback_enforces_session_binding() {
     assert!(transport.token_requests().is_empty());
 
     // The matching binding completes the flow.
-    let (_, state) = client
+    let AuthorizationRedirect { state, .. } = client
         .generate_authorization_url_bound(&config, HashMap::new(), Some("cookie-123".to_string()))
         .await
         .unwrap();
@@ -215,7 +215,7 @@ async fn i7_handle_callback_rejects_wrong_binding_value() {
     let client = client_with_transport(state_store.clone(), transport.clone());
     let config = provider_config();
 
-    let (_, state) = client
+    let AuthorizationRedirect { state, .. } = client
         .generate_authorization_url_bound(&config, HashMap::new(), Some("cookie-123".to_string()))
         .await
         .unwrap();
@@ -236,7 +236,7 @@ async fn i7_handle_callback_rejects_wrong_binding_value() {
     assert!(transport.token_requests().is_empty());
 
     // An unbound flow still ignores whatever the callback presents.
-    let (_, state) = client
+    let AuthorizationRedirect { state, .. } = client
         .generate_authorization_url_bound(&config, HashMap::new(), None)
         .await
         .unwrap();

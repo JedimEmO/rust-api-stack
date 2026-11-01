@@ -35,7 +35,11 @@ impl UserPermissions for ChatPermissions {
         &self,
         identity: &VerifiedIdentity,
     ) -> ras_identity_core::IdentityResult<Vec<String>> {
-        // Check if user is in admin configuration
+        // Configured admins are local accounts; a namesake at another provider is
+        // a different user and gets no admin rights.
+        if identity.provider_id != "local" {
+            return Ok(vec!["user".to_string()]);
+        }
         for admin_user in &self.admin_users {
             if admin_user.username == identity.subject {
                 return Ok(admin_user.permissions.clone());

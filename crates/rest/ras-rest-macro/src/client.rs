@@ -330,12 +330,12 @@ fn generate_client_method_with_timeout(
         // Handle path parameter substitution. The value is percent-encoded for
         // a single path segment so a `/`, `?`, `#`, etc. in a caller-supplied
         // path parameter cannot escape its slot and alter the request's path or
-        // query.
+        // query; `.`, `..` and empty values fail the call before it is sent.
         let placeholder = format!("{{{}}}", param_name);
         path_substitutions.push(quote! {
             .replace(
                 #placeholder,
-                &::ras_transport_core::encode_path_segment(&#param_name.to_string()),
+                &::ras_transport_core::encode_path_segment(&#param_name.to_string())?,
             )
         });
     }

@@ -87,6 +87,8 @@ curl -fsS -X POST http://127.0.0.1:3000/auth/login \
 ```
 
 The response holds the JWT in `token`, its expiry in `expires_at` and the user id in `user_id`.
+The user id names the identity provider as well as the username, here `local:demo`,
+and the chat shows it as the user's name.
 
 ## WebSocket authentication
 

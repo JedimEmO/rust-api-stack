@@ -2,7 +2,7 @@
 name = "ras-permission-manifest"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95"
 description = "Typed permission manifest data structures for Rust API Stack service definitions"
 keywords = ["api", "auth", "permissions", "manifest"]
 categories = ["api-bindings", "data-structures", "web-programming"]

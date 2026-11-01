@@ -35,6 +35,9 @@ use std::sync::Arc;
 pub mod client;
 pub mod config;
 pub mod error;
+// The queue is the WASM transport's; native shares only its size limit.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+mod inbound;
 
 #[doc(hidden)]
 #[path = "private.rs"]

@@ -178,6 +178,36 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  msrv:
+    name: Minimum Rust version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - name: Read the declared rust-version
+        id: msrv
+        run: |
+          versions=$(cargo metadata --no-deps --format-version 1 --locked |
+            jq -r '[.packages[] | select(.publish != []) | .rust_version] | unique | .[]')
+          if [ "$(echo "$versions" | wc -l)" -ne 1 ]; then
+            echo "Published crates declare different rust-version values: $versions" >&2
+            exit 1
+          fi
+          echo "version=$versions" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check the published crates on the declared rust-version
+        run: |
+          packages=$(cargo metadata --no-deps --format-version 1 --locked |
+            jq -r '.packages[] | select(.publish != []) | "-p \(.name)"')
+          # shellcheck disable=SC2086
+          cargo +${{ steps.msrv.outputs.version }} check --locked --all-features $packages
+
   feature-matrix:
     name: Feature matrix
     runs-on: ubuntu-latest

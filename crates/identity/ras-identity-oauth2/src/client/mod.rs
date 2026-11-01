@@ -71,12 +71,17 @@ impl OAuth2Client {
         &self.state_store
     }
 
-    /// Handle OAuth2 callback and exchange code for tokens
+    /// Handle OAuth2 callback and exchange code for tokens.
+    ///
+    /// Fails with [`OAuth2Error::ConfigError`] when `provider_config` does not
+    /// pass [`OAuth2ProviderConfig::validate`], before the state is consumed.
     pub async fn handle_callback(
         &self,
         provider_config: &OAuth2ProviderConfig,
         callback_response: AuthorizationResponse,
     ) -> OAuth2Result<TokenResponse> {
+        provider_config.validate()?;
+
         // Verify state
         let state = self.state_store.retrieve(&callback_response.state).await?;
 
@@ -157,12 +162,14 @@ impl OAuth2Client {
             .await
     }
 
-    /// Get user info using access token
+    /// Get user info using access token. Fails when `provider_config` does
+    /// not pass [`OAuth2ProviderConfig::validate`].
     pub async fn get_user_info(
         &self,
         provider_config: &OAuth2ProviderConfig,
         access_token: &str,
     ) -> OAuth2Result<UserInfoResponse> {
+        provider_config.validate()?;
         let userinfo_endpoint = provider_config.userinfo_endpoint.as_ref().ok_or_else(|| {
             OAuth2Error::ConfigError("User info endpoint not configured".to_string())
         })?;

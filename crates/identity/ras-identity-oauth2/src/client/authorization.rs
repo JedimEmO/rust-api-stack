@@ -1,5 +1,6 @@
 use super::{OAuth2Client, PkceChallenge};
 use crate::state::OAuth2State;
+use crate::types::AuthorizationRedirect;
 use crate::{OAuth2Error, OAuth2ProviderConfig, OAuth2Result};
 use std::collections::HashMap;
 use tracing::debug;
@@ -55,28 +56,43 @@ where
 }
 
 impl OAuth2Client {
-    /// Generate authorization URL for a provider
+    /// Generate an authorization URL bound to the initiating browser.
+    ///
+    /// A random binding is generated and returned in
+    /// [`AuthorizationRedirect::binding`]. Store it where only that browser can
+    /// present it (e.g. an HttpOnly cookie) and pass it back as
+    /// [`AuthorizationResponse::binding`](crate::AuthorizationResponse::binding)
+    /// on the callback; a callback without it is rejected, which prevents login
+    /// CSRF where an attacker tricks a victim into completing the attacker's
+    /// flow.
+    ///
+    /// Fails with [`OAuth2Error::ConfigError`] when `provider_config` does not
+    /// pass [`OAuth2ProviderConfig::validate`].
     pub async fn generate_authorization_url(
         &self,
         provider_config: &OAuth2ProviderConfig,
         additional_params: HashMap<String, String>,
-    ) -> OAuth2Result<(String, String)> {
-        self.generate_authorization_url_bound(provider_config, additional_params, None)
+    ) -> OAuth2Result<AuthorizationRedirect> {
+        let binding = uuid::Uuid::new_v4().to_string();
+        self.generate_authorization_url_bound(provider_config, additional_params, Some(binding))
             .await
     }
 
-    /// Generate an authorization URL bound to the initiating browser session.
+    /// Generate an authorization URL with an explicit (or absent) binding.
     ///
     /// `binding` should be an unguessable value the integrator can recover on
     /// callback (e.g. a random cookie value); the callback must then present
-    /// the identical value, preventing login CSRF where an attacker tricks a
-    /// victim into completing the attacker's flow.
+    /// the identical value. Passing `None` opts out of binding: only do this
+    /// for non-browser flows where login CSRF does not apply. Prefer
+    /// [`Self::generate_authorization_url`], which generates a binding for you.
     pub async fn generate_authorization_url_bound(
         &self,
         provider_config: &OAuth2ProviderConfig,
         additional_params: HashMap<String, String>,
         binding: Option<String>,
-    ) -> OAuth2Result<(String, String)> {
+    ) -> OAuth2Result<AuthorizationRedirect> {
+        provider_config.validate()?;
+
         // Reject reserved-parameter overrides before doing any work.
         reject_reserved_params(provider_config.auth_params.keys(), "provider auth_params")?;
         reject_reserved_params(additional_params.keys(), "additional_params")?;
@@ -102,7 +118,7 @@ impl OAuth2Client {
             self.state_ttl_seconds,
         )
         .with_nonce(nonce.clone())
-        .with_binding(binding);
+        .with_binding(binding.clone());
 
         let state_param = state.state.clone();
         self.state_store.store(state).await?;
@@ -144,6 +160,10 @@ impl OAuth2Client {
             provider_config.provider_id
         );
 
-        Ok((auth_url, state_param))
+        Ok(AuthorizationRedirect {
+            url: auth_url,
+            state: state_param,
+            binding,
+        })
     }
 }

@@ -80,7 +80,11 @@ impl GoogleOAuth2Permissions {
             }
         }
 
-        // Check subject for special users (in a real app, this might be a database lookup)
+        // Check subject for special users (in a real app, this might be a database lookup).
+        // A subject is only unique within its provider, so match on both.
+        if identity.provider_id != "oauth2:google" {
+            return dedup(permissions);
+        }
         match identity.subject.as_str() {
             // Special system administrator
             "104872499792737890123" => {
@@ -96,12 +100,14 @@ impl GoogleOAuth2Permissions {
             _ => {}
         }
 
-        // Remove duplicates
-        permissions.sort();
-        permissions.dedup();
-
-        permissions
+        dedup(permissions)
     }
+}
+
+fn dedup(mut permissions: Vec<String>) -> Vec<String> {
+    permissions.sort();
+    permissions.dedup();
+    permissions
 }
 
 #[async_trait]
