@@ -84,7 +84,7 @@ There is one macro for each kind of API:
 | --- | --- | --- |
 | `jsonrpc_service!` | `ras-jsonrpc-macro` | JSON-RPC over HTTP, with OpenRPC output and an API explorer |
 | `rest_service!` | `ras-rest-macro` | JSON REST APIs, with OpenAPI output and an API explorer |
-| `file_service!` | `ras-file-macro` | Streaming multipart uploads and ranged downloads, with OpenAPI output |
+| `file_service!` | `ras-file-macro` | Streaming multipart uploads and downloads, with OpenAPI output |
 | `jsonrpc_bidirectional_service!` | `ras-jsonrpc-bidirectional-macro` | JSON-RPC in both directions over a WebSocket |
 
 All four share one auth syntax: `UNAUTHORIZED`, `OPTIONAL_AUTH` and `WITH_PERMISSIONS([...])`.
