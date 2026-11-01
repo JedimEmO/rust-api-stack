@@ -71,6 +71,21 @@ pub(super) fn generate_support_types(definition: &FileServiceDefinition) -> Toke
                 quote! { Self::__Lifetime(_) => 0, }
             };
 
+            let error_arms = config.parts.iter().map(|part| {
+                let variant = part_variant_name(part);
+                match part.kind {
+                    UploadPartKind::File => quote! { Self::#variant(file) => file.error() },
+                    UploadPartKind::Json | UploadPartKind::Text => {
+                        quote! { Self::#variant(_) => None }
+                    }
+                }
+            });
+            let lifetime_error_arm = if has_file_part {
+                quote! {}
+            } else {
+                quote! { Self::__Lifetime(_) => None, }
+            };
+
             tokens.push(quote! {
                 pub enum #part_enum<'a> {
                     #lifetime_variant
@@ -89,6 +104,14 @@ pub(super) fn generate_support_types(definition: &FileServiceDefinition) -> Toke
                         match self {
                             #lifetime_bytes_arm
                             #(#bytes_arms),*
+                        }
+                    }
+
+                    /// The error that ended a file part, if reading it failed.
+                    pub fn error(&self) -> Option<&::ras_file_core::FileError> {
+                        match self {
+                            #lifetime_error_arm
+                            #(#error_arms),*
                         }
                     }
                 }

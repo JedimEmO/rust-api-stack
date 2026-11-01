@@ -51,6 +51,20 @@ pub enum TransportError {
     #[error("invalid header value: {0}")]
     InvalidHeader(String),
 
+    /// A path parameter cannot be sent as a single URL path segment: it is
+    /// `.`, `..` or empty. The request is not sent, because the URL would
+    /// name a different endpoint. Produced by [`crate::encode_path_segment`].
+    #[error("invalid path segment: {0}")]
+    InvalidPathSegment(String),
+
+    /// A response body was longer than the limit for collecting it into
+    /// memory. See [`crate::TransportResponse::with_body_limit`].
+    #[error("response body exceeds the {limit}-byte limit")]
+    BodyTooLarge {
+        /// The limit in bytes.
+        limit: usize,
+    },
+
     /// A JSON-RPC 2.0 error object was returned in the response envelope.
     #[error("json-rpc error {code}: {message}")]
     JsonRpc {

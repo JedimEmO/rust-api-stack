@@ -34,6 +34,43 @@ To write your own transport, implement `HttpTransport::execute`.
 A transport does not inspect the status code;
 the generated client calls `TransportResponse::error_for_status` for that.
 
+## Response size
+
+A generated client reads a JSON response into memory before it decodes it,
+so a broken or hostile server could make it buffer without end.
+`TransportResponse::bytes`, `json` and `text` stop at a body limit
+and fail with `TransportError::BodyTooLarge`.
+The default is `TransportResponse::DEFAULT_BODY_LIMIT`, 16 MiB.
+
+Raise it for every response on the transport,
+or for one response, such as a large download:
+
+```rust,ignore
+let transport = ReqwestTransport::new().with_body_limit(64 * 1024 * 1024);
+let client = UserServiceClient::builder("https://api.example.com")
+    .build_with_transport(Arc::new(transport))?;
+
+let file = files.download_by_id(id).await?.with_body_limit(1 << 30).bytes().await?;
+```
+
+`into_body_stream` has no limit; stream a download that can be large.
+A custom transport sets the limit with `TransportResponse::with_body_limit`.
+
+## Path parameters
+
+Generated clients put each path parameter into its own URL segment
+with `encode_path_segment`, which percent-encodes everything outside the RFC 3986 unreserved set.
+A value of `.`, `..` or the empty string fails the call with `TransportError::InvalidPathSegment`
+before the request is sent.
+URL parsers resolve `.` and `..` as dot segments, encoded or not,
+so `/users/{id}/delete` with an `id` of `..` would send your credentials to `/delete`.
+
+## Logging requests
+
+The `Debug` output of `TransportRequest` hides the values of
+`Authorization`, `Proxy-Authorization`, `Cookie` and any header marked sensitive,
+so a logged request does not leak its token.
+
 ## Features
 
 | Feature | Default | What it does |
@@ -47,7 +84,7 @@ the generated client calls `TransportResponse::error_for_status` for that.
 Every client call returns `Result<_, TransportError>`.
 The variants separate failures a caller usually handles differently:
 `Connection`, `Timeout`, `Status { status, body }` for a non-2xx answer,
-`Serialize`, `Deserialize`, `Body`, `InvalidHeader`,
+`Serialize`, `Deserialize`, `Body`, `BodyTooLarge`, `InvalidHeader`, `InvalidPathSegment`,
 and `JsonRpc { code, message, data }` for a JSON-RPC error object,
 where `data` is the error's optional `data` value.
 

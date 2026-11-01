@@ -18,19 +18,29 @@ use crate::{HttpTransport, byte_stream_from};
 #[derive(Clone)]
 pub struct ReqwestTransport {
     client: reqwest::Client,
+    body_limit: usize,
 }
 
 impl ReqwestTransport {
     /// Construct with a default `reqwest::Client`.
     pub fn new() -> Self {
-        ReqwestTransport {
-            client: reqwest::Client::new(),
-        }
+        Self::from_client(reqwest::Client::new())
     }
 
     /// Construct from an existing `reqwest::Client`.
     pub fn from_client(client: reqwest::Client) -> Self {
-        ReqwestTransport { client }
+        ReqwestTransport {
+            client,
+            body_limit: TransportResponse::DEFAULT_BODY_LIMIT,
+        }
+    }
+
+    /// Set the body limit of every response this transport returns; see
+    /// [`TransportResponse::with_body_limit`]. The default is
+    /// [`TransportResponse::DEFAULT_BODY_LIMIT`].
+    pub fn with_body_limit(mut self, limit: usize) -> Self {
+        self.body_limit = limit;
+        self
     }
 }
 
@@ -92,6 +102,6 @@ impl HttpTransport for ReqwestTransport {
             }))
         };
 
-        Ok(TransportResponse::new(status, headers, body_stream))
+        Ok(TransportResponse::new(status, headers, body_stream).with_body_limit(self.body_limit))
     }
 }

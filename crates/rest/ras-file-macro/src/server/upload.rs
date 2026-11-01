@@ -316,6 +316,14 @@ fn generate_part_arm(
                         return __ras_file_error_response(error);
                     }
 
+                    // A read error is final even when the handler swallowed
+                    // it, so a part that broke its limit is never accepted.
+                    if let Some(error) = part.error().cloned() {
+                        let upload_state = upload_state.take().expect("upload state is present before abort");
+                        service.#abort(&ctx, &path_value, upload_state, &error).await;
+                        return __ras_file_error_response(error);
+                    }
+
                     if !part.is_consumed() {
                         let error = ::ras_file_core::FileError::handler_contract(format!("handler did not consume file field `{}`", #field_name));
                         let upload_state = upload_state.take().expect("upload state is present before abort");

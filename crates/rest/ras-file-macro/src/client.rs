@@ -79,7 +79,7 @@ pub fn generate_client(definition: &FileServiceDefinition) -> TokenStream {
                     // Fail closed: a token that cannot be encoded must not be
                     // silently dropped, which would send the request
                     // unauthenticated.
-                    let value = ::ras_transport_core::http::HeaderValue::from_str(
+                    let mut value = ::ras_transport_core::http::HeaderValue::from_str(
                         &format!("Bearer {}", token),
                     )
                     .map_err(|_| {
@@ -87,6 +87,7 @@ pub fn generate_client(definition: &FileServiceDefinition) -> TokenStream {
                             "bearer token".to_string(),
                         )
                     })?;
+                    value.set_sensitive(true);
                     headers.insert(::ras_transport_core::http::header::AUTHORIZATION, value);
                 }
 
@@ -163,7 +164,8 @@ fn generate_client_method(
         .collect();
     // Percent-encode each path parameter for its segment so a `/`, `?`, `#`,
     // etc. in a caller-supplied value cannot escape its slot and alter the
-    // request's path or query.
+    // request's path or query; `.`, `..` and empty values fail the call
+    // before it is sent.
     let path_replace: Vec<_> = endpoint
         .path_params
         .iter()
@@ -173,7 +175,7 @@ fn generate_client_method(
             quote! {
                 .replace(
                     #placeholder,
-                    &::ras_transport_core::encode_path_segment(&#name.to_string()),
+                    &::ras_transport_core::encode_path_segment(&#name.to_string())?,
                 )
             }
         })

@@ -1,3 +1,5 @@
+use crate::error::TransportError;
+
 /// Percent-encode a value for safe interpolation into a single URL **path
 /// segment**.
 ///
@@ -9,7 +11,21 @@
 /// (`ALPHA`/`DIGIT`/`-`/`.`/`_`/`~`) pass through unescaped; every other byte is
 /// `%XX`-encoded. The result is what servers (e.g. axum's `Path` extractor)
 /// percent-decode back to the original value.
-pub fn encode_path_segment(value: &str) -> String {
+///
+/// # Errors
+///
+/// Returns [`TransportError::InvalidPathSegment`] for `.`, `..` and the empty
+/// string. URL parsers resolve `.` and `..` as dot segments, so `/items/../delete`
+/// becomes `/delete`, and they treat `%2E` the same way, so no encoding keeps
+/// these values in their slot. An empty value leaves `//` in the path, which
+/// some proxies merge. None of them can name a resource in a single segment.
+pub fn encode_path_segment(value: &str) -> Result<String, TransportError> {
+    if matches!(value, "" | "." | "..") {
+        return Err(TransportError::InvalidPathSegment(format!(
+            "{value:?} is not a valid path parameter value"
+        )));
+    }
+
     let mut out = String::with_capacity(value.len());
     for &b in value.as_bytes() {
         match b {
@@ -23,7 +39,7 @@ pub fn encode_path_segment(value: &str) -> String {
             }
         }
     }
-    out
+    Ok(out)
 }
 
 /// Upper-case hex digit for a nibble (0..=15).

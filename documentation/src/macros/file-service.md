@@ -276,6 +276,12 @@ The handler must read a file part to the end before it returns.
 If it does not, the generated server rejects the request with `400`.
 Call `file.drain().await?` to skip a part you do not need.
 
+An error from `next_chunk` ends the part.
+Later reads return the same error,
+and the generated server aborts the upload with it
+even when the handler ignores the error and returns `Ok`.
+A part over its `max_bytes` is therefore always rejected with `413`, never stored short.
+
 The trait also has an `<endpoint>_abort` method with an empty default body.
 The server calls it, with the state and the error,
 when the upload fails after `_begin` and before `_finish`:

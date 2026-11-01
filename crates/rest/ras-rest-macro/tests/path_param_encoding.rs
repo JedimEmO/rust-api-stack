@@ -1,8 +1,9 @@
 //! Security regression: path parameters substituted into the URL template must
 //! be percent-encoded for their segment, so a `/`, `?`, `#`, etc. in a
 //! caller-supplied value cannot break out of its slot and alter the request's
-//! path or query. Drives the generated client through a capturing transport and
-//! inspects the exact wire URL it produced.
+//! path or query, and a `.` or `..` value, which URL parsing would resolve to a
+//! different endpoint, must fail the call. Drives the generated client through
+//! a capturing transport and inspects the exact wire URL it produced.
 
 use std::sync::{Arc, Mutex};
 
@@ -102,4 +103,23 @@ async fn path_param_with_query_and_fragment_chars_is_encoded() {
     // The URL must carry no real query or fragment delimiter.
     assert!(!url.contains('?'), "injected '?' present: {url}");
     assert!(!url.contains('#'), "injected '#' present: {url}");
+}
+
+#[tokio::test]
+async fn dot_only_path_param_fails_without_sending_the_request() {
+    for value in [".", ".."] {
+        let (client, captured) = client_capturing();
+
+        // `/api/files/..` would reach `/api` with the caller's credentials.
+        let result = client.get_files_by_name(value.to_string()).await;
+
+        assert!(
+            matches!(result, Err(TransportError::InvalidPathSegment(_))),
+            "{value:?} must fail the call, got {result:?}"
+        );
+        assert!(
+            captured.lock().unwrap().is_none(),
+            "{value:?} reached the transport"
+        );
+    }
 }
