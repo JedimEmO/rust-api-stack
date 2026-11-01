@@ -34,7 +34,8 @@ pub use error::{OAuth2Error, OAuth2Result};
 pub use provider::{OAuth2AuthPayload, OAuth2Provider, OAuth2Response};
 pub use state::{InMemoryStateStore, OAuth2State, OAuth2StateStore};
 pub use types::{
-    AuthorizationRequest, AuthorizationResponse, ProviderMetadata, TokenResponse, UserInfoResponse,
+    AuthorizationRedirect, AuthorizationRequest, AuthorizationResponse, ProviderMetadata,
+    TokenResponse, UserInfoResponse,
 };
 
 // Re-export common types for convenience

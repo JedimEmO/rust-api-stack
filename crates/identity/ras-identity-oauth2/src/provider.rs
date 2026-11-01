@@ -4,16 +4,19 @@ use crate::client::OAuth2Client;
 use crate::config::{OAuth2Config, OAuth2ProviderConfig};
 use crate::error::{OAuth2Error, OAuth2Result};
 use crate::state::OAuth2StateStore;
-use crate::types::AuthorizationResponse;
+use crate::types::{AuthorizationResponse, redact_option};
 use async_trait::async_trait;
 use ras_identity_core::{IdentityError, IdentityProvider, IdentityResult, VerifiedIdentity};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 use tracing::info;
 
 /// OAuth2 authentication payload for the verify method
-#[derive(Debug, Serialize, Deserialize)]
+///
+/// `Debug` redacts the callback's `code` and `binding`.
+#[derive(Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum OAuth2AuthPayload {
     /// Start the OAuth2 flow - returns authorization URL
@@ -37,8 +40,41 @@ pub enum OAuth2AuthPayload {
     },
 }
 
+impl fmt::Debug for OAuth2AuthPayload {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::StartFlow {
+                provider_id,
+                additional_params,
+            } => f
+                .debug_struct("StartFlow")
+                .field("provider_id", provider_id)
+                .field("additional_params", additional_params)
+                .finish(),
+            Self::Callback {
+                provider_id,
+                code,
+                state,
+                error,
+                error_description,
+                binding,
+            } => f
+                .debug_struct("Callback")
+                .field("provider_id", provider_id)
+                .field("code", &redact_option(code))
+                .field("state", state)
+                .field("error", error)
+                .field("error_description", error_description)
+                .field("binding", &redact_option(binding))
+                .finish(),
+        }
+    }
+}
+
 /// Response from the OAuth2 provider
-#[derive(Debug, Serialize, Deserialize)]
+///
+/// `Debug` redacts the `binding`.
+#[derive(Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum OAuth2Response {
     /// Authorization URL to redirect the user to.
@@ -54,6 +90,24 @@ pub enum OAuth2Response {
     },
     /// Error response
     Error { message: String },
+}
+
+impl fmt::Debug for OAuth2Response {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AuthorizationUrl {
+                url,
+                state,
+                binding,
+            } => f
+                .debug_struct("AuthorizationUrl")
+                .field("url", url)
+                .field("state", state)
+                .field("binding", &redact_option(binding))
+                .finish(),
+            Self::Error { message } => f.debug_struct("Error").field("message", message).finish(),
+        }
+    }
 }
 
 /// OAuth2 provider that implements IdentityProvider
@@ -163,18 +217,18 @@ impl OAuth2Provider {
         let provider_config = self.get_provider_config(provider_id)?;
         let params = additional_params.unwrap_or_default();
 
-        let (auth_url, state) = self
+        let redirect = self
             .client
-            .generate_authorization_url_bound(provider_config, params, binding.clone())
+            .generate_authorization_url_bound(provider_config, params, binding)
             .await?;
 
         info!("Started OAuth2 flow for provider: {}", provider_id);
 
         // Echo the binding back so the integrator can set the matching cookie.
         Ok(OAuth2Response::AuthorizationUrl {
-            url: auth_url,
-            state,
-            binding,
+            url: redirect.url,
+            state: redirect.state,
+            binding: redirect.binding,
         })
     }
 

@@ -7,7 +7,11 @@ async fn test_authorization_url_generation() {
 
     let provider_config = provider_config();
 
-    let (auth_url, state) = client
+    let AuthorizationRedirect {
+        url: auth_url,
+        state,
+        ..
+    } = client
         .generate_authorization_url(&provider_config, HashMap::new())
         .await
         .unwrap();
@@ -44,7 +48,11 @@ async fn authorization_url_merges_provider_and_request_params_without_pkce() {
     let mut additional_params = HashMap::new();
     additional_params.insert("login_hint".to_string(), "user@example.com".to_string());
 
-    let (auth_url, state_param) = client
+    let AuthorizationRedirect {
+        url: auth_url,
+        state: state_param,
+        binding,
+    } = client
         .generate_authorization_url(&provider_config, additional_params)
         .await
         .unwrap();
@@ -59,6 +67,8 @@ async fn authorization_url_merges_provider_and_request_params_without_pkce() {
     let stored_state = state_store.retrieve(&state_param).await.unwrap();
     assert_eq!(stored_state.provider_id, "test_provider");
     assert!(stored_state.code_verifier.is_none());
+    assert!(binding.is_some());
+    assert_eq!(stored_state.binding, binding);
 }
 
 #[tokio::test]
@@ -66,7 +76,11 @@ async fn authorization_url_includes_nonce_and_stores_it() {
     let state_store = Arc::new(InMemoryStateStore::new());
     let client = OAuth2Client::new(state_store.clone(), 600, 30);
 
-    let (auth_url, state) = client
+    let AuthorizationRedirect {
+        url: auth_url,
+        state,
+        ..
+    } = client
         .generate_authorization_url(&provider_config(), HashMap::new())
         .await
         .unwrap();
@@ -117,7 +131,7 @@ async fn reserved_params_cannot_override_security_parameters() {
     // A safe extra parameter is still accepted and appears exactly once.
     let mut params = HashMap::new();
     params.insert("login_hint".to_string(), "user@example.com".to_string());
-    let (url, _) = client
+    let AuthorizationRedirect { url, .. } = client
         .generate_authorization_url(&config, params)
         .await
         .unwrap();
