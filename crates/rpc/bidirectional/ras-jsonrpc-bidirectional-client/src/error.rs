@@ -5,6 +5,7 @@ use thiserror::Error;
 
 /// Errors that can occur in the bidirectional JSON-RPC client
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum ClientError {
     /// WebSocket connection error
     #[error("WebSocket connection error: {0}")]
@@ -61,6 +62,10 @@ pub enum ClientError {
     /// Internal error
     #[error("Internal error: {0}")]
     Internal(String),
+
+    /// The server answered a call with a JSON-RPC error object.
+    #[error("JSON-RPC error {}: {}", .0.code, .0.message)]
+    Rpc(ras_jsonrpc_types::JsonRpcError),
 
     /// Bidirectional types error
     #[error("Bidirectional error: {0}")]

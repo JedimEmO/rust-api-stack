@@ -539,6 +539,9 @@ impl<H: MessageHandler> WebSocketHandler<H> {
 }
 
 fn jsonrpc_error_from_server_error(error: &ServerError) -> JsonRpcError {
+    if let Some(public) = error.public_rpc_error() {
+        return public;
+    }
     let code = match error {
         ServerError::AuthenticationFailed(_) => error_codes::AUTHENTICATION_REQUIRED,
         ServerError::PermissionDenied(_) => error_codes::INSUFFICIENT_PERMISSIONS,
@@ -550,7 +553,8 @@ fn jsonrpc_error_from_server_error(error: &ServerError) -> JsonRpcError {
         | ServerError::RoutingFailed(_)
         | ServerError::WebSocketError(_)
         | ServerError::ConnectionError(_)
-        | ServerError::Internal(_) => error_codes::INTERNAL_ERROR,
+        | ServerError::Internal(_)
+        | ServerError::Rpc(_) => error_codes::INTERNAL_ERROR,
     };
 
     // Send only a generic per-class message; the full error was already logged

@@ -81,7 +81,17 @@ pub fn generate_server_code(
                                     .map_err(|e| ras_jsonrpc_bidirectional_server::ServerError::Internal(e.to_string()))?;
                                 Ok(Some(ras_jsonrpc_types::JsonRpcResponse::success(result_value, request.id.clone())))
                             }
-                            Err(e) => Err(ras_jsonrpc_bidirectional_server::ServerError::Internal(e.to_string())),
+                            Err(e) => Err(match ras_jsonrpc_types::HandlerErrorOutcome::from_handler_error(e.as_ref()) {
+                                ras_jsonrpc_types::HandlerErrorOutcome::Public(error) => {
+                                    ras_jsonrpc_bidirectional_server::ServerError::Rpc(error)
+                                }
+                                ras_jsonrpc_types::HandlerErrorOutcome::ReservedCode(code) => {
+                                    ras_jsonrpc_bidirectional_server::ServerError::Internal(format!(
+                                        "handler returned a PublicRpcError with reserved code {code}"
+                                    ))
+                                }
+                                _ => ras_jsonrpc_bidirectional_server::ServerError::Internal(e.to_string()),
+                            }),
                         }
                     }
                 }
@@ -113,7 +123,17 @@ pub fn generate_server_code(
                                     .map_err(|e| ras_jsonrpc_bidirectional_server::ServerError::Internal(e.to_string()))?;
                                 Ok(Some(ras_jsonrpc_types::JsonRpcResponse::success(result_value, request.id.clone())))
                             }
-                            Err(e) => Err(ras_jsonrpc_bidirectional_server::ServerError::Internal(e.to_string())),
+                            Err(e) => Err(match ras_jsonrpc_types::HandlerErrorOutcome::from_handler_error(e.as_ref()) {
+                                ras_jsonrpc_types::HandlerErrorOutcome::Public(error) => {
+                                    ras_jsonrpc_bidirectional_server::ServerError::Rpc(error)
+                                }
+                                ras_jsonrpc_types::HandlerErrorOutcome::ReservedCode(code) => {
+                                    ras_jsonrpc_bidirectional_server::ServerError::Internal(format!(
+                                        "handler returned a PublicRpcError with reserved code {code}"
+                                    ))
+                                }
+                                _ => ras_jsonrpc_bidirectional_server::ServerError::Internal(e.to_string()),
+                            }),
                         }
                     }
                 }
@@ -170,7 +190,17 @@ pub fn generate_server_code(
                                     .map_err(|e| ras_jsonrpc_bidirectional_server::ServerError::Internal(e.to_string()))?;
                                 Ok(Some(ras_jsonrpc_types::JsonRpcResponse::success(result_value, request.id.clone())))
                             }
-                            Err(e) => Err(ras_jsonrpc_bidirectional_server::ServerError::Internal(e.to_string())),
+                            Err(e) => Err(match ras_jsonrpc_types::HandlerErrorOutcome::from_handler_error(e.as_ref()) {
+                                ras_jsonrpc_types::HandlerErrorOutcome::Public(error) => {
+                                    ras_jsonrpc_bidirectional_server::ServerError::Rpc(error)
+                                }
+                                ras_jsonrpc_types::HandlerErrorOutcome::ReservedCode(code) => {
+                                    ras_jsonrpc_bidirectional_server::ServerError::Internal(format!(
+                                        "handler returned a PublicRpcError with reserved code {code}"
+                                    ))
+                                }
+                                _ => ras_jsonrpc_bidirectional_server::ServerError::Internal(e.to_string()),
+                            }),
                         }
                     }
                 }

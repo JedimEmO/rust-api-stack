@@ -32,6 +32,24 @@ fn jsonrpc_error_from_server_error_sends_generic_message_not_handler_detail() {
     );
 }
 
+#[test]
+fn rpc_server_errors_follow_the_handler_code_rule() {
+    let public = JsonRpcError::new(
+        1001,
+        "Email already registered".into(),
+        Some(serde_json::json!(7)),
+    );
+    assert_eq!(
+        jsonrpc_error_from_server_error(&ServerError::Rpc(public.clone())),
+        public
+    );
+
+    let reserved = ServerError::Rpc(JsonRpcError::new(-32002, "secret".into(), None));
+    let jsonrpc = jsonrpc_error_from_server_error(&reserved);
+    assert_eq!(jsonrpc.code, error_codes::INTERNAL_ERROR);
+    assert_eq!(jsonrpc.message, "Internal error");
+}
+
 #[tokio::test]
 async fn handler_loop_sends_jsonrpc_error_and_continues_without_socket() {
     let fail = JsonRpcRequest::new(

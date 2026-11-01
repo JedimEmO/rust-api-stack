@@ -547,3 +547,17 @@ That is accurate, and the explorer hides the suffix.
 The explorer's guessed-value function had a cycle guard that never fired,
 so a recursive request type recursed without end; it is fixed in the same checkpoint.
 
+**Checkpoint 3, handler errors.**
+Wrapping is stricter than the plan expected in one case.
+`anyhow::Error` converts into `Box<dyn Error>` as anyhow's own wrapper type,
+so a `PublicRpcError` passed through `anyhow` is hidden even without added context.
+That fails safe and matches the rule that only the returned error counts; the test pins it.
+
+**Checkpoint 4, WebSocket handler errors.**
+A failing notification, a request without `id`, already gets an error response with `"id": null`,
+and a succeeding one gets a success response.
+JSON-RPC says a notification gets no response at all.
+This predates the plan and this change keeps it as it is; it is left for a separate fix.
+The same is true over HTTP for a request with `"id": null`,
+which `JsonRpcRequest` cannot tell apart from a missing `id`.
+
