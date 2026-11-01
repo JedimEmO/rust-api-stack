@@ -576,6 +576,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "compile-fixture-edition2018"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "axum-extra",
+ "ras-auth-core",
+ "ras-jsonrpc-core",
+ "ras-jsonrpc-macro",
+ "ras-jsonrpc-types",
+ "ras-permission-manifest",
+ "ras-rest-core",
+ "ras-rest-macro",
+ "ras-transport-core",
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "config"
 version = "0.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

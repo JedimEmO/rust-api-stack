@@ -9,6 +9,7 @@ pub(super) fn generate_method_infos(
     components_mod: &Ident,
 ) -> Vec<TokenStream> {
     let service = service_def.service_name.to_string();
+    let generators = super::local("generators");
     let method_infos: Vec<TokenStream> = service_def
         .methods
         .iter()
@@ -70,7 +71,7 @@ pub(super) fn generate_method_infos(
                     request_type_name: stringify!(#request_type).to_string(),
                     response_type_name: stringify!(#response_type).to_string(),
                     params_schema: #params_schema,
-                    result_schema: generators.response::<#response_type>(),
+                    result_schema: #generators.response::<#response_type>(),
                     examples: vec![#(#examples),*],
                     version: #canonical_version_tokens,
                     canonical_version: #canonical_version_tokens,
@@ -105,7 +106,7 @@ pub(super) fn generate_method_infos(
                         request_type_name: stringify!(#request_type).to_string(),
                         response_type_name: stringify!(#response_type).to_string(),
                         params_schema: #params_schema,
-                        result_schema: generators.response::<#response_type>(),
+                        result_schema: #generators.response::<#response_type>(),
                         examples: Vec::new(),
                         version: Some(#version_label.to_string()),
                         canonical_version: Some(#canonical_version.to_string()),
@@ -269,6 +270,8 @@ fn example_tokens(
     components_mod: &Ident,
 ) -> TokenStream {
     let name = example.name.to_string();
+    let context = super::local("context");
+    let value = super::local("value");
     let description = match &example.docs {
         Some(docs) => {
             let description = &docs.description;
@@ -282,11 +285,11 @@ fn example_tokens(
     let params = match &example.params {
         None => quote! { None },
         Some(expr) => {
-            let round_trip = quote_spanned! { expr.span()=> #components_mod::round_trip(&value) };
+            let round_trip = quote_spanned! { expr.span()=> #components_mod::round_trip(&#value) };
             quote! {
                 Some({
-                    let value: #request_type = #expr;
-                    #round_trip.map_err(|cause| context("params", cause))?
+                    let #value: #request_type = #expr;
+                    #round_trip.map_err(|cause| #context("params", cause))?
                 })
             }
         }
@@ -294,11 +297,11 @@ fn example_tokens(
 
     let outcome = match &example.outcome {
         ExampleOutcome::Result(expr) => {
-            let to_json = quote_spanned! { expr.span()=> #components_mod::to_json(&value) };
+            let to_json = quote_spanned! { expr.span()=> #components_mod::to_json(&#value) };
             quote! {
                 #components_mod::ExampleOutcome::Result({
-                    let value: #response_type = #expr;
-                    #to_json.map_err(|cause| context("result", cause))?
+                    let #value: #response_type = #expr;
+                    #to_json.map_err(|cause| #context("result", cause))?
                 })
             }
         }
@@ -309,11 +312,12 @@ fn example_tokens(
         } => {
             let data = match data {
                 Some(expr) => {
-                    let to_json = quote_spanned! { expr.span()=> #components_mod::to_json(&value) };
+                    let to_json =
+                        quote_spanned! { expr.span()=> #components_mod::to_json(&#value) };
                     quote! {
                         Some({
-                            let value = #expr;
-                            #to_json.map_err(|cause| context("error data", cause))?
+                            let #value = #expr;
+                            #to_json.map_err(|cause| #context("error data", cause))?
                         })
                     }
                 }
@@ -331,10 +335,10 @@ fn example_tokens(
 
     quote! {
         {
-            let context = |part: &str, cause: String| {
+            let #context = |part: &str, cause: String| {
                 ras_jsonrpc_types::SpecGenerationError::example(#service, #method, #name, part, cause)
             };
-            let _ = &context;
+            let _ = &#context;
             #components_mod::Example {
                 name: #name.to_string(),
                 description: #description,
@@ -350,7 +354,8 @@ fn params_schema_tokens(request_type: &syn::Type) -> TokenStream {
     if quote!(#request_type).to_string() == "()" {
         quote! { None }
     } else {
-        quote! { Some(generators.request::<#request_type>()) }
+        let generators = super::local("generators");
+        quote! { Some(#generators.request::<#request_type>()) }
     }
 }
 

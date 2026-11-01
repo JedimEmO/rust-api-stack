@@ -196,6 +196,35 @@ test.describe('REST API explorer', () => {
     await expect(page.locator('#response-output')).toContainText('Gadget not found');
   });
 
+  test('sends an empty-string query value and JSON string bodies from examples', async ({ page }) => {
+    await selectOperation(page, 'GET', '/lookup/gadgets');
+    await expect(page.locator('[data-query-param="q"]')).toHaveValue('');
+    await expect(page.locator('#request-url')).toContainText('/api/v1/lookup/gadgets?q=');
+    const lookup = page.waitForRequest((request) => request.url().includes('/lookup/gadgets'));
+    await send(page);
+    expect(new URL((await lookup).url()).searchParams.get('q')).toBe('');
+    await expect(page.locator('#response-status')).toContainText('200');
+
+    // Emptying the field by hand leaves the parameter out.
+    await page.locator('[data-query-param="q"]').fill('x');
+    await page.locator('[data-query-param="q"]').fill('');
+    await expect(page.locator('#request-url')).not.toContainText('q=');
+
+    await selectOperation(page, 'POST', '/echo/text');
+    await page.getByRole('button', { name: 'Use example hello' }).click();
+    await expect(page.locator('#body-editor')).toHaveValue('"hello"');
+    const hello = page.waitForRequest((request) => request.url().includes('/echo/text'));
+    await send(page);
+    expect((await hello).postData()).toBe('"hello"');
+    await expect(page.locator('#response-status')).toContainText('200');
+
+    await page.getByRole('button', { name: 'Use example blank' }).click();
+    await expect(page.locator('#body-editor')).toHaveValue('""');
+    const blank = page.waitForRequest((request) => request.url().includes('/echo/text'));
+    await send(page);
+    expect((await blank).postData()).toBe('""');
+  });
+
   test('persists theme preference in localStorage', async ({ page }) => {
     await page.locator('#theme-toggle').click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');

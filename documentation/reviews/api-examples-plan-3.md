@@ -577,3 +577,18 @@ No compile-fail fixtures exist (the workspace has no `trybuild`);
 the diagnostics are unit-tested through the parsers instead,
 and a request type without `Deserialize` in a client-only build is covered only by the documentation.
 
+
+## Round 3 review
+
+The review of the built branch ([brief 3](api-examples-review/brief-3.md), [answer 3](api-examples-review/answer-3.md)),
+covering `15404c3..0297c76`. Every claim was checked against the code before ruling, and each fix has a test that fails without it.
+
+1. **Edition 2018 cannot compile the embedded source.** Taken. Checked: `TryFrom` is only in the 2021 prelude. The embedded source imports it, and the new `compile-fixture-edition2018` crate uses both macros with examples; CI checks it without features, client-only, server-only and for wasm. With the import removed, the fixture fails with E0599.
+2. **Generated locals capture example expressions.** Taken. `generators`, `context` and `value` use `Span::mixed_site()` identifiers. Consumer tests call helpers with those names from examples in both macros; the previous macro code fails to compile them.
+3. **An empty-string query example is not sent.** Taken. Query inputs track presence separately from their text: an example's `""` is sent as `q=`, a field emptied by hand is left out, and saved requests keep presence. A Playwright test checks the outgoing URL.
+4. **A string body loses its quotes.** Taken. JSON editors use `JSON.stringify`, which also fixes the guessed value for string schemas, a bug older than this change. Playwright checks the outgoing body for `"hello"` and `""`.
+5. **A field named `__proto__` is lost.** Taken, and extended to the guessed values and saved snapshots, which had the same problem. Playwright checks the outgoing request.
+6. **Component keys are not validated.** Taken. A key outside letters, digits, `.`, `-` and `_` fails generation.
+7. **`RestErrorBody` only appears with error examples.** Taken, and corrected. Checked: every REST error, from a handler or from the framework (auth rejections, unparseable path parameters, malformed JSON), is sent as `{ "error": message }`. Every error response now carries `RestErrorBody`, and the earlier note that framework rejections may have another body was wrong and is removed.
+
+On the audit table: notification suppression, listed as withdrawn, is implemented in `a7a3858`, after the reviewed range. The consumer compile matrix now has the edition-2018 fixture, including the client-only request type without `Deserialize`.

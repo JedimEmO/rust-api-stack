@@ -33,7 +33,10 @@
             });
             const query = new URLSearchParams();
             document.querySelectorAll("[data-query-param]").forEach((input) => {
-                if (input.value) query.append(input.dataset.queryParam, input.value);
+                // An example can set a parameter to the empty string; send it.
+                if (input.value || input.dataset.present === "true") {
+                    query.append(input.dataset.queryParam, input.value);
+                }
             });
             const base = activeBaseUrl().replace(/\/$/, "");
             return toAbsoluteUrl(`${base}${path}${query.toString() ? `?${query}` : ""}`);

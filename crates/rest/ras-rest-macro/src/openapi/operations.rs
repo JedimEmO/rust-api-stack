@@ -14,7 +14,10 @@ fn type_text(ty: &Type) -> String {
 /// `Some(schema)` for a request body type, `None` without one.
 fn request_schema_tokens(request_type: Option<&Type>) -> TokenStream {
     match request_type {
-        Some(request_type) => quote! { Some(generators.request::<#request_type>()) },
+        Some(request_type) => {
+            let generators = super::local("generators");
+            quote! { Some(#generators.request::<#request_type>()) }
+        }
         None => quote! { None },
     }
 }
@@ -24,7 +27,8 @@ fn response_schema_tokens(response_type: &Type) -> TokenStream {
     if type_text(response_type) == "()" {
         quote! { None }
     } else {
-        quote! { Some(generators.response::<#response_type>()) }
+        let generators = super::local("generators");
+        quote! { Some(#generators.response::<#response_type>()) }
     }
 }
 
@@ -35,8 +39,9 @@ fn path_param_tokens(params: &[PathParam]) -> Vec<TokenStream> {
             let name = param.name.to_string();
             let param_type = &param.param_type;
             let text = type_text(param_type);
+            let generators = super::local("generators");
             quote! {
-                (#name.to_string(), #text.to_string(), generators.request::<#param_type>())
+                (#name.to_string(), #text.to_string(), #generators.request::<#param_type>())
             }
         })
         .collect()
@@ -50,8 +55,9 @@ fn query_param_tokens(params: &[QueryParam]) -> Vec<TokenStream> {
             let param_type = &param.param_type;
             let text = type_text(param_type);
             let required = !text.starts_with("Option<");
+            let generators = super::local("generators");
             quote! {
-                (#name.to_string(), #text.to_string(), #required, generators.request::<#param_type>())
+                (#name.to_string(), #text.to_string(), #required, #generators.request::<#param_type>())
             }
         })
         .collect()
@@ -270,6 +276,7 @@ pub(super) fn generate_paths(components_mod: &Ident) -> TokenStream {
                     }
                 }
 
+                #components_mod::describe_rest_error_responses(&mut operation);
                 #components_mod::apply_rest_examples(
                     &mut operation,
                     &example_response_schema,
@@ -309,6 +316,8 @@ fn example_tokens(
 ) -> TokenStream {
     let operation = format!("{} {}", endpoint.method.as_str(), endpoint.path);
     let name = example.name.to_string();
+    let context = super::local("context");
+    let value = super::local("value");
     let (summary, description) = match &example.docs {
         Some(docs) => {
             let summary = &docs.summary;
@@ -324,12 +333,12 @@ fn example_tokens(
     // Each value is bound to its declared type, so a mismatch is reported at
     // the example.
     let param_value = |param_name: &Ident, param_type: &Type, expr: &syn::Expr, part: String| {
-        let to_json = quote_spanned! { expr.span()=> #components_mod::to_json(&value) };
+        let to_json = quote_spanned! { expr.span()=> #components_mod::to_json(&#value) };
         let key = param_name.to_string();
         quote! {
             (#key.to_string(), {
-                let value: #param_type = #expr;
-                #to_json.map_err(|cause| context(#part, cause))?
+                let #value: #param_type = #expr;
+                #to_json.map_err(|cause| #context(#part, cause))?
             })
         }
     };
@@ -364,11 +373,11 @@ fn example_tokens(
 
     let body = match (&example.body, &endpoint.request_type) {
         (Some(expr), Some(request_type)) => {
-            let round_trip = quote_spanned! { expr.span()=> #components_mod::round_trip(&value) };
+            let round_trip = quote_spanned! { expr.span()=> #components_mod::round_trip(&#value) };
             quote! {
                 Some({
-                    let value: #request_type = #expr;
-                    #round_trip.map_err(|cause| context("body", cause))?
+                    let #value: #request_type = #expr;
+                    #round_trip.map_err(|cause| #context("body", cause))?
                 })
             }
         }
@@ -380,11 +389,12 @@ fn example_tokens(
         EndpointExampleOutcome::Success { status, response } => {
             let response = match response {
                 Some(expr) => {
-                    let to_json = quote_spanned! { expr.span()=> #components_mod::to_json(&value) };
+                    let to_json =
+                        quote_spanned! { expr.span()=> #components_mod::to_json(&#value) };
                     quote! {
                         Some({
-                            let value: #response_type = #expr;
-                            #to_json.map_err(|cause| context("response", cause))?
+                            let #value: #response_type = #expr;
+                            #to_json.map_err(|cause| #context("response", cause))?
                         })
                     }
                 }
@@ -401,10 +411,10 @@ fn example_tokens(
 
     quote! {
         {
-            let context = |part: &str, cause: String| {
+            let #context = |part: &str, cause: String| {
                 ras_rest_core::SpecGenerationError::example(#service, #operation, #name, part, cause)
             };
-            let _ = &context;
+            let _ = &#context;
             #components_mod::RestExample {
                 name: #name.to_string(),
                 summary: #summary,

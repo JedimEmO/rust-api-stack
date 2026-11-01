@@ -10,6 +10,14 @@ mod operations;
 mod schema;
 pub use schema::generate_schema_impl_checks;
 
+/// An identifier for a local the generated document code declares around
+/// authored example expressions. `Span::mixed_site()` hides it from those
+/// expressions, so a user's own `fn context()` or `fn generators()` still
+/// resolves inside an example.
+pub(super) fn local(name: &str) -> Ident {
+    Ident::new(name, proc_macro2::Span::mixed_site())
+}
+
 /// Emits the shared component-assembly code as a private module named `module`.
 fn embedded_components(module: &Ident) -> TokenStream {
     let mut file: syn::File = syn::parse_str(ras_spec_components::SOURCE)
@@ -64,6 +72,7 @@ pub fn generate_openapi_code(
     };
 
     let embedded = embedded_components(&components_mod);
+    let generators = local("generators");
     let endpoint_infos = operations::generate_endpoint_infos(
         service_def,
         &endpoint_info_struct_name,
@@ -111,13 +120,13 @@ pub fn generate_openapi_code(
         pub fn #try_openapi_fn_name() -> Result<serde_json::Value, ras_rest_core::SpecGenerationError> {
             use serde_json::json;
 
-            let mut generators = #components_mod::Generators::new(#components_mod::Dialect::OpenApi3);
+            let mut #generators = #components_mod::Generators::new(#components_mod::Dialect::OpenApi3);
 
             let mut endpoints: Vec<#endpoint_info_struct_name> = vec![
                 #(#endpoint_infos),*
             ];
 
-            let components = generators.into_components().map_err(|error| {
+            let components = #generators.into_components().map_err(|error| {
                 ras_rest_core::SpecGenerationError::document(#service_str, error)
             })?;
             for endpoint in &mut endpoints {

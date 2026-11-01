@@ -216,19 +216,27 @@ fn error_examples_use_the_error_body_at_their_status() {
         json!({ "error": "Item not found" })
     );
 
-    // 400 is also what the framework answers before the handler runs.
     let bad_request = &operation["responses"]["400"];
-    assert!(
-        bad_request["description"]
-            .as_str()
-            .unwrap()
-            .contains("rejected before the handler runs"),
-        "{bad_request}"
-    );
+    assert_eq!(bad_request["description"], "Bad request");
     assert_eq!(
         bad_request["content"]["application/json"]["examples"]["empty_name"]["value"],
         json!({ "error": "Name must not be empty" })
     );
+}
+
+/// Handlers and the framework send every error as `{ "error": message }`, so
+/// the error responses carry the body schema with or without examples.
+#[test]
+fn every_error_response_has_the_error_body() {
+    let doc = doc();
+    let search = &doc["paths"]["/search"]["get"]["responses"];
+    for status in ["400", "401", "403", "500"] {
+        assert_eq!(
+            search[status]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/RestErrorBody",
+            "{status}"
+        );
+    }
 }
 
 #[test]
@@ -562,4 +570,45 @@ rest_service!({
 #[test]
 fn examples_without_openapi_generate_nothing() {
     fn _service_exists<T: NoRestDocsTrait>() {}
+}
+
+// Helpers whose names match locals the generated code declares around examples.
+mod clashing {
+    pub fn context() -> String {
+        "from context()".into()
+    }
+    pub fn generators() -> u32 {
+        7
+    }
+    pub fn value() -> String {
+        "from value()".into()
+    }
+}
+use clashing::{context, generators, value};
+
+rest_service!({
+    service_name: HygieneRest,
+    base_path: "/api",
+    openapi: true,
+    endpoints: [
+        POST UNAUTHORIZED echo/{n: u32} ? tag: String (String) -> String {
+            examples: [
+                uses_helpers { path: { n: generators() }, query: { tag: value() }, body: context(), response: value() },
+            ],
+        },
+    ]
+});
+
+#[test]
+fn examples_can_call_helpers_named_like_generated_locals() {
+    let doc = try_generate_hygienerest_openapi().expect("document builds");
+    let echo = &doc["paths"]["/echo/{n}"]["post"];
+    assert_eq!(
+        echo["requestBody"]["content"]["application/json"]["examples"]["uses_helpers"]["value"],
+        "from context()"
+    );
+    assert_eq!(
+        echo["parameters"][0]["examples"]["uses_helpers"]["value"],
+        7
+    );
 }

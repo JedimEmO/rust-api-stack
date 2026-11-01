@@ -92,6 +92,12 @@ pub struct Reservation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ProtoField {
+    #[serde(rename = "__proto__")]
+    pub inner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TreeNode {
     pub label: String,
     pub children: Vec<TreeNode>,
@@ -134,6 +140,12 @@ jsonrpc_service!({
         WITH_PERMISSIONS(["user"]) current_profile(()) -> ProfileResponse,
         UNAUTHORIZED place_order(PlaceOrderRequest) -> PlaceOrderRequest,
         UNAUTHORIZED grow_tree(TreeNode) -> TreeNode,
+        /// Echo a field whose wire name is `__proto__`.
+        UNAUTHORIZED proto_field(ProtoField) -> ProtoField {
+            examples: [
+                kept { params: ProtoField { inner: "kept".to_string() }, result: ProtoField { inner: "kept".to_string() } },
+            ],
+        },
         /// Reserve a table.
         UNAUTHORIZED reserve_table(ReserveTable) -> Reservation {
             examples: [
@@ -266,6 +278,13 @@ impl ExplorerRpcFixtureTrait for ExplorerRpcFixtureImpl {
         Ok(request)
     }
 
+    async fn proto_field(
+        &self,
+        request: ProtoField,
+    ) -> std::result::Result<ProtoField, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(request)
+    }
+
     async fn reserve_table(
         &self,
         request: ReserveTable,
@@ -375,6 +394,7 @@ mod tests {
                 "no_params",
                 "ping",
                 "place_order",
+                "proto_field",
                 "rename_widget.v1",
                 "rename_widget.v2",
                 "reserve_table",

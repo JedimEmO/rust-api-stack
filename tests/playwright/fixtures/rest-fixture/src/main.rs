@@ -125,6 +125,20 @@ rest_service!({
                 },
             ],
         },
+        /// Find gadgets by name.
+        GET UNAUTHORIZED lookup/gadgets ? q: String () -> Vec<Gadget> {
+            examples: [
+                /// An empty query matches every gadget.
+                everything { query: { q: String::new() }, response: vec![] },
+            ],
+        },
+        /// Echo a JSON string body.
+        POST UNAUTHORIZED echo/text (String) -> String {
+            examples: [
+                hello { body: "hello".to_string(), response: "hello".to_string() },
+                blank { body: String::new(), response: String::new() },
+            ],
+        },
     ]
 });
 
@@ -207,6 +221,14 @@ impl ExplorerRestFixtureTrait for FixtureService {
             name: body.name,
             notified: notify.unwrap_or(false),
         }))
+    }
+
+    async fn get_lookup_gadgets(&self, _q: String) -> RestResult<Vec<Gadget>> {
+        Ok(RestResponse::ok(vec![]))
+    }
+
+    async fn post_echo_text(&self, body: String) -> RestResult<String> {
+        Ok(RestResponse::ok(body))
     }
 
     async fn get_widgets_by_id(&self, id: String) -> RestResult<Widget> {

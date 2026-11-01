@@ -8,6 +8,8 @@ use ::schemars::transform::{transform_subschemas, Transform};
 use ::schemars::{JsonSchema, Schema, SchemaGenerator};
 use ::serde_json::{Map, Value};
 use ::std::collections::BTreeSet;
+// In the prelude only from edition 2021; this file compiles in older editions too.
+use ::std::convert::TryFrom;
 
 /// Where component schemas live; every generated reference starts with this.
 pub const COMPONENTS_PREFIX: &str = "#/components/schemas/";
@@ -138,6 +140,13 @@ impl Components {
             }
         }
 
+        if let Some(name) = schemas.keys().find(|name| !is_valid_component_key(name)) {
+            return Err(format!(
+                "component name `{name}` may only use letters, digits, `.`, `-` and `_`; \
+                 rename the type's schema"
+            ));
+        }
+
         Ok(Self { schemas, renamed })
     }
 
@@ -145,6 +154,15 @@ impl Components {
     pub fn fix_serialized(&self, schema: &mut Value) {
         rename_refs(schema, &self.renamed);
     }
+}
+
+/// Whether `name` matches the component key pattern both formats accept,
+/// `^[a-zA-Z0-9.\-_]+$`.
+pub fn is_valid_component_key(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
 }
 
 /// Appends [`SERIALIZE_SUFFIX`] to references naming a type in `renamed`.
@@ -497,10 +515,31 @@ pub const REST_ERROR_BODY: &str = "RestErrorBody";
 pub fn rest_error_body_schema() -> Value {
     ::serde_json::json!({
         "type": "object",
-        "description": "The body of an error a handler returns as `RestError`.",
+        "description": "The body of every error response: a handler's `RestError` or a request the framework rejects.",
         "properties": { "error": { "type": "string" } },
         "required": ["error"]
     })
+}
+
+/// A reference to [`REST_ERROR_BODY`].
+pub fn rest_error_body_ref() -> Value {
+    ::serde_json::json!({ "$ref": format!("{COMPONENTS_PREFIX}{REST_ERROR_BODY}") })
+}
+
+/// Describes every error response an operation lists with [`REST_ERROR_BODY`].
+///
+/// Every REST error, from a handler or from the framework, is sent as
+/// `{ "error": "<message>" }`, so the schema holds whether or not an example
+/// uses the status.
+pub fn describe_rest_error_responses(operation: &mut Value) {
+    if let Some(responses) = operation["responses"].as_object_mut() {
+        for (status, response) in responses.iter_mut() {
+            let is_error = status.starts_with('4') || status.starts_with('5');
+            if is_error && response.is_object() {
+                response["content"]["application/json"]["schema"] = rest_error_body_ref();
+            }
+        }
+    }
 }
 
 /// An authored REST example, evaluated to JSON.
@@ -607,21 +646,9 @@ pub fn apply_rest_examples(
                 if !response.is_object() {
                     *response =
                         ::serde_json::json!({ "description": "Error returned by the handler" });
-                } else if response["content"].is_null() {
-                    // A status the framework also answers, before the handler runs.
-                    let description = response["description"]
-                        .as_str()
-                        .unwrap_or("Error")
-                        .to_string();
-                    response["description"] = Value::String(format!(
-                        "{description}. A handler error has a `{REST_ERROR_BODY}` body; \
-                         a request rejected before the handler runs may have another body."
-                    ));
                 }
                 let media = &mut response["content"]["application/json"];
-                media["schema"] = ::serde_json::json!({
-                    "$ref": format!("{COMPONENTS_PREFIX}{REST_ERROR_BODY}")
-                });
+                media["schema"] = rest_error_body_ref();
                 let object = example.object(::serde_json::json!({ "error": message }));
                 insert_example(media, &example.name, object);
             }

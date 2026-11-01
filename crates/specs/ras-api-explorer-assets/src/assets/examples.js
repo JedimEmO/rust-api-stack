@@ -12,7 +12,8 @@
             if (!method["x-ras-params-schema"]) return undefined;
             const list = Array.isArray(params) ? params : [];
             if (method["x-ras-params-raw"]) return list[0]?.value;
-            const value = {};
+            // No prototype, so a field named `__proto__` becomes an own property.
+            const value = Object.create(null);
             list.forEach((param) => { value[param.name] = param.value; });
             return value;
         }
@@ -46,7 +47,15 @@
             const byName = new Map();
             const entry = (name, example) => {
                 if (!byName.has(name)) {
-                    byName.set(name, { name, summary: "", description: "", path: {}, query: {}, body: undefined, outcome: null });
+                    byName.set(name, {
+                        name,
+                        summary: "",
+                        description: "",
+                        path: Object.create(null),
+                        query: Object.create(null),
+                        body: undefined,
+                        outcome: null
+                    });
                 }
                 const found = byName.get(name);
                 if (!found.summary && example.summary) found.summary = example.summary;
@@ -97,16 +106,19 @@
         function applyExample(operation, example) {
             if (operation.protocol === "jsonrpc") {
                 const editor = $("params-editor");
-                if (editor) editor.value = example.params === undefined ? "" : jsonPretty(example.params);
+                if (editor) editor.value = jsonEditorText(example.params);
             } else {
                 document.querySelectorAll("[data-path-param]").forEach((input) => {
                     input.value = queryInputValue(example.path[input.dataset.pathParam]);
                 });
                 document.querySelectorAll("[data-query-param]").forEach((input) => {
-                    input.value = queryInputValue(example.query[input.dataset.queryParam]);
+                    const value = example.query[input.dataset.queryParam];
+                    input.value = queryInputValue(value);
+                    // Present even when empty, so `q: ""` is sent as `q=`.
+                    input.dataset.present = value === undefined || value === null ? "false" : "true";
                 });
                 const body = $("body-editor");
-                if (body) body.value = example.body === undefined ? "" : jsonPretty(example.body);
+                if (body) body.value = jsonEditorText(example.body);
             }
             const expected = $("expected-output");
             if (expected) {

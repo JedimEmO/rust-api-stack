@@ -1,6 +1,12 @@
+        // For display: a string is shown as its text.
         function jsonPretty(value) {
             if (typeof value === "string") return value;
             return JSON.stringify(value, null, 2);
+        }
+
+        // For a JSON editor: always valid JSON, so a string value keeps its quotes.
+        function jsonEditorText(value) {
+            return value === undefined ? "" : JSON.stringify(value, null, 2);
         }
 
         function normalizePermissions(value) {

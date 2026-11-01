@@ -22,7 +22,8 @@
             if (type === "boolean") return false;
             if (type === "array") return [exampleFromSchema(resolved.items, seen)];
             if (type === "object" || resolved.properties) {
-                const output = {};
+                // No prototype, so a property named `__proto__` becomes an own property.
+                const output = Object.create(null);
                 Object.entries(resolved.properties || {}).forEach(([key, prop]) => {
                     output[key] = exampleFromSchema(prop, seen);
                 });

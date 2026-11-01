@@ -367,13 +367,15 @@ TypeScript client generators.
 
 OpenAPI 3.0 has no request/response pairs, so an example appears under its name
 in every place it touches: its parameters, its request body and the response for
-its status. A status that no response listed yet gets one. Error examples are
-described by the `RestErrorBody` component, `{ "error": string }`, which is the
-body a handler's `RestError` is sent with. A request the framework rejects before
-your handler runs, such as a path parameter that does not parse, can have another
-body; the shared 400, 401, 403 and 500 responses say so. `RestErrorBody` is a
-reserved component name. A 204 example has no content to sit on and is recorded
-under `x-ras-examples` on the 204 response.
+its status. A status that no response listed yet gets one.
+
+Every error response is described by the `RestErrorBody` component,
+`{ "error": string }`. That is the body of a handler's `RestError` and of every
+request the framework rejects, from a path parameter that does not parse to a
+missing credential. `RestErrorBody` is a reserved component name, and every
+component name may only use letters, digits, `.`, `-` and `_`; a type whose schema
+breaks either rule fails generation. A 204 example has no content to sit on and is
+recorded under `x-ras-examples` on the 204 response.
 
 See
 [examples/rest-wasm-example](https://github.com/JedimEmO/rust-api-stack/tree/master/examples/rest-wasm-example)

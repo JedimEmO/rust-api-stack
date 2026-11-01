@@ -186,4 +186,18 @@ mod tests {
             "Users document: clash"
         );
     }
+
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[schemars(rename = "Not a key/")]
+    struct BadlyNamed {
+        id: u32,
+    }
+
+    #[test]
+    fn an_invalid_component_key_is_an_error() {
+        let mut generators = Generators::new(Dialect::OpenApi3);
+        let _ = generators.request::<BadlyNamed>();
+        let error = generators.into_components().err().unwrap();
+        assert!(error.contains("Not a key/"), "{error}");
+    }
 }

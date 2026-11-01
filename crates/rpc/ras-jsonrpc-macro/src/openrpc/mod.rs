@@ -10,6 +10,14 @@ mod methods;
 mod schema;
 pub use schema::generate_schema_impl_checks;
 
+/// An identifier for a local the generated document code declares around
+/// authored example expressions. `Span::mixed_site()` hides it from those
+/// expressions, so a user's own `fn context()` or `fn generators()` still
+/// resolves inside an example.
+pub(super) fn local(name: &str) -> Ident {
+    Ident::new(name, proc_macro2::Span::mixed_site())
+}
+
 /// Emits the shared component-assembly code as a private module named `module`.
 fn embedded_components(module: &Ident) -> TokenStream {
     let mut file: syn::File = syn::parse_str(ras_spec_components::SOURCE)
@@ -53,6 +61,7 @@ pub fn generate_openrpc_code(
     };
 
     let embedded = embedded_components(&components_mod);
+    let generators = local("generators");
     let method_infos =
         methods::generate_method_infos(service_def, &method_info_struct_name, &components_mod);
     let methods = methods::generate_methods(&service_str, &components_mod);
@@ -93,13 +102,13 @@ pub fn generate_openrpc_code(
         pub fn #try_openrpc_fn_name() -> Result<serde_json::Value, ras_jsonrpc_types::SpecGenerationError> {
             use serde_json::json;
 
-            let mut generators = #components_mod::Generators::new(#components_mod::Dialect::OpenRpc);
+            let mut #generators = #components_mod::Generators::new(#components_mod::Dialect::OpenRpc);
 
             let mut methods = vec![
                 #(#method_infos),*
             ];
 
-            let components = generators.into_components().map_err(|error| {
+            let components = #generators.into_components().map_err(|error| {
                 ras_jsonrpc_types::SpecGenerationError::document(#service_str, error)
             })?;
             for method in &mut methods {

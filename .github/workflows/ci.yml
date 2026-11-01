@@ -229,6 +229,20 @@ jobs:
       - name: Check inline file-service example server feature
         run: cargo check -p file-service-example --no-default-features --features server --locked
 
+      # An edition-2018 consumer of both service macros, with examples: the
+      # generated document code must compile in every edition and feature set.
+      - name: Check edition-2018 consumer without features
+        run: cargo check -p compile-fixture-edition2018 --no-default-features --locked
+
+      - name: Check edition-2018 consumer client-only
+        run: cargo check -p compile-fixture-edition2018 --no-default-features --features client --locked
+
+      - name: Check edition-2018 consumer server-only
+        run: cargo check -p compile-fixture-edition2018 --no-default-features --features server --locked
+
+      - name: Check edition-2018 consumer WASM client
+        run: cargo check -p compile-fixture-edition2018 --no-default-features --features client --target wasm32-unknown-unknown --locked
+
   playwright:
     name: Playwright E2E
     runs-on: ubuntu-latest

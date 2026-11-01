@@ -604,3 +604,39 @@ jsonrpc_service!({
 fn examples_without_openrpc_generate_nothing() {
     fn _service_exists<T: NoDocsTrait>() {}
 }
+
+// Helpers whose names match locals the generated code declares around examples.
+mod clashing {
+    pub fn context() -> String {
+        "from context()".into()
+    }
+    pub fn generators() -> u32 {
+        7
+    }
+    pub fn value() -> String {
+        "from value()".into()
+    }
+}
+use clashing::{context, generators, value};
+
+jsonrpc_service!({
+    service_name: HygieneService,
+    openrpc: true,
+    methods: [
+        UNAUTHORIZED echo(String) -> String {
+            examples: [
+                uses_helpers { params: context(), result: value() },
+                more_helpers { params: value(), error: { code: 1001, message: "x", data: generators() } },
+            ],
+        },
+    ]
+});
+
+#[test]
+fn examples_can_call_helpers_named_like_generated_locals() {
+    let doc = try_generate_hygieneservice_openrpc().expect("document builds");
+    let echo = &doc["methods"][0];
+    assert_eq!(echo["examples"][0]["params"][0]["value"], "from context()");
+    assert_eq!(echo["examples"][0]["result"]["value"], "from value()");
+    assert_eq!(echo["x-ras-error-examples"][0]["error"]["data"], 7);
+}
