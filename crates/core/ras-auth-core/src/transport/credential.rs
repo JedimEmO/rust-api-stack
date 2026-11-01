@@ -12,10 +12,21 @@ pub enum AuthTokenSource {
 }
 
 /// Authentication token extracted from an HTTP request.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// The `Debug` output shows `[REDACTED]` in place of the token.
+#[derive(Clone, PartialEq, Eq)]
 pub struct AuthCredential {
     token: String,
     source: AuthTokenSource,
+}
+
+impl std::fmt::Debug for AuthCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthCredential")
+            .field("token", &"[REDACTED]")
+            .field("source", &self.source)
+            .finish()
+    }
 }
 
 impl AuthCredential {
@@ -69,4 +80,18 @@ pub fn extract_auth_credential(
     }
 
     Err(AuthTransportError::MissingCredentials)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_redacts_the_token() {
+        let credential = AuthCredential::new("secret-bearer-token", AuthTokenSource::Bearer);
+        let debug = format!("{credential:?}");
+        assert!(!debug.contains("secret-bearer-token"), "{debug}");
+        assert!(debug.contains("[REDACTED]"));
+        assert!(debug.contains("Bearer"));
+    }
 }

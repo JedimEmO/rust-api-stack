@@ -609,3 +609,56 @@ async fn test_concurrent_authentication_attempts() {
     assert_eq!(successful_auths, CONCURRENT_ATTEMPTS / 2);
     assert_eq!(failed_auths, CONCURRENT_ATTEMPTS / 2);
 }
+
+/// Poll `future` once, then drop it, as a client disconnect or timeout would.
+fn poll_once_then_cancel<F: std::future::Future>(future: F) {
+    let mut future = std::pin::pin!(future);
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(future.as_mut().poll(&mut cx).is_pending());
+}
+
+async fn wait_for_all_permits(provider: &LocalUserProvider) {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while provider.semaphore.available_permits() < HASHING_CONCURRENCY {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the hashing permit was never released");
+}
+
+#[tokio::test]
+async fn cancelled_login_keeps_its_permit_until_the_hash_finishes() {
+    let provider = LocalUserProvider::new();
+
+    poll_once_then_cancel(provider.verify(serde_json::json!({
+        "username": "nobody",
+        "password": "password123"
+    })));
+
+    // The Argon2 verification keeps running on the blocking pool, so it must
+    // keep counting against the limit.
+    assert_eq!(
+        provider.semaphore.available_permits(),
+        HASHING_CONCURRENCY - 1
+    );
+    wait_for_all_permits(&provider).await;
+}
+
+#[tokio::test]
+async fn add_user_hashes_under_the_same_limit_as_logins() {
+    let provider = LocalUserProvider::new();
+
+    poll_once_then_cancel(provider.add_user(
+        "alice".to_string(),
+        "password123".to_string(),
+        None,
+        None,
+    ));
+
+    assert_eq!(
+        provider.semaphore.available_permits(),
+        HASHING_CONCURRENCY - 1
+    );
+    wait_for_all_permits(&provider).await;
+}

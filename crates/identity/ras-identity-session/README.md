@@ -48,7 +48,7 @@ let token = session_service
     .await?;
 
 let claims = session_service.verify_session(&token).await?;
-assert_eq!(claims.sub, "alice");
+assert_eq!(claims.sub, "local:alice");
 
 // Pass this to a generated service builder's `auth_provider(...)`.
 let auth_provider = JwtAuthProvider::new(session_service.clone());
@@ -58,6 +58,31 @@ let auth_provider = JwtAuthProvider::new(session_service.clone());
 To put permissions into the token, attach a `UserPermissions` source
 with `SessionService::with_permissions` before wrapping the service in an `Arc`.
 Without one, tokens carry no permissions.
+
+## User IDs
+
+A subject is only unique within the identity provider that issued it.
+The local user `alice` and an OAuth2 account whose subject is also `alice` are different people.
+So the session's user ID is the provider ID and the subject together,
+`"<provider_id>:<subject>"`: `local:alice`, or `oauth2:google:12345` for a Google sign-in through `ras-identity-oauth2`.
+`ras_identity_session::user_id(&identity)` builds it from a `VerifiedIdentity`.
+
+The JWT `sub` claim holds this user ID,
+and `JwtAuthProvider` hands it to your handlers as `AuthenticatedUser::user_id`.
+Key ownership and other per-user data on it, never on the bare subject or the username.
+The per-user session cap counts by the same ID,
+so a login at one provider never evicts a session that belongs to another provider's user.
+
+Two rules keep the user ID unambiguous.
+`register_provider` panics on a provider ID that is empty or contains `:`,
+so the text before the first `:` always names the provider that verified the login.
+And `begin_session` refuses an identity whose `provider_id` is neither the registered ID
+nor a sub-namespace of it such as `oauth2:google` under `oauth2`,
+so one provider cannot mint another provider's users.
+
+If one person should keep one account across several providers,
+map these user IDs to your own account ID in your application.
+The session service does not link identities.
 
 ## Configuration
 
@@ -99,7 +124,8 @@ use them only for a single service whose secret is never shared.
 
 `JwtAuthProvider` maps an expired token to `AuthError::TokenExpired`
 and every other failure to `AuthError::InvalidToken`.
-It builds the `AuthenticatedUser` from the `sub`, `permissions` and `metadata` claims.
+It builds the `AuthenticatedUser` from the `sub`, `permissions` and `metadata` claims,
+so `user_id` is the provider-scoped user ID described above.
 
 ## Sessions and revocation
 
@@ -133,11 +159,11 @@ Keep `jwt_ttl` short when permissions change often and revocation is off.
 
 ## JWT claims
 
-- `sub`: the identity's subject.
+- `sub`: the user ID, `"<provider_id>:<subject>"`.
 - `exp` and `iat`: expiry and issue time, in Unix seconds. `nbf` is read when present but never written.
 - `iss` and `aud`: the configured issuer and audience, when set. `aud` is a single string.
 - `jti`: a random UUID that identifies the session.
-- `provider_id`: the identity provider that verified the login.
+- `provider_id`: the identity provider that verified the login, such as `local` or `oauth2:google`.
 - `email`, `display_name`, `permissions` and `metadata`, from the identity and the permission source.
 
 The claims are signed, not encrypted.

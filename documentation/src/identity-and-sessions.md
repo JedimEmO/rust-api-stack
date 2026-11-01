@@ -39,6 +39,24 @@ let app = UserServiceBuilder::new(UserServiceImpl)
     .build();
 ```
 
+## User IDs
+
+A subject is only unique within the identity provider that verified it,
+so the session service puts the provider ID in front of it.
+The user ID is `"<provider_id>:<subject>"`,
+such as `local:alice` or `oauth2:google:1234`.
+It is the JWT `sub` claim, and the `user_id` your handlers receive on `AuthenticatedUser`.
+Key ownership and per-user data on it, never on the bare subject or username;
+otherwise a user at one provider can reach the data of a namesake at another.
+
+Registered provider IDs cannot contain `:`,
+and a provider can only issue identities under its own ID,
+so the text before the first `:` always names the provider that verified the login.
+To give one person the same account across several providers,
+map these user IDs to your own account IDs in the application.
+
+## Permissions at login
+
 The permissions are copied into the JWT when the session begins.
 They are not reloaded on each request,
 so a permission change reaches a user at their next login,
