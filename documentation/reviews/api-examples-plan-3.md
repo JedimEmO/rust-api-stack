@@ -561,3 +561,19 @@ This predates the plan and this change keeps it as it is; it is left for a separ
 The same is true over HTTP for a request with `"id": null`,
 which `JsonRpcRequest` cannot tell apart from a missing `id`.
 
+**Checkpoints 5 to 8, examples, explorer and release.**
+`SpecGenerationError` lives in `ras-spec-components` as an ordinary type, re-exported by
+`ras-jsonrpc-types` and `ras-rest-core`; the served documents cache it directly, so no
+separate `CachedSpecError` exists.
+The REST error body component is named `RestErrorBody`, not `ErrorBody`,
+because `ErrorBody` is a likely name for a user's own type; the name is reserved and a clash fails generation.
+A 204 example has no response content to sit on and is recorded under `x-ras-examples` on the 204 response.
+The embedded source must compile in any edition, so `ras-spec-components` builds as edition 2021
+and its tests catch syntax such as let chains.
+REST examples appear in name order in the explorer, because OpenAPI keys them by name in JSON objects.
+The version table grew by three crates that expose a bumped crate's types:
+`ras-jsonrpc-core`, `ras-jsonrpc-bidirectional-types` and `ras-file-macro`.
+No compile-fail fixtures exist (the workspace has no `trybuild`);
+the diagnostics are unit-tested through the parsers instead,
+and a request type without `Deserialize` in a client-only build is covered only by the documentation.
+
