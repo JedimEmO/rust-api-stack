@@ -302,12 +302,30 @@ or by implementing the matching `WebSocketService` method:
 |---|---|---|
 | `max_message_size` | 1 MiB | Enforced at the transport, so an oversized frame is rejected before it is buffered. |
 | `subscription_limits` | 64 topics per message, 256 per connection, 256-byte names, 100 000 globally | An over-limit `Subscribe` gets an invalid-params error and the connection stays open. |
-| `keepalive` | ping every 30 s, close after 90 s idle | Reclaims half-open sockets. Browsers and tungstenite answer pings automatically. |
-| `auth_revalidation_interval` | 30 s | Re-runs the auth provider on the connection's token. Failure closes the socket. |
+| `message_channel_capacity` | 1024 messages | Outbound queue per connection. Sends and broadcasts never wait for it; a connection whose queue is full is too slow to keep up and is closed. |
+| `keepalive` | ping every 30 s, close after 90 s idle | Reclaims half-open sockets. Browsers and tungstenite answer pings automatically. A write to the socket that makes no progress for the idle timeout also closes it. |
+| `auth_revalidation_interval` | 30 s | Re-runs the auth provider on the connection's token. Failure closes the socket and cancels a request still running on it. Re-validation runs on schedule even while a handler or a socket write is waiting. |
 | `on_permission_change` | `DropSubscriptions` | On successful re-validation every held subscription is re-run through `authorize_subscribe`; topics no longer authorized are dropped, and any topic message already queued for the socket is discarded at send time. `Close` closes the socket instead so the client must reconnect. |
 | `max_connections` | 10 000 | Enforced atomically with a semaphore permit held for the connection's lifetime. `None` lifts the cap. |
 
 The generated `ChatServiceBuilder` has a method for each of these.
+
+### Disconnecting a client
+
+`ChatServiceClientHandle::disconnect`, `connection_manager.remove_connection`
+and `disconnect_user` close the live connection,
+not only the manager's record of it.
+The connection stops reading requests at once,
+so nothing the client sends afterwards runs.
+A request already running is cancelled at its next `.await`,
+unless it finishes in the same step; a handler that disconnects its own client still gets its response out.
+Messages queued before the disconnect are still sent,
+so a notice telling the client why arrives before the close frame,
+whose reason is `disconnected by server`.
+
+A custom `ConnectionManager` passed to `build_with_manager` must do the same:
+keep the `ChannelMessageSender` that `add_connection_with_sender` hands it,
+and call its `close()` in `remove_connection`.
 
 ### Topic subscriptions
 

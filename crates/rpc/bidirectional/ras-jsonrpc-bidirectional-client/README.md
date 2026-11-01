@@ -100,6 +100,15 @@ let client = ClientBuilder::new("wss://api.example.com/ws")
 A browser cannot set headers on a WebSocket,
 so `with_header` has no effect with the `wasm` feature.
 
+Neither transport accepts a message over 16 MiB.
+In the browser, messages wait in a queue until the client handles them,
+because the WebSocket API cannot push back on the server.
+The queue holds at most `message_buffer_size` messages (1024 by default) and 64 MiB;
+a server that sends past that is disconnected, so it cannot fill the page's memory.
+
+`ClientConfig`'s `Debug` output shows the token and header values as `<redacted>`,
+so a logged configuration does not leak credentials.
+
 ## Authentication
 
 On native targets the token is sent as `Authorization: Bearer <token>`.

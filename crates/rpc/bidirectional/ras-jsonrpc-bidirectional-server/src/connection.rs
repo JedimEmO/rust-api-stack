@@ -6,7 +6,7 @@ use ras_jsonrpc_bidirectional_types::{
     BidirectionalError, BidirectionalMessage, ConnectionId, ConnectionInfo,
 };
 use std::sync::Arc;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::{RwLock, mpsc, watch};
 use tracing::warn;
 
 /// A message queued for a connection's socket.
@@ -31,11 +31,34 @@ impl From<BidirectionalMessage> for OutboundMessage {
     }
 }
 
-/// A simple channel-based message sender
+/// The sending side of one connection's outbound queue, plus its close signal.
+///
+/// Clones share the queue and the signal. [`close`](Self::close) asks the
+/// connection's handler loop to stop: it drains what is already queued,
+/// closes the socket and stops reading requests. A closed sender refuses new
+/// messages.
 #[derive(Debug, Clone)]
 pub struct ChannelMessageSender {
     connection_id: ConnectionId,
     sender: mpsc::Sender<OutboundMessage>,
+    closed: Arc<watch::Sender<bool>>,
+}
+
+/// Why [`ChannelMessageSender::offer`] did not queue a message.
+pub(crate) enum OfferError {
+    /// The queue is full; the connection has been closed.
+    Full,
+    /// The connection is closed or its handler is gone.
+    Closed,
+}
+
+impl std::fmt::Display for OfferError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Full => f.write_str("outbound queue full; connection closed"),
+            Self::Closed => f.write_str("connection closed"),
+        }
+    }
 }
 
 impl ChannelMessageSender {
@@ -44,15 +67,15 @@ impl ChannelMessageSender {
         Self {
             connection_id,
             sender,
+            closed: Arc::new(watch::channel(false).0),
         }
     }
 
-    /// Send a message through the channel
+    /// Send a message through the channel, waiting for queue space.
+    ///
+    /// Fails once the connection is closed, including while waiting.
     pub async fn send(&self, message: BidirectionalMessage) -> Result<(), String> {
-        self.sender
-            .send(message.into())
-            .await
-            .map_err(|e| e.to_string())
+        self.send_outbound(message.into()).await
     }
 
     /// Send a message that was routed on `topic`; the receiving handler drops
@@ -62,13 +85,60 @@ impl ChannelMessageSender {
         topic: &str,
         message: BidirectionalMessage,
     ) -> Result<(), String> {
-        self.sender
-            .send(OutboundMessage {
-                message,
-                topic: Some(topic.to_string()),
-            })
-            .await
-            .map_err(|e| e.to_string())
+        self.send_outbound(OutboundMessage {
+            message,
+            topic: Some(topic.to_string()),
+        })
+        .await
+    }
+
+    async fn send_outbound(&self, message: OutboundMessage) -> Result<(), String> {
+        if self.is_closed() {
+            return Err(OfferError::Closed.to_string());
+        }
+        tokio::select! {
+            result = self.sender.send(message) => result.map_err(|e| e.to_string()),
+            _ = self.closed() => Err(OfferError::Closed.to_string()),
+        }
+    }
+
+    /// Queue a message without waiting. A full queue means the peer is not
+    /// reading fast enough to keep up, so the connection is closed rather
+    /// than letting one slow peer hold up the sender.
+    pub(crate) fn offer(&self, message: OutboundMessage) -> Result<(), OfferError> {
+        if self.is_closed() {
+            return Err(OfferError::Closed);
+        }
+        match self.sender.try_send(message) {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                warn!(
+                    "Closing connection {}: outbound queue full",
+                    self.connection_id
+                );
+                self.close();
+                Err(OfferError::Full)
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => Err(OfferError::Closed),
+        }
+    }
+
+    /// Close the connection: its handler loop stops reading requests, sends
+    /// what is already queued and closes the socket.
+    pub fn close(&self) {
+        self.closed.send_replace(true);
+    }
+
+    /// Whether [`close`](Self::close) has been called on this connection.
+    pub fn is_closed(&self) -> bool {
+        *self.closed.borrow()
+    }
+
+    /// Resolves once the connection is closed.
+    pub async fn closed(&self) {
+        let mut closed = self.closed.subscribe();
+        // The sender lives in `self`, so the wait cannot fail.
+        let _ = closed.wait_for(|closed| *closed).await;
     }
 
     /// Get the connection ID

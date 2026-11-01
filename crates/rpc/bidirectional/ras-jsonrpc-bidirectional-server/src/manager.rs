@@ -1,6 +1,6 @@
 //! Default connection manager implementation using DashMap
 
-use crate::connection::ChannelMessageSender;
+use crate::connection::{ChannelMessageSender, OutboundMessage};
 use crate::handler::SubscriptionLimits;
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -19,6 +19,12 @@ use tracing::{debug, info, warn};
 /// state and the topic index while holding the connection's entry guard, so
 /// concurrent subscribe/unsubscribe calls for one connection serialize and
 /// the index can never hold an entry the connection state lacks.
+///
+/// Sends never wait for a slow peer. When a connection's outbound queue is
+/// full, the send fails and the connection is closed, so one peer that stops
+/// reading cannot hold up a broadcast or the code that sent it.
+/// [`remove_connection`](ConnectionManager::remove_connection) closes the
+/// live connection too, not only the bookkeeping.
 #[derive(Debug, Default)]
 pub struct DefaultConnectionManager {
     /// Active connections indexed by ConnectionId
@@ -117,33 +123,25 @@ impl DefaultConnectionManager {
         self.connections.get(&id).map(|entry| entry.1.clone())
     }
 
-    /// Send `message` to every recipient concurrently.
+    /// Queue `message` for every recipient without waiting.
     ///
     /// Senders are cloned out of the map before any send so no DashMap shard
-    /// lock is held across an await (a slow consumer with a full channel
-    /// would otherwise block every other map access on that shard), and the
-    /// slowest recipient bounds wall-clock time instead of the sum of all.
-    async fn fan_out(
+    /// lock is held. A recipient whose queue is full is closed and counted as
+    /// failed, so one slow peer cannot hold up a broadcast to everyone else.
+    fn fan_out(
         &self,
         recipients: Vec<(ConnectionId, ChannelMessageSender)>,
         message: BidirectionalMessage,
         topic: Option<&str>,
     ) -> (usize, Vec<ConnectionId>) {
-        let sends = recipients.into_iter().map(|(id, sender)| {
-            let message = message.clone();
-            async move {
-                let result = match topic {
-                    Some(topic) => sender.send_on_topic(topic, message).await,
-                    None => sender.send(message).await,
-                };
-                (id, result)
-            }
-        });
-
         let mut sent_count = 0;
         let mut failed = Vec::new();
-        for (id, result) in futures::future::join_all(sends).await {
-            match result {
+        for (id, sender) in recipients {
+            let outbound = OutboundMessage {
+                message: message.clone(),
+                topic: topic.map(str::to_string),
+            };
+            match sender.offer(outbound) {
                 Ok(()) => sent_count += 1,
                 Err(e) => {
                     warn!("Failed to broadcast to connection {}: {}", id, e);
@@ -185,7 +183,11 @@ impl ConnectionManager for DefaultConnectionManager {
     }
 
     async fn remove_connection(&self, id: ConnectionId) -> Result<()> {
-        if let Some((_, (info, _))) = self.connections.remove(&id) {
+        if let Some((_, (info, sender))) = self.connections.remove(&id) {
+            // Stop the live connection, not just the bookkeeping: its handler
+            // loop stops reading requests and closes the socket.
+            sender.close();
+
             // Remove from all topic subscriptions. remove_if keeps the
             // empty-entry cleanup atomic against concurrent subscribes.
             for topic in info.subscriptions.iter() {
@@ -203,7 +205,9 @@ impl ConnectionManager for DefaultConnectionManager {
 
             info!("Removed connection: {}", id);
         } else {
-            warn!("Attempted to remove non-existent connection: {}", id);
+            // Normal after a forced disconnect: the connection's own teardown
+            // removes it a second time.
+            debug!("Attempted to remove non-existent connection: {}", id);
         }
 
         Ok(())
@@ -351,14 +355,13 @@ impl ConnectionManager for DefaultConnectionManager {
         id: ConnectionId,
         message: BidirectionalMessage,
     ) -> Result<()> {
-        // Clone the sender out of the map: awaiting a send on a full channel
-        // while holding the shard guard would block other map accesses.
+        // Never waits: a connection whose queue is full is closed instead,
+        // so a peer that stops reading cannot stall the caller.
         let sender = self.connections.get(&id).map(|entry| entry.1.clone());
         if let Some(sender) = sender {
-            sender
-                .send(message)
-                .await
-                .map_err(ras_jsonrpc_bidirectional_types::BidirectionalError::SendError)?;
+            sender.offer(message.into()).map_err(|e| {
+                ras_jsonrpc_bidirectional_types::BidirectionalError::SendError(e.to_string())
+            })?;
         } else {
             warn!("Attempted to send to non-existent connection: {}", id);
         }
@@ -387,7 +390,7 @@ impl ConnectionManager for DefaultConnectionManager {
             }
         }
 
-        let (sent_count, send_failures) = self.fan_out(recipients, message, Some(topic)).await;
+        let (sent_count, send_failures) = self.fan_out(recipients, message, Some(topic));
         failed_connections.extend(send_failures);
 
         // Clean up failed connections from topic subscriptions
@@ -410,7 +413,7 @@ impl ConnectionManager for DefaultConnectionManager {
             .map(|entry| (*entry.key(), entry.value().1.clone()))
             .collect();
 
-        let (sent_count, _) = self.fan_out(recipients, message, None).await;
+        let (sent_count, _) = self.fan_out(recipients, message, None);
 
         debug!("Broadcasted to {} authenticated connections", sent_count);
         Ok(sent_count)
@@ -428,7 +431,7 @@ impl ConnectionManager for DefaultConnectionManager {
             .map(|entry| (*entry.key(), entry.value().1.clone()))
             .collect();
 
-        let (sent_count, _) = self.fan_out(recipients, message, None).await;
+        let (sent_count, _) = self.fan_out(recipients, message, None);
 
         debug!(
             "Broadcasted to {} connections with permission: {}",
